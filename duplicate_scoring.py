@@ -1,44 +1,60 @@
 from pathlib import Path
 import sqlite3
 from itertools import combinations
-from typing import Optional, List, Tuple
+from typing import List, Tuple, Dict, Optional
 
 DB_PATH = Path("media-manager.db")
 CONFIDENCE_THRESHOLD = 70
 
+# -------------------- TYPE ALIAS --------------------
+FileDict = Dict[str, Optional[int | float | str]]  # generic file dict from DB
+
+# -------------------- HELPERS --------------------
+def to_float(x: Optional[int | float | str]) -> Optional[float]:
+    """Convert a value to float if possible, else return None"""
+    if x is None:
+        return None
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+def to_int(x: Optional[int | float | str]) -> int:
+    """Convert a value to int, raise error if None or invalid"""
+    if x is None:
+        raise ValueError("Expected numeric ID, got None")
+    return int(x)
+
 # -------------------- SCORING FUNCTION --------------------
-def score_pair(f1: dict, f2: dict) -> int:
+def score_pair(f1: FileDict, f2: FileDict) -> int:
     score = 0
 
     # Same size (already grouped, but explicit)
-    if f1["size_bytes"] == f2["size_bytes"]:
+    if f1.get("size_bytes") == f2.get("size_bytes"):
         score += 30
 
     # Duration within 1 second
-    if (
-        f1["duration"] is not None
-        and f2["duration"] is not None
-        and abs(f1["duration"] - f2["duration"]) <= 1.0
-    ):
+    d1 = to_float(f1.get("duration"))
+    d2 = to_float(f2.get("duration"))
+    if d1 is not None and d2 is not None and abs(d1 - d2) <= 1.0:
         score += 30
 
     # Same resolution
-    if (
-        f1["width"] is not None
-        and f1["width"] == f2["width"]
-        and f1["height"] == f2["height"]
-    ):
-        score += 20
+    w1 = to_int(f1.get("width")) if f1.get("width") is not None else None
+    h1 = to_int(f1.get("height")) if f1.get("height") is not None else None
+    w2 = to_int(f2.get("width")) if f2.get("width") is not None else None
+    h2 = to_int(f2.get("height")) if f2.get("height") is not None else None
+
+    if w1 is not None and h1 is not None and w2 is not None and h2 is not None:
+        if w1 == w2 and h1 == h2:
+            score += 20
 
     # Same codec
-    if f1["codec"] and f1["codec"] == f2["codec"]:
+    if f1.get("codec") and f1["codec"] == f2.get("codec"):
         score += 10
 
     # Same EXIF datetime (images)
-    if (
-        f1["exif_datetime"]
-        and f1["exif_datetime"] == f2["exif_datetime"]
-    ):
+    if f1.get("exif_datetime") and f1["exif_datetime"] == f2.get("exif_datetime"):
         score += 10
 
     return score
@@ -62,11 +78,11 @@ def main() -> None:
     size_groups = cur.fetchall()
     print(f"Found {len(size_groups)} size groups to process")
 
+    # Step 2: iterate over size groups
     for idx, group in enumerate(size_groups, start=1):
         size_bytes = group["size_bytes"]
         media_type = group["media_type"]
 
-        # Step 2: load files in this group
         cur.execute("""
             SELECT
                 id, size_bytes, duration,
@@ -76,7 +92,7 @@ def main() -> None:
               AND media_type = ?
               AND hash_full IS NULL
         """, (size_bytes, media_type))
-        files = [dict(row) for row in cur.fetchall()]
+        files: List[FileDict] = [dict(row) for row in cur.fetchall()]
 
         if len(files) < 2:
             continue
@@ -87,9 +103,16 @@ def main() -> None:
         for f1, f2 in combinations(files, 2):
             score = score_pair(f1, f2)
             if score >= CONFIDENCE_THRESHOLD:
+                try:
+                    id1 = to_int(f1.get("id"))
+                    id2 = to_int(f2.get("id"))
+                except ValueError as e:
+                    print(f"Skipping pair due to invalid ID: {e}")
+                    continue
+
                 inserts.append((
-                    f1["id"],
-                    f2["id"],
+                    id1,
+                    id2,
                     "probable_metadata",
                     score,
                     "Metadata similarity (size/duration/resolution/codec/exif)"
@@ -112,6 +135,7 @@ def main() -> None:
 
     conn.close()
     print("Probable duplicate scoring complete")
+
 
 if __name__ == "__main__":
     main()
