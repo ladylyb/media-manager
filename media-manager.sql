@@ -93,6 +93,7 @@ CREATE INDEX idx_files_hash_full ON files(hash_full);
 CREATE INDEX idx_files_hash_partial ON files(hash_partial);
 CREATE INDEX idx_files_media_type ON files(media_type);
 
+SELECT filename FROM files;
 
 --- 5. `duplicate_candidates` — relationships, not actions
 /*
