@@ -116,7 +116,7 @@ def organize_gallery():
         # Log move
         cur.execute("""
             INSERT INTO file_actions (file_id, action, target_path, notes)
-            VALUES (?, 'move_gallery', ?, ?)
+            VALUES (?, 'move', ?, ?)
         """, (file_id, str(target_path), "Moved canonical file into gallery structure"))
 
         conn.commit()
