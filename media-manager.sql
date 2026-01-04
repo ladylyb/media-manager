@@ -325,3 +325,18 @@ SELECT * FROM duplicate_candidates
 WHERE match_type = 'probable_metadata';
 
 PRAGMA wal_checkpoint(FULL);
+
+/*SELECT f.*
+FROM files f
+LEFT JOIN file_actions fa ON f.id = fa.file_id AND fa.action IN ('move', 'rename')
+WHERE fa.id IS NULL
+AND f.media_type IN ('image', 'video');*/
+
+SELECT f.*
+FROM files f
+WHERE f.media_type IN ('image','video')
+  AND f.id NOT IN (
+      SELECT file_id
+      FROM file_actions
+      WHERE action IN ('move','rename')
+  );

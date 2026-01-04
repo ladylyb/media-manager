@@ -46,20 +46,24 @@ def select_best_timestamp(file_row):
 
 def rename_canonical_files():
     print("Starting canonical renaming process...")
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
-    # Select canonical files: not archived, not duplicates
+    # -------------------- NEW SAFE QUERY --------------------
     cur.execute("""
         SELECT f.*
         FROM files f
-        LEFT JOIN file_actions fa ON f.id = fa.file_id AND fa.action IN ('move', 'rename')
-        WHERE fa.id IS NULL
-        AND f.media_type IN ('image', 'video')
+        WHERE f.media_type IN ('image','video')
+          AND f.id NOT IN (
+              SELECT file_id
+              FROM file_actions
+              WHERE action IN ('move','rename')
+          )
     """)
-    files = cur.fetchall()
 
+    files = cur.fetchall()
     print(f"Found {len(files)} canonical files to process.\n")
 
     renamed_count = 0
