@@ -4,14 +4,13 @@ from itertools import combinations
 from typing import List, Tuple, Dict, Optional
 
 DB_PATH = Path("media-manager.db")
-CONFIDENCE_THRESHOLD = 50
+CONFIDENCE_THRESHOLD = 70
 
 # -------------------- TYPE ALIAS --------------------
 FileDict = Dict[str, Optional[int | float | str]]  # generic file dict from DB
 
 # -------------------- HELPERS --------------------
 def to_float(x: Optional[int | float | str]) -> Optional[float]:
-    """Convert a value to float if possible, else return None"""
     if x is None:
         return None
     try:
@@ -20,7 +19,6 @@ def to_float(x: Optional[int | float | str]) -> Optional[float]:
         return None
 
 def to_int(x: Optional[int | float | str]) -> int:
-    """Convert a value to int, raise error if None or invalid"""
     if x is None:
         raise ValueError("Expected numeric ID, got None")
     return int(x)
@@ -29,31 +27,25 @@ def to_int(x: Optional[int | float | str]) -> int:
 def score_pair(f1: FileDict, f2: FileDict) -> int:
     score = 0
 
-    # Same size (already grouped, but explicit)
     if f1.get("size_bytes") == f2.get("size_bytes"):
         score += 30
 
-    # Duration within 1 second
     d1 = to_float(f1.get("duration"))
     d2 = to_float(f2.get("duration"))
     if d1 is not None and d2 is not None and abs(d1 - d2) <= 1.0:
         score += 30
 
-    # Same resolution
     w1 = to_int(f1.get("width")) if f1.get("width") is not None else None
     h1 = to_int(f1.get("height")) if f1.get("height") is not None else None
     w2 = to_int(f2.get("width")) if f2.get("width") is not None else None
     h2 = to_int(f2.get("height")) if f2.get("height") is not None else None
-
     if w1 is not None and h1 is not None and w2 is not None and h2 is not None:
         if w1 == w2 and h1 == h2:
             score += 20
 
-    # Same codec
     if f1.get("codec") and f1["codec"] == f2.get("codec"):
         score += 10
 
-    # Same EXIF datetime (images)
     if f1.get("exif_datetime") and f1["exif_datetime"] == f2.get("exif_datetime"):
         score += 10
 
@@ -66,7 +58,6 @@ def main() -> None:
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
-    # Step 1: get candidate size groups
     cur.execute("""
         SELECT size_bytes, media_type
         FROM files
@@ -78,7 +69,6 @@ def main() -> None:
     size_groups = cur.fetchall()
     print(f"Found {len(size_groups)} size groups to process")
 
-    # Step 2: iterate over size groups
     for idx, group in enumerate(size_groups, start=1):
         size_bytes = group["size_bytes"]
         media_type = group["media_type"]
@@ -99,7 +89,6 @@ def main() -> None:
 
         inserts: List[Tuple[int, int, str, int, str]] = []
 
-        # Step 3: pairwise comparison
         for f1, f2 in combinations(files, 2):
             score = score_pair(f1, f2)
             if score >= CONFIDENCE_THRESHOLD:
@@ -118,7 +107,13 @@ def main() -> None:
                     "Metadata similarity (size/duration/resolution/codec/exif)"
                 ))
 
-        # Step 4: persist results
+                # ---- NEW: print match info ----
+                w1 = f1.get("width") or "?"
+                h1 = f1.get("height") or "?"
+                w2 = f2.get("width") or "?"
+                h2 = f2.get("height") or "?"
+                print(f"[Score={score}] File {id1} ({w1}x{h1}) ↔ File {id2} ({w2}x{h2})")
+
         if inserts:
             cur.executemany("""
                 INSERT OR IGNORE INTO duplicate_candidates (
