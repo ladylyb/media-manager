@@ -11,18 +11,22 @@ DB_PATH = Path("media-manager.db")
 
 # -------------------- HELPERS --------------------
 def get_canonical_files(conn):
-    """Return files not moved/archived (canonical)"""
+    """Return files not moved/archived (canonical) using NOT EXISTS"""
     cur = conn.cursor()
     cur.execute("""
-        SELECT f.id, f.path, f.filename, f.extension, f.exif_datetime, f.mtime
+        SELECT *
         FROM files f
-        LEFT JOIN file_actions fa 
-               ON f.id = fa.file_id 
-              AND fa.action IN ('move', 'rename')
-        WHERE fa.file_id IS NULL
-          AND f.media_type IN ('image','video')
+        WHERE f.media_type IN ('image','video')
+        AND f.id NOT IN (
+            SELECT file_id
+            FROM file_actions
+            WHERE action IN ('move','rename')
+        )
+        ORDER BY f.id
     """)
-    return cur.fetchall()
+    rows = cur.fetchall()
+    print(f"Remaining files to process: {len(rows)}")
+    return rows
 
 
 def format_timestamp(exif_datetime, mtime):

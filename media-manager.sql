@@ -364,3 +364,24 @@ SELECT * FROM file_actions;
 SELECT * FROM _file_actions_old;
 
 DROP TABLE _file_actions_old;
+
+
+
+SELECT f.id, f.path, f.filename, f.extension, f.exif_datetime, f.mtime
+FROM files f
+WHERE f.media_type IN ('image','video')
+    AND NOT EXISTS (
+        SELECT 1
+        FROM file_actions fa
+        WHERE fa.file_id = f.id
+        AND fa.action IN ('move','rename')
+    )        
+;        
+
+SELECT f.id, f.filename, f.media_type, f.path, fa.action, fa.target_path 
+FROM files f
+    JOIN file_actions fa
+  ON fa.file_id = f.id AND fa.action IN ('move','rename')
+WHERE f.media_type IN ('image','video');
+
+SELECT * FROM file_actions;
