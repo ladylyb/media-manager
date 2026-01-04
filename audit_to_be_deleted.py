@@ -6,12 +6,13 @@ import argparse
 import sys
 
 # -------------------- CONFIG --------------------
+DB_PATH = "media-manager.db"
+
 ARCHIVE_ROOT = Path(r"C:\Users\micro\Documents\Better Up\Media-Manager")
 TO_BE_DELETED = ARCHIVE_ROOT / "to-be-deleted"
-DB_PATH = ARCHIVE_ROOT / "media-manager.db"
 
-LOG_FILE = TO_BE_DELETED / "audit_to_be_deleted.log"
-CSV_FILE = TO_BE_DELETED / "audit_to_be_deleted.csv"
+LOG_FILE = ARCHIVE_ROOT / "audit_to_be_deleted.log"
+CSV_FILE = ARCHIVE_ROOT / "audit_to_be_deleted.csv"
 
 # -------------------- ARGPARSE --------------------
 parser = argparse.ArgumentParser(description="Audit files in to-be-deleted folder")
