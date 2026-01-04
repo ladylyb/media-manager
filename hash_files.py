@@ -1,11 +1,12 @@
 import sqlite3
 import hashlib
 import os
+from typing import Optional
 
 DB_PATH = r"media-manager.db"
 PARTIAL_CHUNK_SIZE = 1024 * 1024  # 1MB
 
-def get_partial_hash(file_path):
+def get_partial_hash(file_path: str) -> Optional[str]:
     """Compute hash of first + last 1MB of the file"""
     try:
         size = os.path.getsize(file_path)
@@ -22,7 +23,7 @@ def get_partial_hash(file_path):
         print(f"Error hashing partial {file_path}: {e}")
         return None
 
-def get_full_hash(file_path):
+def get_full_hash(file_path: str) -> Optional[str]:
     """Compute full SHA256 hash"""
     try:
         sha = hashlib.sha256()
@@ -34,7 +35,7 @@ def get_full_hash(file_path):
         print(f"Error hashing full {file_path}: {e}")
         return None
 
-def main():
+def main() -> None:
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL;")
     cur = conn.cursor()
@@ -75,7 +76,7 @@ def main():
         """, (partial_hash,))
         count = cur.fetchone()[0]
 
-        full_hash = None
+        full_hash: Optional[str] = None
         if count > 1:
             full_hash = get_full_hash(file_path)
             if full_hash:
