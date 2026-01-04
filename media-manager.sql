@@ -325,3 +325,63 @@ SELECT * FROM duplicate_candidates
 WHERE match_type = 'probable_metadata';
 
 PRAGMA wal_checkpoint(FULL);
+
+/*SELECT f.*
+FROM files f
+LEFT JOIN file_actions fa ON f.id = fa.file_id AND fa.action IN ('move', 'rename')
+WHERE fa.id IS NULL
+AND f.media_type IN ('image', 'video');*/
+
+SELECT f.*
+FROM files f
+WHERE f.media_type IN ('image','video')
+  AND f.id NOT IN (
+      SELECT file_id
+      FROM file_actions
+      WHERE action IN ('move','rename')
+  );
+
+
+
+ALTER TABLE file_actions RENAME TO _file_actions_old;
+
+
+CREATE TABLE file_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id INTEGER NOT NULL,
+    action TEXT CHECK (action IN ('keep','move','delete','ignore','rename')) NOT NULL,
+    target_path TEXT,
+    decided_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    notes TEXT,
+    FOREIGN KEY (file_id) REFERENCES files(id)
+);
+
+INSERT INTO file_actions (id, file_id, action, target_path, decided_at, notes)
+SELECT id, file_id, action, target_path, decided_at, notes
+FROM _file_actions_old;
+
+SELECT * FROM file_actions;
+SELECT * FROM _file_actions_old;
+
+DROP TABLE _file_actions_old;
+
+
+
+SELECT f.id, f.path, f.filename, f.extension, f.exif_datetime, f.mtime
+FROM files f
+WHERE f.media_type IN ('image','video')
+    AND NOT EXISTS (
+        SELECT 1
+        FROM file_actions fa
+        WHERE fa.file_id = f.id
+        AND fa.action IN ('move','rename')
+    )        
+;        
+
+SELECT f.id, f.filename, f.media_type, f.path, fa.action, fa.target_path 
+FROM files f
+    JOIN file_actions fa
+  ON fa.file_id = f.id AND fa.action IN ('move','rename')
+WHERE f.media_type IN ('image','video');
+
+SELECT * FROM file_actions;
