@@ -178,3 +178,133 @@ HAVING COUNT(*) > 1
 ORDER BY COUNT(*) DESC;
 
 
+-- Insert exact duplicates into duplicate_candidates
+INSERT OR IGNORE INTO duplicate_candidates (
+    file_id_1,
+    file_id_2,
+    match_type,
+    confidence_score,
+    reason
+)
+SELECT
+    f1.id,
+    f2.id,
+    'exact_hash',
+    100,
+    'Full SHA256 hash match'
+FROM files f1
+JOIN files f2
+  ON f1.hash_full = f2.hash_full
+ AND f1.hash_full IS NOT NULL
+ AND f1.id < f2.id;
+
+-- Inspect exact duplicates
+SELECT
+    dc.confidence_score,
+    dc.reason,
+    f1.path AS file_1,
+    f2.path AS file_2
+FROM duplicate_candidates dc
+JOIN files f1 ON dc.file_id_1 = f1.id
+JOIN files f2 ON dc.file_id_2 = f2.id
+WHERE dc.match_type = 'exact_hash'
+ORDER BY f1.size_bytes DESC;
+
+-- STEP 2 — Probable duplicate scoring (metadata-based)
+/*
+
+— Define a scoring heuristic (transparent & tunable)
+
+We’ll use a 100-point scale:
+
+| Signal                      | Points   |
+| --------------------------- | -------- |
+| Same media_type             | required |
+| Same size_bytes             | +30      |
+| Duration within 1 second    | +30      |
+| Same width & height         | +20      |
+| Same codec                  | +10      |
+| Same EXIF datetime (images) | +10      |
+
+
+👉 Threshold: ≥70 = probable duplicate
+
+- Insert probable duplicates
+
+This SQL looks long, but it’s intentionally explicit so you can reason about it later.
+*/
+INSERT OR IGNORE INTO duplicate_candidates (
+    file_id_1,
+    file_id_2,
+    match_type,
+    confidence_score,
+    reason
+)
+SELECT
+    f1.id,
+    f2.id,
+    'probable_metadata',
+    (
+        CASE WHEN f1.size_bytes = f2.size_bytes THEN 30 ELSE 0 END +
+        CASE
+            WHEN f1.duration IS NOT NULL
+             AND f2.duration IS NOT NULL
+             AND ABS(f1.duration - f2.duration) <= 1.0
+            THEN 30 ELSE 0
+        END +
+        CASE
+            WHEN f1.width = f2.width
+             AND f1.height = f2.height
+             AND f1.width IS NOT NULL
+            THEN 20 ELSE 0
+        END +
+        CASE
+            WHEN f1.codec = f2.codec
+             AND f1.codec IS NOT NULL
+            THEN 10 ELSE 0
+        END +
+        CASE
+            WHEN f1.exif_datetime = f2.exif_datetime
+             AND f1.exif_datetime IS NOT NULL
+            THEN 10 ELSE 0
+        END
+    ) AS confidence_score,
+    'Metadata similarity (size/duration/resolution/codec)'
+FROM files f1
+JOIN files f2
+  ON f1.media_type = f2.media_type
+ AND f1.id < f2.id
+WHERE
+    f1.media_type IN ('image', 'video')
+    AND f1.hash_full IS NULL
+    AND f2.hash_full IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_files_size_media
+ON files(size_bytes, media_type);
+
+CREATE INDEX IF NOT EXISTS idx_files_metadata
+ON files(duration, width, height, codec);
+
+/*
+STEP 3 — Inspect probable duplicates
+3️⃣A — High-confidence only
+*/
+SELECT
+    dc.confidence_score,
+    f1.path AS file_1,
+    f2.path AS file_2,
+    f1.size_bytes,
+    f1.duration,
+    f1.width,
+    f1.height,
+    f1.codec
+FROM duplicate_candidates dc
+JOIN files f1 ON dc.file_id_1 = f1.id
+JOIN files f2 ON dc.file_id_2 = f2.id
+WHERE dc.match_type = 'probable_metadata'
+  AND dc.confidence_score >= 70
+ORDER BY dc.confidence_score DESC;
+
+
+
+PRAGMA wal_checkpoint(FULL);
