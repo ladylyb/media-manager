@@ -1,90 +1,111 @@
-# audit_to_be_deleted_final.py
-
-import sqlite3
 from pathlib import Path
+import sqlite3
 import logging
+import csv
+import argparse
+import sys
 
 # -------------------- CONFIG --------------------
 ARCHIVE_ROOT = Path(r"C:\Users\micro\Documents\Better Up\Media-Manager")
 TO_BE_DELETED = ARCHIVE_ROOT / "to-be-deleted"
 DB_PATH = ARCHIVE_ROOT / "media-manager.db"
-LOG_FILE = ARCHIVE_ROOT / "audit_to_be_deleted.log"
+
+LOG_FILE = TO_BE_DELETED / "audit_to_be_deleted.log"
+CSV_FILE = TO_BE_DELETED / "audit_to_be_deleted.csv"
+
+# -------------------- ARGPARSE --------------------
+parser = argparse.ArgumentParser(description="Audit files in to-be-deleted folder")
+parser.add_argument("--dry-run", action="store_true", help="Do not modify anything, just log")
+parser.add_argument("--limit", type=int, default=None, help="Limit to first N files for testing")
+args = parser.parse_args()
 
 # -------------------- LOGGING --------------------
 logging.basicConfig(
-    filename=LOG_FILE,
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(LOG_FILE, encoding="utf-8")
+    ]
 )
-
-# -------------------- HELPERS --------------------
-def extract_original_filename(moved_path: Path) -> str:
-    """
-    Attempt to recover the original filename from the moved file.
-    Strategy: remove any added prefixes (e.g., "File_Path_") and keep the basename.
-    """
-    name = moved_path.name
-    # Adjust this pattern if other prefixes were used
-    if name.startswith("File_Path_"):
-        name = name[len("File_Path_") :]
-    return name
 
 # -------------------- MAIN --------------------
 def audit_to_be_deleted():
-    print(f"Scanning {TO_BE_DELETED} for audit...")
+    logging.info(f"Scanning {TO_BE_DELETED} for audit...")
+    if not TO_BE_DELETED.exists():
+        logging.error(f"{TO_BE_DELETED} does not exist.")
+        return
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
-    total_files = 0
-    matched_files = 0
-    unmatched_files = 0
+    all_files = list(TO_BE_DELETED.rglob("*"))
+    files_only = [f for f in all_files if f.is_file()]
+    if args.limit:
+        files_only = files_only[:args.limit]
 
-    report = []
+    logging.info(f"Found {len(files_only)} files to audit.")
 
-    for file_path in TO_BE_DELETED.rglob("*"):
-        if not file_path.is_file():
-            continue
-        total_files += 1
-        orig_filename = extract_original_filename(file_path)
+    with CSV_FILE.open("w", newline="", encoding="utf-8") as csvfile:
+        fieldnames = [
+            "to_be_deleted_path", "original_filename", "found_in_db",
+            "canonical_name", "notes"
+        ]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
 
-        # Query files table by original filename
-        cur.execute("SELECT * FROM files WHERE filename = ?", (orig_filename,))
-        rows = cur.fetchall()
+        count_found = 0
+        count_missing = 0
 
-        if not rows:
-            unmatched_files += 1
-            logging.warning(f"No DB record found for: {file_path}")
-            report.append((file_path, None, "No DB record"))
-            continue
+        for file_path in files_only:
+            notes = []
+            to_be_deleted_path = str(file_path)
+            # Reconstruct original filename by removing canonicalization transforms
+            original_filename = file_path.name
+            # Remove any prepended folders/underscores if present
+            if "__" in original_filename:
+                original_filename = original_filename.split("__")[-1]
 
-        # Handle multiple rows (e.g., duplicates)
-        for row in rows:
-            file_id = row["id"]
-            cur.execute(
-                "SELECT * FROM file_actions WHERE file_id = ?", (file_id,)
-            )
-            actions = cur.fetchall()
-            action_summary = [a["action"] for a in actions] if actions else []
+            # Remove suffix added by duplicates handling (_1, _2, etc.)
+            stem = Path(original_filename).stem
+            if "_" in stem:
+                parts = stem.rsplit("_", 1)
+                if parts[1].isdigit():
+                    original_filename = parts[0] + file_path.suffix
 
-            matched_files += 1
-            logging.info(
-                f"[MATCHED] {file_path} → original filename: {orig_filename}, "
-                f"DB id: {file_id}, actions: {action_summary}"
-            )
-            report.append((file_path, file_id, action_summary))
+            # Lookup in DB
+            cur.execute("SELECT filename FROM files WHERE filename = ?", (original_filename,))
+            row = cur.fetchone()
 
-    # Summary
-    print("\n--- Audit Summary ---")
-    print(f"Total files scanned: {total_files}")
-    print(f"Matched files: {matched_files}")
-    print(f"Unmatched files: {unmatched_files}")
-    logging.info(f"Audit complete. Total: {total_files}, Matched: {matched_files}, Unmatched: {unmatched_files}")
+            if row:
+                found_in_db = True
+                canonical_name = row["filename"]
+                count_found += 1
+            else:
+                found_in_db = False
+                canonical_name = ""
+                count_missing += 1
+                notes.append("Not found in DB")
+
+            logging.info(f"[{file_path}] Found in DB: {found_in_db}")
+            writer.writerow({
+                "to_be_deleted_path": to_be_deleted_path,
+                "original_filename": original_filename,
+                "found_in_db": found_in_db,
+                "canonical_name": canonical_name,
+                "notes": "; ".join(notes)
+            })
+
+    logging.info("Audit complete")
+    logging.info(f"Total files scanned: {len(files_only)}")
+    logging.info(f"Found in DB: {count_found}")
+    logging.info(f"Missing in DB: {count_missing}")
 
     conn.close()
-    print(f"Detailed log written to {LOG_FILE}")
-    return report
 
-# -------------------- EXECUTE --------------------
+# -------------------- ENTRY POINT --------------------
 if __name__ == "__main__":
+    if args.dry_run:
+        logging.info("Running in dry-run mode (no changes will be made).")
     audit_to_be_deleted()
