@@ -340,3 +340,27 @@ WHERE f.media_type IN ('image','video')
       FROM file_actions
       WHERE action IN ('move','rename')
   );
+
+
+
+ALTER TABLE file_actions RENAME TO _file_actions_old;
+
+
+CREATE TABLE file_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id INTEGER NOT NULL,
+    action TEXT CHECK (action IN ('keep','move','delete','ignore','rename')) NOT NULL,
+    target_path TEXT,
+    decided_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    notes TEXT,
+    FOREIGN KEY (file_id) REFERENCES files(id)
+);
+
+INSERT INTO file_actions (id, file_id, action, target_path, decided_at, notes)
+SELECT id, file_id, action, target_path, decided_at, notes
+FROM _file_actions_old;
+
+SELECT * FROM file_actions;
+SELECT * FROM _file_actions_old;
+
+DROP TABLE _file_actions_old;
