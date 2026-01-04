@@ -1,7 +1,7 @@
 import sqlite3
 import os
 from pathlib import Path
-from typing import Optional, Dict, Literal
+from typing import Optional, Dict, Literal, List, Tuple
 from PIL import Image, ExifTags
 import subprocess
 import json
@@ -15,13 +15,7 @@ MediaType = Literal["image", "video", "audio", "other"]
 
 # -------------------- IMAGE METADATA --------------------
 def get_image_metadata(file_path: Path) -> Optional[ImageMetadata]:
-    """
-    Extract metadata from an image file.
-
-    Returns:
-        dict containing width, height, exif_datetime, and media_type,
-        or None if an error occurs.
-    """
+    """Extract image metadata: width, height, exif datetime."""
     try:
         with Image.open(file_path) as img:
             width, height = img.size
@@ -37,7 +31,10 @@ def get_image_metadata(file_path: Path) -> Optional[ImageMetadata]:
                 "width": width,
                 "height": height,
                 "exif_datetime": exif_datetime,
-                "media_type": "image"
+                "media_type": "image",
+                "duration": None,
+                "codec": None,
+                "bitrate": None
             }
     except Exception as e:
         print(f"Warning: failed to read image metadata for {file_path}: {e}")
@@ -45,13 +42,7 @@ def get_image_metadata(file_path: Path) -> Optional[ImageMetadata]:
 
 # -------------------- VIDEO/AUDIO METADATA --------------------
 def get_media_metadata(file_path: Path) -> Optional[MediaMetadata]:
-    """
-    Extract metadata from a video or audio file using ffprobe.
-
-    Returns:
-        dict containing duration, width, height, codec, bitrate, media_type,
-        or None if an error occurs.
-    """
+    """Extract video/audio metadata using ffprobe."""
     cmd = [
         "ffprobe",
         "-v", "error",
@@ -67,12 +58,10 @@ def get_media_metadata(file_path: Path) -> Optional[MediaMetadata]:
         print(f"Warning: ffprobe failed for {file_path}: {e}")
         return None
 
-    # Extract format-level metadata
     fmt = data.get("format", {})
     duration: Optional[float] = float(fmt["duration"]) if "duration" in fmt else None
     bitrate: Optional[int] = int(fmt["bit_rate"]) if "bit_rate" in fmt else None
 
-    # Extract first stream info if available
     streams = data.get("streams", [])
     width: Optional[int] = None
     height: Optional[int] = None
@@ -93,12 +82,13 @@ def get_media_metadata(file_path: Path) -> Optional[MediaMetadata]:
         "height": height,
         "codec": codec,
         "bitrate": bitrate,
-        "media_type": media_type
+        "media_type": media_type,
+        "exif_datetime": None
     }
 
 # -------------------- MAIN FUNCTION --------------------
-def main() -> None:
-    """Main function to enrich media metadata in the SQLite database."""
+def main(batch_size: int = 50) -> None:
+    """Main metadata enrichment, batching DB commits for efficiency."""
     if not DB_PATH.exists():
         raise FileNotFoundError(f"Database not found: {DB_PATH}")
 
@@ -112,8 +102,11 @@ def main() -> None:
         FROM files
         WHERE is_metadata_extracted = 0
     """)
-    rows: list[tuple[int, str]] = cur.fetchall()
+    rows: List[Tuple[int, str]] = cur.fetchall()
     print(f"{len(rows)} files to enrich")
+
+    updates: List[Tuple[Optional[str], Optional[float], Optional[int], Optional[int],
+                        Optional[str], Optional[int], Optional[str], int]] = []
 
     for idx, (file_id, path_str) in enumerate(rows, start=1):
         file_path = Path(os.path.normpath(path_str))
@@ -121,21 +114,39 @@ def main() -> None:
             print(f"Skipping missing file: {file_path}")
             continue
 
-        # Determine metadata based on file type
         suffix = file_path.suffix.lower()
-        metadata: Optional[ImageMetadata] = None
+        metadata: Optional[MediaMetadata] = None
 
         if suffix in {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}:
             metadata = get_image_metadata(file_path)
         elif suffix in {".mp4", ".mkv", ".avi", ".mov", ".mp3", ".wav", ".flac"}:
             metadata = get_media_metadata(file_path)
         else:
-            metadata = {"media_type": "other", "width": None, "height": None,
-                        "duration": None, "codec": None, "bitrate": None, "exif_datetime": None}
+            metadata = {
+                "media_type": "other",
+                "width": None,
+                "height": None,
+                "duration": None,
+                "codec": None,
+                "bitrate": None,
+                "exif_datetime": None
+            }
 
-        # Update DB if metadata was successfully extracted
         if metadata:
-            cur.execute("""
+            updates.append((
+                metadata.get("media_type"),
+                metadata.get("duration"),
+                metadata.get("width"),
+                metadata.get("height"),
+                metadata.get("codec"),
+                metadata.get("bitrate"),
+                metadata.get("exif_datetime"),
+                file_id
+            ))
+
+        # Commit batch
+        if idx % batch_size == 0 or idx == len(rows):
+            cur.executemany("""
                 UPDATE files SET
                     media_type = ?,
                     duration = ?,
@@ -146,19 +157,9 @@ def main() -> None:
                     exif_datetime = ?,
                     is_metadata_extracted = 1
                 WHERE id = ?
-            """, (
-                metadata.get("media_type"),
-                metadata.get("duration"),
-                metadata.get("width"),
-                metadata.get("height"),
-                metadata.get("codec"),
-                metadata.get("bitrate"),
-                metadata.get("exif_datetime"),
-                file_id
-            ))
+            """, updates)
             conn.commit()
-
-        if idx % 20 == 0:
+            updates.clear()
             print(f"Processed {idx}/{len(rows)} files")
 
     conn.close()
