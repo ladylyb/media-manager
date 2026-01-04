@@ -73,6 +73,10 @@ CREATE TABLE files (
     FOREIGN KEY (scan_id) REFERENCES scans(id)
 );
 
+
+ALTER TABLE files ADD COLUMN camera_model TEXT;
+ALTER TABLE files ADD COLUMN orientation TEXT;
+
 -- 4. Indexes (critical for performance)
 -- SQLite lives or dies on indexes — these matter.
 /*

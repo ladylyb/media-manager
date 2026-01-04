@@ -48,6 +48,13 @@ def score_pair(f1: FileDict, f2: FileDict) -> int:
     if f1.get("exif_datetime") and f1["exif_datetime"] == f2.get("exif_datetime"):
         score += 10
 
+    # ---- metadata enrichment bonuses ----
+    if f1.get("camera_model") and f1.get("camera_model") == f2.get("camera_model"):
+        score += 5  # small bonus
+
+    if f1.get("orientation") and f1.get("orientation") == f2.get("orientation"):
+        score += 2  # optional
+
     return score
 
 # -------------------- MAIN DRIVER --------------------
@@ -86,7 +93,8 @@ def main() -> None:
         cur.execute("""
             SELECT
                 id, size_bytes, duration,
-                width, height, codec, exif_datetime
+                width, height, codec, exif_datetime,
+                camera_model, bitrate, orientation
             FROM files
             WHERE size_bytes = ?
               AND media_type = ?
@@ -114,7 +122,6 @@ def main() -> None:
                 g2 = file_to_group.get(id2)
 
                 if g1 and g2:
-                    # merge groups if different
                     if g1 != g2:
                         for fid, gid in file_to_group.items():
                             if gid == g2:
@@ -137,16 +144,22 @@ def main() -> None:
                     id2,
                     "probable_metadata",
                     score,
-                    "Metadata similarity (size/duration/resolution/codec/exif)",
+                    "Metadata similarity (size/duration/resolution/codec/exif + enriched metadata)",
                     group_id
                 ))
 
-                # print match info
-                w1 = f1.get("width") or "?"
-                h1 = f1.get("height") or "?"
-                w2 = f2.get("width") or "?"
-                h2 = f2.get("height") or "?"
-                print(f"[Score={score} | Group={group_id}] File {id1} ({w1}x{h1}) ↔ File {id2} ({w2}x{h2})")
+                # ---- print enriched match info ----
+                w1, h1 = f1.get("width") or "?", f1.get("height") or "?"
+                w2, h2 = f2.get("width") or "?", f2.get("height") or "?"
+                cam1, cam2 = f1.get("camera_model") or "N/A", f2.get("camera_model") or "N/A"
+                bitrate1, bitrate2 = f1.get("bitrate") or "N/A", f2.get("bitrate") or "N/A"
+                orient1, orient2 = f1.get("orientation") or "N/A", f2.get("orientation") or "N/A"
+
+                print(
+                    f"[Score={score} | Group={group_id}] "
+                    f"File {id1} ({w1}x{h1}) ↔ File {id2} ({w2}x{h2}) | "
+                    f"Camera={cam1}/{cam2} | Bitrate={bitrate1}/{bitrate2} | Orientation={orient1}/{orient2}"
+                )
 
         if inserts:
             cur.executemany("""
@@ -164,7 +177,7 @@ def main() -> None:
         print(f"[{idx}/{len(size_groups)}] size={size_bytes} → {len(inserts)} matches")
 
     conn.close()
-    print("Probable duplicate scoring with grouping complete")
+    print("Probable duplicate scoring with grouping and enriched metadata complete")
 
 
 if __name__ == "__main__":
