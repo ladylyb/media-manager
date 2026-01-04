@@ -4,14 +4,13 @@ from itertools import combinations
 from typing import List, Tuple, Dict, Optional
 
 DB_PATH = Path("media-manager.db")
-CONFIDENCE_THRESHOLD = 50
+CONFIDENCE_THRESHOLD = 70
 
 # -------------------- TYPE ALIAS --------------------
-FileDict = Dict[str, Optional[int | float | str]]  # generic file dict from DB
+FileDict = Dict[str, Optional[int | float | str]]
 
 # -------------------- HELPERS --------------------
 def to_float(x: Optional[int | float | str]) -> Optional[float]:
-    """Convert a value to float if possible, else return None"""
     if x is None:
         return None
     try:
@@ -20,7 +19,6 @@ def to_float(x: Optional[int | float | str]) -> Optional[float]:
         return None
 
 def to_int(x: Optional[int | float | str]) -> int:
-    """Convert a value to int, raise error if None or invalid"""
     if x is None:
         raise ValueError("Expected numeric ID, got None")
     return int(x)
@@ -28,34 +26,34 @@ def to_int(x: Optional[int | float | str]) -> int:
 # -------------------- SCORING FUNCTION --------------------
 def score_pair(f1: FileDict, f2: FileDict) -> int:
     score = 0
-
-    # Same size (already grouped, but explicit)
     if f1.get("size_bytes") == f2.get("size_bytes"):
         score += 30
 
-    # Duration within 1 second
     d1 = to_float(f1.get("duration"))
     d2 = to_float(f2.get("duration"))
     if d1 is not None and d2 is not None and abs(d1 - d2) <= 1.0:
         score += 30
 
-    # Same resolution
     w1 = to_int(f1.get("width")) if f1.get("width") is not None else None
     h1 = to_int(f1.get("height")) if f1.get("height") is not None else None
     w2 = to_int(f2.get("width")) if f2.get("width") is not None else None
     h2 = to_int(f2.get("height")) if f2.get("height") is not None else None
-
     if w1 is not None and h1 is not None and w2 is not None and h2 is not None:
         if w1 == w2 and h1 == h2:
             score += 20
 
-    # Same codec
     if f1.get("codec") and f1["codec"] == f2.get("codec"):
         score += 10
 
-    # Same EXIF datetime (images)
     if f1.get("exif_datetime") and f1["exif_datetime"] == f2.get("exif_datetime"):
         score += 10
+
+    # ---- metadata enrichment bonuses ----
+    if f1.get("camera_model") and f1.get("camera_model") == f2.get("camera_model"):
+        score += 5  # small bonus
+
+    if f1.get("orientation") and f1.get("orientation") == f2.get("orientation"):
+        score += 2  # optional
 
     return score
 
@@ -66,7 +64,13 @@ def main() -> None:
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
-    # Step 1: get candidate size groups
+    # ---- ensure duplicate_group_id column exists ----
+    cur.execute("PRAGMA table_info(duplicate_candidates)")
+    columns = [row["name"] for row in cur.fetchall()]
+    if "duplicate_group_id" not in columns:
+        cur.execute("ALTER TABLE duplicate_candidates ADD COLUMN duplicate_group_id INTEGER")
+        conn.commit()
+
     cur.execute("""
         SELECT size_bytes, media_type
         FROM files
@@ -78,7 +82,10 @@ def main() -> None:
     size_groups = cur.fetchall()
     print(f"Found {len(size_groups)} size groups to process")
 
-    # Step 2: iterate over size groups
+    # ---- in-memory tracking of groups ----
+    next_group_id = 1
+    file_to_group: Dict[int, int] = {}  # file_id → group_id
+
     for idx, group in enumerate(size_groups, start=1):
         size_bytes = group["size_bytes"]
         media_type = group["media_type"]
@@ -86,7 +93,8 @@ def main() -> None:
         cur.execute("""
             SELECT
                 id, size_bytes, duration,
-                width, height, codec, exif_datetime
+                width, height, codec, exif_datetime,
+                camera_model, bitrate, orientation
             FROM files
             WHERE size_bytes = ?
               AND media_type = ?
@@ -97,9 +105,8 @@ def main() -> None:
         if len(files) < 2:
             continue
 
-        inserts: List[Tuple[int, int, str, int, str]] = []
+        inserts: List[Tuple[int, int, str, int, str, Optional[int]]] = []
 
-        # Step 3: pairwise comparison
         for f1, f2 in combinations(files, 2):
             score = score_pair(f1, f2)
             if score >= CONFIDENCE_THRESHOLD:
@@ -110,15 +117,50 @@ def main() -> None:
                     print(f"Skipping pair due to invalid ID: {e}")
                     continue
 
+                # ---- determine duplicate group ----
+                g1 = file_to_group.get(id1)
+                g2 = file_to_group.get(id2)
+
+                if g1 and g2:
+                    if g1 != g2:
+                        for fid, gid in file_to_group.items():
+                            if gid == g2:
+                                file_to_group[fid] = g1
+                        group_id = g1
+                    else:
+                        group_id = g1
+                elif g1 or g2:
+                    group_id = g1 or g2
+                    file_to_group[id1] = group_id
+                    file_to_group[id2] = group_id
+                else:
+                    group_id = next_group_id
+                    file_to_group[id1] = group_id
+                    file_to_group[id2] = group_id
+                    next_group_id += 1
+
                 inserts.append((
                     id1,
                     id2,
                     "probable_metadata",
                     score,
-                    "Metadata similarity (size/duration/resolution/codec/exif)"
+                    "Metadata similarity (size/duration/resolution/codec/exif + enriched metadata)",
+                    group_id
                 ))
 
-        # Step 4: persist results
+                # ---- print enriched match info ----
+                w1, h1 = f1.get("width") or "?", f1.get("height") or "?"
+                w2, h2 = f2.get("width") or "?", f2.get("height") or "?"
+                cam1, cam2 = f1.get("camera_model") or "N/A", f2.get("camera_model") or "N/A"
+                bitrate1, bitrate2 = f1.get("bitrate") or "N/A", f2.get("bitrate") or "N/A"
+                orient1, orient2 = f1.get("orientation") or "N/A", f2.get("orientation") or "N/A"
+
+                print(
+                    f"[Score={score} | Group={group_id}] "
+                    f"File {id1} ({w1}x{h1}) ↔ File {id2} ({w2}x{h2}) | "
+                    f"Camera={cam1}/{cam2} | Bitrate={bitrate1}/{bitrate2} | Orientation={orient1}/{orient2}"
+                )
+
         if inserts:
             cur.executemany("""
                 INSERT OR IGNORE INTO duplicate_candidates (
@@ -126,15 +168,16 @@ def main() -> None:
                     file_id_2,
                     match_type,
                     confidence_score,
-                    reason
-                ) VALUES (?, ?, ?, ?, ?)
+                    reason,
+                    duplicate_group_id
+                ) VALUES (?, ?, ?, ?, ?, ?)
             """, inserts)
             conn.commit()
 
         print(f"[{idx}/{len(size_groups)}] size={size_bytes} → {len(inserts)} matches")
 
     conn.close()
-    print("Probable duplicate scoring complete")
+    print("Probable duplicate scoring with grouping and enriched metadata complete")
 
 
 if __name__ == "__main__":
