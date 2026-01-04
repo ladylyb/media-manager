@@ -1,70 +1,90 @@
-from pathlib import Path
+# audit_to_be_deleted_final.py
+
 import sqlite3
-import csv
-from datetime import datetime
+from pathlib import Path
+import logging
 
 # -------------------- CONFIG --------------------
-TO_BE_DELETED_FOLDER = Path(r"C:\Users\micro\Documents\Better Up\Media-Manager\to-be-deleted")
-DB_PATH = Path("media-manager.db")
-OUTPUT_CSV = Path("audit_to_be_deleted_report.csv")
+ARCHIVE_ROOT = Path(r"C:\Users\micro\Documents\Better Up\Media-Manager")
+TO_BE_DELETED = ARCHIVE_ROOT / "to-be-deleted"
+DB_PATH = ARCHIVE_ROOT / "media-manager.db"
+LOG_FILE = ARCHIVE_ROOT / "audit_to_be_deleted.log"
+
+# -------------------- LOGGING --------------------
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
+
+# -------------------- HELPERS --------------------
+def extract_original_filename(moved_path: Path) -> str:
+    """
+    Attempt to recover the original filename from the moved file.
+    Strategy: remove any added prefixes (e.g., "File_Path_") and keep the basename.
+    """
+    name = moved_path.name
+    # Adjust this pattern if other prefixes were used
+    if name.startswith("File_Path_"):
+        name = name[len("File_Path_") :]
+    return name
 
 # -------------------- MAIN --------------------
 def audit_to_be_deleted():
+    print(f"Scanning {TO_BE_DELETED} for audit...")
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
-    # Load all files into memory for fast lookup
-    print("Loading files from DB into memory...")
-    cur.execute("SELECT id, path, filename FROM files")
-    files_dict = {row["path"]: row for row in cur.fetchall()}
+    total_files = 0
+    matched_files = 0
+    unmatched_files = 0
 
-    # Load all file_actions into memory
-    print("Loading file actions from DB into memory...")
-    cur.execute("SELECT file_id, action FROM file_actions")
-    file_actions_dict = {}
-    for row in cur.fetchall():
-        file_actions_dict.setdefault(row["file_id"], []).append(row["action"])
+    report = []
 
-    # Prepare CSV output
-    with OUTPUT_CSV.open("w", newline="", encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=[
-            "file_path", "found_in_db", "file_id", "actions", "notes"
-        ])
-        writer.writeheader()
+    for file_path in TO_BE_DELETED.rglob("*"):
+        if not file_path.is_file():
+            continue
+        total_files += 1
+        orig_filename = extract_original_filename(file_path)
 
-        total_files = 0
-        found_in_db_count = 0
+        # Query files table by original filename
+        cur.execute("SELECT * FROM files WHERE filename = ?", (orig_filename,))
+        rows = cur.fetchall()
 
-        for file_path in TO_BE_DELETED_FOLDER.rglob("*"):
-            if file_path.is_file():
-                total_files += 1
-                file_path_str = str(file_path)
+        if not rows:
+            unmatched_files += 1
+            logging.warning(f"No DB record found for: {file_path}")
+            report.append((file_path, None, "No DB record"))
+            continue
 
-                row = {
-                    "file_path": file_path_str,
-                    "found_in_db": False,
-                    "file_id": "",
-                    "actions": "",
-                    "notes": "",
-                }
+        # Handle multiple rows (e.g., duplicates)
+        for row in rows:
+            file_id = row["id"]
+            cur.execute(
+                "SELECT * FROM file_actions WHERE file_id = ?", (file_id,)
+            )
+            actions = cur.fetchall()
+            action_summary = [a["action"] for a in actions] if actions else []
 
-                db_entry = files_dict.get(file_path_str)
-                if db_entry:
-                    row["found_in_db"] = True
-                    row["file_id"] = db_entry["id"]
-                    actions = file_actions_dict.get(db_entry["id"], [])
-                    row["actions"] = ",".join(actions)
-                    found_in_db_count += 1
-                else:
-                    row["notes"] = "File not found in DB"
+            matched_files += 1
+            logging.info(
+                f"[MATCHED] {file_path} → original filename: {orig_filename}, "
+                f"DB id: {file_id}, actions: {action_summary}"
+            )
+            report.append((file_path, file_id, action_summary))
 
-                writer.writerow(row)
+    # Summary
+    print("\n--- Audit Summary ---")
+    print(f"Total files scanned: {total_files}")
+    print(f"Matched files: {matched_files}")
+    print(f"Unmatched files: {unmatched_files}")
+    logging.info(f"Audit complete. Total: {total_files}, Matched: {matched_files}, Unmatched: {unmatched_files}")
 
     conn.close()
-    print(f"Audit complete. Total files scanned: {total_files}, Found in DB: {found_in_db_count}")
-    print(f"Report saved to {OUTPUT_CSV}")
+    print(f"Detailed log written to {LOG_FILE}")
+    return report
 
-
+# -------------------- EXECUTE --------------------
 if __name__ == "__main__":
     audit_to_be_deleted()
