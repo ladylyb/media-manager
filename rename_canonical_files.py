@@ -8,10 +8,7 @@ PREFIX = "ladylyb - Personal Chapters —"
 
 # -------------------- FUNCTIONS --------------------
 def parse_filename_timestamp(filename: str):
-    """
-    Extract YYYYMMDD or YYYY-MM-DD patterns from original filename if possible.
-    Returns tuple (YYYY-MM-DD, HHMMSS) or (None, None)
-    """
+    """Extract YYYYMMDD or YYYY-MM-DD patterns from original filename if possible."""
     date_match = re.search(r"(\d{4})[-_]?(\d{2})[-_]?(\d{2})", filename)
     if date_match:
         y, m, d = date_match.groups()
@@ -19,10 +16,7 @@ def parse_filename_timestamp(filename: str):
     return None, None
 
 def select_best_timestamp(file_row):
-    """
-    Determine best timestamp for canonical filename
-    Priority: EXIF -> filename -> filesystem ctime/mtime
-    """
+    """Determine best timestamp for canonical filename."""
     # 1. EXIF
     exif = file_row["exif_datetime"]
     if exif:
@@ -51,6 +45,7 @@ def select_best_timestamp(file_row):
     return "0000-00-00", "000000"
 
 def rename_canonical_files():
+    print("Starting canonical renaming process...")
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
@@ -65,9 +60,18 @@ def rename_canonical_files():
     """)
     files = cur.fetchall()
 
+    print(f"Found {len(files)} canonical files to process.\n")
+
+    renamed_count = 0
+    skipped_count = 0
+
     for file_row in files:
         orig_path = Path(file_row["path"])
+        print(f"Processing file ID {file_row['id']}: {orig_path}")
+
         if not orig_path.exists():
+            print(f"  → File does not exist. Skipping.")
+            skipped_count += 1
             continue
 
         date_str, time_str = select_best_timestamp(file_row)
@@ -85,6 +89,7 @@ def rename_canonical_files():
 
         # Rename file
         orig_path.rename(target_path)
+        renamed_count += 1
 
         # Log in file_actions
         cur.execute("""
@@ -92,11 +97,15 @@ def rename_canonical_files():
             VALUES (?, 'rename', ?, 'Renamed to canonical format')
         """, (file_row["id"], str(target_path)))
 
-        print(f"Renamed {orig_path.name} → {target_path.name}")
+        print(f"  → Renamed to {target_path.name}")
 
     conn.commit()
     conn.close()
-    print("Canonical renaming complete")
+
+    print("\nCanonical renaming complete.")
+    print(f"  Total files processed: {len(files)}")
+    print(f"  Files renamed: {renamed_count}")
+    print(f"  Files skipped: {skipped_count}")
 
 # -------------------- MAIN --------------------
 if __name__ == "__main__":
