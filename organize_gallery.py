@@ -1,115 +1,128 @@
-# -------------------- organize_gallery.py --------------------
 from pathlib import Path
 import sqlite3
 import shutil
-from datetime import datetime
+from datetime import datetime, date
 
 # -------------------- CONFIG --------------------
 ARCHIVE_ROOT = Path(r"C:\Users\micro\Documents\Better Up\Media-Manager")
 GALLERY_ROOT = ARCHIVE_ROOT / "gallery"
-DUPLICATES_ROOT = ARCHIVE_ROOT / "duplicates"
-
 DB_PATH = Path("media-manager.db")
-CANONICAL_PREFIX = "ladylyb - Personal Chapters —"
+
+PROTECTED_DIRS = {
+    GALLERY_ROOT.resolve(),
+    (ARCHIVE_ROOT / "duplicates").resolve(),
+}
 
 # -------------------- HELPERS --------------------
-def parse_timestamp_from_filename(filename: str) -> str:
+def safe_parse_date(timestamp_str: str | None) -> tuple[str, str, str]:
     """
-    Extract YYYY-MM-DD_HHMMSS from canonical filename.
-    Returns "0000-00-00_000000" if invalid or in future.
+    Returns (YYYY, MM, DD) or ('0000','00','00') if invalid or future
     """
+    if not timestamp_str:
+        return "0000", "00", "00"
+
     try:
-        base = Path(filename).stem
-        ts_part = base.replace(CANONICAL_PREFIX, "")
-        ts = datetime.strptime(ts_part, "%Y-%m-%d_%H%M%S")
-        if ts > datetime.now():
-            return "0000-00-00_000000"
-        return ts.strftime("%Y-%m-%d_%H%M%S")
+        dt = datetime.strptime(timestamp_str, "%Y-%m-%d_%H%M%S")
+        if dt.date() > date.today():
+            return "0000", "00", "00"
+        return f"{dt.year:04}", f"{dt.month:02}", f"{dt.day:02}"
     except Exception:
-        return "0000-00-00_000000"
+        return "0000", "00", "00"
 
 
-def move_file(src_path: Path, target_root: Path, timestamp_str: str) -> Path:
+def cleanup_empty_dirs(start_path: Path):
     """
-    Move file to YYYY/MM/DD (gallery) or YYYY-MM-DD (duplicates) folder.
-    Avoid overwrite by adding numeric suffix if needed.
+    Walk upward deleting empty directories until hitting protected root
     """
-    # Determine folder
-    if target_root.name == "gallery":
-        year, month, day = timestamp_str[:4], timestamp_str[5:7], timestamp_str[8:10]
-        folder = target_root / year / month / day
-    else:  # duplicates
-        folder = target_root / timestamp_str[:10]
+    current = start_path
 
-    folder.mkdir(parents=True, exist_ok=True)
-    target_path = folder / src_path.name
-
-    # Avoid overwriting
-    if target_path.exists():
-        suffix = 1
-        stem = target_path.stem
-        while (folder / f"{stem}_{suffix}{target_path.suffix}").exists():
-            suffix += 1
-        target_path = folder / f"{stem}_{suffix}{target_path.suffix}"
-
-    shutil.move(str(src_path), str(target_path))
-    return target_path
-
-
-def cleanup_empty_folders(path: Path):
-    """Recursively remove empty folders up to ARCHIVE_ROOT"""
-    current = path
-    while current != ARCHIVE_ROOT and current.exists() and current.is_dir():
-        if any(current.iterdir()):
+    while True:
+        if not current.exists() or not current.is_dir():
             break
-        current.rmdir()
-        current = current.parent
+
+        if current.resolve() in PROTECTED_DIRS:
+            break
+
+        try:
+            if any(current.iterdir()):
+                break
+            current.rmdir()
+            current = current.parent
+        except Exception:
+            break
 
 
 # -------------------- MAIN --------------------
 def organize_gallery():
+    print("Starting gallery organization...")
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
-    print("Organizing canonical files into gallery...")
-
-    # Canonical files (already renamed)
     cur.execute("""
-        SELECT f.id, f.path, f.filename
+        SELECT
+            f.id AS file_id,
+            fa.target_path AS current_path,
+            f.exif_datetime,
+            f.mtime
         FROM files f
         JOIN file_actions fa ON f.id = fa.file_id
         WHERE fa.action = 'rename'
     """)
-    canonical_files = cur.fetchall()
 
-    for row in canonical_files:
-        file_id = row["id"]
-        src_path = Path(row["path"])
-        timestamp_str = parse_timestamp_from_filename(row["filename"])
+    rows = cur.fetchall()
+    print(f"Found {len(rows)} canonical files to organize.")
+
+    for idx, row in enumerate(rows, 1):
+        file_id = row["file_id"]
+        src_path = Path(row["current_path"])
 
         if not src_path.exists():
-            print(f"⚠ Source missing: {src_path}")
+            print(f"[{idx}] Missing file, skipping: {src_path}")
             continue
 
-        target_path = move_file(src_path, GALLERY_ROOT, timestamp_str)
+        # Determine date folder
+        timestamp = row["exif_datetime"]
+        if not timestamp and row["mtime"]:
+            try:
+                timestamp = datetime.fromtimestamp(float(row["mtime"])).strftime("%Y-%m-%d_%H%M%S")
+            except Exception:
+                timestamp = None
 
+        yyyy, mm, dd = safe_parse_date(timestamp)
+
+        target_dir = GALLERY_ROOT / yyyy / mm / dd
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        target_path = target_dir / src_path.name
+
+        # Avoid overwrite
+        if target_path.exists():
+            suffix = 1
+            stem = target_path.stem
+            while (target_dir / f"{stem}_{suffix}{target_path.suffix}").exists():
+                suffix += 1
+            target_path = target_dir / f"{stem}_{suffix}{target_path.suffix}"
+
+        print(f"[{idx}/{len(rows)}] Moving → {target_path}")
+
+        try:
+            shutil.move(str(src_path), str(target_path))
+        except Exception as e:
+            print(f"  ❌ Move failed: {e}")
+            continue
+
+        # Log move
         cur.execute("""
             INSERT INTO file_actions (file_id, action, target_path, notes)
             VALUES (?, 'move_gallery', ?, ?)
-        """, (file_id, str(target_path), f"Moved to gallery/{timestamp_str}"))
+        """, (file_id, str(target_path), "Moved canonical file into gallery structure"))
 
-        cleanup_empty_folders(src_path.parent)
         conn.commit()
-        print(f"{src_path.name} → {target_path}")
 
-    # Duplicates
-    print("Organizing duplicates into dated folders...")
-    for dup_file in DUPLICATES_ROOT.iterdir():
-        if dup_file.is_file():
-            timestamp_str = parse_timestamp_from_filename(dup_file.name)
-            target_path = move_file(dup_file, DUPLICATES_ROOT, timestamp_str)
-            print(f"Duplicate {dup_file.name} → {target_path}")
+        # Cleanup old folders
+        cleanup_empty_dirs(src_path.parent)
 
     conn.close()
     print("Gallery organization complete.")
