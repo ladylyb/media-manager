@@ -1,88 +1,70 @@
 from pathlib import Path
 import sqlite3
 import csv
-import argparse
-import logging
+from datetime import datetime
 
 # -------------------- CONFIG --------------------
-TO_BE_DELETED = Path(r"C:\Users\micro\Documents\Better Up\Media-Manager\to-be-deleted")
+TO_BE_DELETED_FOLDER = Path(r"C:\Users\micro\Documents\Better Up\Media-Manager\to-be-deleted")
 DB_PATH = Path("media-manager.db")
-LOG_FILE = Path("audit_to_be_deleted.log")
-REPORT_FILE = Path("audit_to_be_deleted_report.csv")
+OUTPUT_CSV = Path("audit_to_be_deleted_report.csv")
 
-# -------------------- ARGPARSE --------------------
-parser = argparse.ArgumentParser(description="Audit files in to-be-deleted folder against media-manager database")
-parser.add_argument("--dry-run", action="store_true", help="Run audit without any changes")
-args = parser.parse_args()
+# -------------------- MAIN --------------------
+def audit_to_be_deleted():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
 
-# -------------------- LOGGING --------------------
-logging.basicConfig(
-    filename=LOG_FILE,
-    filemode="w",
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
-)
-logging.info("Starting audit of to-be-deleted folder: %s", TO_BE_DELETED)
+    # Load all files into memory for fast lookup
+    print("Loading files from DB into memory...")
+    cur.execute("SELECT id, path, filename FROM files")
+    files_dict = {row["path"]: row for row in cur.fetchall()}
 
-# -------------------- DB CONNECTION --------------------
-conn = sqlite3.connect(DB_PATH)
-conn.row_factory = sqlite3.Row
-cur = conn.cursor()
+    # Load all file_actions into memory
+    print("Loading file actions from DB into memory...")
+    cur.execute("SELECT file_id, action FROM file_actions")
+    file_actions_dict = {}
+    for row in cur.fetchall():
+        file_actions_dict.setdefault(row["file_id"], []).append(row["action"])
 
-# -------------------- AUDIT --------------------
-rows = []
+    # Prepare CSV output
+    with OUTPUT_CSV.open("w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=[
+            "file_path", "found_in_db", "file_id", "actions", "notes"
+        ])
+        writer.writeheader()
 
-for file_path in TO_BE_DELETED.rglob("*.*"):
-    file_path_str = str(file_path)
-    status = ""
-    file_id = None
-    file_action = None
+        total_files = 0
+        found_in_db_count = 0
 
-    # Check if file is in files table
-    cur.execute("SELECT * FROM files WHERE path = ?", (file_path_str,))
-    row = cur.fetchone()
-    if row:
-        file_id = row["id"]
-        # Check if an action exists
-        cur.execute("SELECT * FROM file_actions WHERE file_id = ?", (file_id,))
-        action_row = cur.fetchone()
-        file_action = action_row["action"] if action_row else None
-        if file_action:
-            status = f"Processed ({file_action})"
-        else:
-            status = "In files table, no action"
-    else:
-        status = "Not in files table"
+        for file_path in TO_BE_DELETED_FOLDER.rglob("*"):
+            if file_path.is_file():
+                total_files += 1
+                file_path_str = str(file_path)
 
-    logging.info("[AUDIT] %s → %s", file_path, status)
+                row = {
+                    "file_path": file_path_str,
+                    "found_in_db": False,
+                    "file_id": "",
+                    "actions": "",
+                    "notes": "",
+                }
 
-    rows.append({
-        "file_path": file_path_str,
-        "file_id": file_id,
-        "file_action": file_action,
-        "status": status
-    })
+                db_entry = files_dict.get(file_path_str)
+                if db_entry:
+                    row["found_in_db"] = True
+                    row["file_id"] = db_entry["id"]
+                    actions = file_actions_dict.get(db_entry["id"], [])
+                    row["actions"] = ",".join(actions)
+                    found_in_db_count += 1
+                else:
+                    row["notes"] = "File not found in DB"
 
-# -------------------- EXPORT REPORT --------------------
-with open(REPORT_FILE, "w", newline="", encoding="utf-8") as f:
-    writer = csv.DictWriter(f, fieldnames=["file_path", "file_id", "file_action", "status"])
-    writer.writeheader()
-    writer.writerows(rows)
+                writer.writerow(row)
 
-logging.info("Audit complete. Report saved to: %s", REPORT_FILE)
-print(f"Audit complete. Report saved to: {REPORT_FILE}")
-print(f"Log file: {LOG_FILE}")
+    conn.close()
+    print(f"Audit complete. Total files scanned: {total_files}, Found in DB: {found_in_db_count}")
+    print(f"Report saved to {OUTPUT_CSV}")
 
-# -------------------- SUMMARY --------------------
-total_files = len(rows)
-missing_in_db = sum(1 for r in rows if r["status"] == "Not in files table")
-no_action = sum(1 for r in rows if r["status"] == "In files table, no action")
 
-print(f"Total files audited: {total_files}")
-print(f"Files missing in DB: {missing_in_db}")
-print(f"Files in DB with no action: {no_action}")
-
-logging.info("Summary: total=%d, missing_in_db=%d, no_action=%d",
-             total_files, missing_in_db, no_action)
-
-conn.close()
+if __name__ == "__main__":
+    audit_to_be_deleted()
