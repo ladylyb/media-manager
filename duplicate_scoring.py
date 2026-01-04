@@ -4,7 +4,7 @@ from itertools import combinations
 from typing import List, Tuple, Dict, Optional
 
 DB_PATH = Path("media-manager.db")
-CONFIDENCE_THRESHOLD = 70
+CONFIDENCE_THRESHOLD = 50
 
 # -------------------- TYPE ALIAS --------------------
 FileDict = Dict[str, Optional[int | float | str]]  # generic file dict from DB

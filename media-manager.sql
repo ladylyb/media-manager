@@ -306,5 +306,17 @@ WHERE dc.match_type = 'probable_metadata'
 ORDER BY dc.confidence_score DESC;
 
 
+SELECT size_bytes, media_type
+FROM files
+WHERE media_type IN ('image','video')
+  AND hash_full IS NULL
+GROUP BY size_bytes, media_type
+HAVING COUNT(*) > 1;
+
+SELECT match_type, count(1) FROM duplicate_candidates
+group by match_type;
+
+SELECT * FROM duplicate_candidates
+WHERE match_type = 'probable_metadata';
 
 PRAGMA wal_checkpoint(FULL);
