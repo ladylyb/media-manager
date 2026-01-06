@@ -23,6 +23,13 @@ import argparse
 # CSV_FILE = ARCHIVE_ROOT / f"data/audit_to_be_deleted_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
 
 # -------------------- LOGGING --------------------
+def log_reconstruction(file_path: Path, reconstructed_name: str):
+    logging.debug(
+        "RECONSTRUCT | disk='%s' | reconstructed='%s'",
+        file_path.name,
+        reconstructed_name
+    )
+
 def setup_logging(log_file: Path):
     """
     Ensure log directory exists and configure logging safely.
@@ -98,6 +105,8 @@ def audit_to_be_deleted(limit: int | None = None):
         for file_path in files_only:
             notes = []
             reconstructed = reconstruct_original_filename(file_path)
+            
+            log_reconstruction(file_path, reconstructed)
 
             cur.execute(
                 "SELECT id FROM files WHERE filename = ?",
@@ -108,7 +117,13 @@ def audit_to_be_deleted(limit: int | None = None):
             if not file_row:
                 missing += 1
                 notes.append("Not found in files table")
-                logging.warning(f"No DB record for: {file_path}")
+                # logging.warning(f"No DB record for: {file_path}")
+                logging.warning(
+                    "DB MISS | reconstructed='%s' | disk='%s'",
+                    reconstructed,
+                    file_path.name
+                )
+                
                 writer.writerow({
                     "to_be_deleted_path": str(file_path),
                     "reconstructed_filename": reconstructed,
