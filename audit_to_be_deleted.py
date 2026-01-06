@@ -1,5 +1,5 @@
 """
-audit_to_be_deleted_full.py
+audit_to_be_deleted.py
 
 Scans the "to-be-deleted" folder and cross-checks each file against the database.
 Summarizes any actions taken on the file (rename/move/delete/ignore) and logs/report.
@@ -11,6 +11,8 @@ import sqlite3
 import logging
 import csv
 import argparse
+import unicodedata
+import re
 
 # -------------------- CONFIG --------------------
 # DB_PATH = "media-manager.db"
@@ -21,6 +23,7 @@ import argparse
 # LOG_FILE = ARCHIVE_ROOT / f"cleanup_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
 # LOG_FILE = ARCHIVE_ROOT / f"logs/audit_to_be_deleted_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 # CSV_FILE = ARCHIVE_ROOT / f"data/audit_to_be_deleted_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+SAFE_ACTIONS = {"move", "rename"}
 
 # -------------------- LOGGING --------------------
 def log_reconstruction(file_path: Path, reconstructed_name: str):
@@ -47,28 +50,20 @@ def setup_logging(log_file: Path):
 
 
 # -------------------- HELPERS --------------------
+
+def normalize_for_compare(name: str) -> str:
+    """
+    Normalize filenames for comparison only.
+    Does NOT change semantics, only formatting noise.
+    """
+    name = unicodedata.normalize("NFKC", name)
+    name = name.lower()
+    name = name.replace(" ", "_")
+    name = re.sub(r"_+", "_", name)
+    return name.strip("_")
+
 def ensure_parent_dir(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
-
-# def reconstruct_original_filename(file_path: Path) -> str:
-#     """
-#     Reverse flattening and suffixing applied during archival.
-#     """
-#     original = file_path.name
-
-#     # Remove flattened folder prefixes (Folder__File.ext)
-#     if "__" in original:
-#         original = original.split("__", 1)[-1]
-
-#     # Remove duplicate suffix (_1, _2, etc.)
-#     stem = Path(original).stem
-#     suffix = Path(original).suffix
-#     if "_" in stem:
-#         base, tail = stem.rsplit("_", 1)
-#         if tail.isdigit():
-#             original = base + suffix
-
-#     return original
 
 def reconstruct_original_filename(file_path: Path) -> str:
     """
@@ -85,18 +80,22 @@ def reconstruct_original_filename(file_path: Path) -> str:
 
     candidate = parts[-1]  # ALWAYS take last segment
 
-    stem = Path(candidate).stem
-    suffix = Path(candidate).suffix
+    stem = Path(candidate).stem # type: ignore
+    suffix = Path(candidate).suffix # type: ignore
 
+    # Catches false negatives, so disabled for now
+    # IMG_1234.jpg → IMG.jpg - which is not desired
     # 2. Strip numeric-only trailing suffix (_15, _304, etc.)
     # BUT keep legitimate underscores in filenames
-    if "_" in stem:
-        base, tail = stem.rsplit("_", 1)
-        if tail.isdigit():
-            candidate = base + suffix
+    # if "_" in stem:
+    #     base, tail = stem.rsplit("_", 1)
+    #     if tail.isdigit():
+    #         candidate = base + suffix
+
+    # Replace underscores with spaces for DB lookup
+    # candidate = candidate.replace("_", " ")
 
     return candidate
-
 
 # -------------------- MAIN --------------------
 def audit_to_be_deleted(limit: int | None = None):
@@ -105,6 +104,20 @@ def audit_to_be_deleted(limit: int | None = None):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
+    
+    cur.execute("SELECT id, filename FROM files")
+    db_rows = cur.fetchall()
+
+    db_index = []
+    
+    for r in db_rows:
+        db_index.append({
+            "id": r["id"],
+            "filename": r["filename"],
+            "norm": normalize_for_compare(r["filename"])
+        })
+
+    logging.info("Loaded %d filenames from DB for comparison", len(db_index))    
 
     files_only = [p for p in TO_BE_DELETED.rglob("*") if p.is_file()]
     if limit:
@@ -142,22 +155,22 @@ def audit_to_be_deleted(limit: int | None = None):
                 reconstructed
             )            
 
-            cur.execute(
-                "SELECT id FROM files WHERE filename = ?",
-                (reconstructed,)
-            )
-            file_row = cur.fetchone()
+            reconstructed_norm = normalize_for_compare(reconstructed)
 
-            if not file_row:
+            matches = [
+                f for f in db_index
+                if f["norm"] == reconstructed_norm
+            ]
+            
+            if not matches:
                 missing += 1
-                notes.append("Not found in files table")
-                # logging.warning(f"No DB record for: {file_path}")
+                notes.append("No normalized match in DB")
                 logging.warning(
-                    "DB MISS | reconstructed='%s' | disk='%s'",
+                    "DB MISS | reconstructed='%s' | norm='%s' | disk='%s'",
                     reconstructed,
+                    reconstructed_norm,
                     file_path.name
                 )
-                
                 writer.writerow({
                     "to_be_deleted_path": str(file_path),
                     "reconstructed_filename": reconstructed,
@@ -168,42 +181,74 @@ def audit_to_be_deleted(limit: int | None = None):
                 })
                 continue
 
+            if len(matches) > 1:
+                
+                matched_names = [m["filename"] for m in matches]
+                matched_ids = [m["id"] for m in matches]
+                
+                notes.append(f"Ambiguous match ({len(matches)} candidates)")
+                logging.warning(
+                    "AMBIGUOUS MATCH | reconstructed='%s' | candidates=%s | ids=%s",
+                    reconstructed,
+                    matched_names,
+                    matched_ids
+                )
+
+            # match = matches[0]
+            # file_id = match["id"]
             found += 1
-            file_id = file_row["id"]
+
+            placeholders = ",".join("?" for _ in matched_ids)
 
             cur.execute(
-                """
-                SELECT action, target_path, decided_at
+                f"""
+                SELECT file_id, action, target_path, decided_at
                 FROM file_actions
-                WHERE file_id = ?
+                WHERE file_id IN ({placeholders})
                 ORDER BY decided_at
                 """,
-                (file_id,)
+                matched_ids
             )
-            actions = cur.fetchall()
+
+            actions = cur.fetchall()            
 
             if actions:
-                with_actions += 1
-                action_summary = " | ".join(
-                    f"{a['action']} → {a['target_path'] or ''}".strip()
+                
+                safe_to_delete = any(
+                    a["action"] in SAFE_ACTIONS and a["target_path"]
                     for a in actions
-                )
+                )                
+                
+                with_actions += 1
+
+                action_summary = " | ".join(
+                    f"[{a['file_id']}] {a['action']} → {a['target_path'] or ''}".strip()
+                    for a in actions
+                )                
             else:
                 without_actions += 1
                 action_summary = ""
                 notes.append("No recorded action")
 
-            logging.info(
+            logging.debug(
                 f"[AUDIT] {file_path.name} | found | actions={bool(actions)}"
             )
 
+            logging.info(
+                "[AUDIT] %s | found | matched_ids=%d | actions=%d | safe_to_delete=%s",
+                file_path.name,
+                len(matched_ids),
+                len(actions),
+                safe_to_delete
+            )
+            
             writer.writerow({
                 "to_be_deleted_path": str(file_path),
                 "reconstructed_filename": reconstructed,
                 "found_in_db": True,
-                "file_id": file_id,
+                "file_id": ",".join(str(i) for i in matched_ids),
                 "actions": action_summary,
-                "notes": "; ".join(notes)
+                "notes": "; ".join(notes + (["SAFE TO DELETE"] if safe_to_delete else []))
             })
 
     conn.close()
