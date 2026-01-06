@@ -50,25 +50,53 @@ def setup_logging(log_file: Path):
 def ensure_parent_dir(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
 
+# def reconstruct_original_filename(file_path: Path) -> str:
+#     """
+#     Reverse flattening and suffixing applied during archival.
+#     """
+#     original = file_path.name
+
+#     # Remove flattened folder prefixes (Folder__File.ext)
+#     if "__" in original:
+#         original = original.split("__", 1)[-1]
+
+#     # Remove duplicate suffix (_1, _2, etc.)
+#     stem = Path(original).stem
+#     suffix = Path(original).suffix
+#     if "_" in stem:
+#         base, tail = stem.rsplit("_", 1)
+#         if tail.isdigit():
+#             original = base + suffix
+
+#     return original
+
 def reconstruct_original_filename(file_path: Path) -> str:
     """
-    Reverse flattening and suffixing applied during archival.
+    Reconstruct original filename from flattened path.
+    Handles N-level folder flattening and duplicate suffixes.
     """
-    original = file_path.name
 
-    # Remove flattened folder prefixes (Folder__File.ext)
-    if "__" in original:
-        original = original.split("__", 1)[-1]
+    name = file_path.name
 
-    # Remove duplicate suffix (_1, _2, etc.)
-    stem = Path(original).stem
-    suffix = Path(original).suffix
+    # 1. Split flattened path into segments
+    # Gallery__PIC__DRS__2021_03_22_11_09_15.mov
+    # → ["Gallery", "PIC", "DRS", "2021_03_22_11_09_15.mov"]
+    parts = name.split("__")
+
+    candidate = parts[-1]  # ALWAYS take last segment
+
+    stem = Path(candidate).stem
+    suffix = Path(candidate).suffix
+
+    # 2. Strip numeric-only trailing suffix (_15, _304, etc.)
+    # BUT keep legitimate underscores in filenames
     if "_" in stem:
         base, tail = stem.rsplit("_", 1)
         if tail.isdigit():
-            original = base + suffix
+            candidate = base + suffix
 
-    return original
+    return candidate
+
 
 # -------------------- MAIN --------------------
 def audit_to_be_deleted(limit: int | None = None):
@@ -107,6 +135,12 @@ def audit_to_be_deleted(limit: int | None = None):
             reconstructed = reconstruct_original_filename(file_path)
             
             log_reconstruction(file_path, reconstructed)
+            
+            logging.debug(
+                "RECONSTRUCT | disk='%s' → '%s'",
+                file_path.name,
+                reconstructed
+            )            
 
             cur.execute(
                 "SELECT id FROM files WHERE filename = ?",
