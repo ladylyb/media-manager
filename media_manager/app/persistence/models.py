@@ -84,7 +84,12 @@ class FailureEvent(Base):
         nullable=False,
     )
     phase: Mapped[FailurePhase] = mapped_column(
-        Enum(FailurePhase, name="failure_phase", native_enum=True),
+        Enum(
+            FailurePhase,
+            name="failure_phase",
+            native_enum=True,
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
         nullable=False,
     )
     error_code: Mapped[str] = mapped_column(String(128), nullable=False)
