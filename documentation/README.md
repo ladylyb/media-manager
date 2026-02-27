@@ -22,9 +22,10 @@ This folder contains the canonical documentation set for the media-manager rewri
 - `reference/data-dictionary.md`: schema/data dictionary reference from legacy system for context.
 
 ## Legacy Archive
-- `legacy/README.md`: legacy implementation archive summary.
-- `legacy/failure-notes.md`: legacy post-mortem and failure modes.
-- `legacy/media-manager-dev-*.md`: historical development artifacts.
+- `../archive/legacy/README.md`: archive index and policy.
+- `../archive/legacy/docs/README.md`: legacy implementation archive summary.
+- `../archive/legacy/docs/failure-notes.md`: legacy post-mortem and failure modes.
+- `../archive/legacy/docs/media-manager-dev-*.md`: historical development artifacts.
 
 ## Authority Rules
 - If project docs conflict, use `project/07-unified-architecture-spec.md` for technical behavior.
