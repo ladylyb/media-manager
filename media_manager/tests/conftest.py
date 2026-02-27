@@ -40,7 +40,12 @@ def db_engine(test_database_url: str) -> Iterator[Engine]:
 @pytest.fixture(autouse=True)
 def clean_tables(db_engine: Engine) -> None:
     with db_engine.begin() as conn:
-        conn.execute(text("TRUNCATE TABLE failure_events, runs RESTART IDENTITY CASCADE"))
+        conn.execute(
+            text(
+                "TRUNCATE TABLE planned_actions, failure_events, files, content_objects, runs "
+                "RESTART IDENTITY CASCADE"
+            )
+        )
 
 
 @pytest.fixture
