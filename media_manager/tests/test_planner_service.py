@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from media_manager.app.core.errors import PlanningStateError
 from media_manager.app.core.state_machine import RunState, validate_transition
@@ -179,8 +179,25 @@ def test_planned_actions_idempotent_on_reentry_same_transaction(
 
         base_root = planner._determine_base_root([candidate])
         reserved_paths: set[str] = set()
-        first_action = planner._plan_single_path(session, run_row, candidate, base_root, reserved_paths)
-        second_action = planner._plan_single_path(session, run_row, candidate, base_root, reserved_paths)
+        from media_manager.app.core.metadata_extractor import pre_extract_for_paths
+
+        pre_results = pre_extract_for_paths(session, [candidate], run_id=str(run.id))
+        first_action = planner._plan_single_path(
+            session,
+            run_row,
+            candidate,
+            base_root,
+            reserved_paths,
+            pre_results.get(str(candidate.resolve(strict=False))),
+        )
+        second_action = planner._plan_single_path(
+            session,
+            run_row,
+            candidate,
+            base_root,
+            reserved_paths,
+            pre_results.get(str(candidate.resolve(strict=False))),
+        )
         assert first_action == second_action
 
         count_in_txn = session.scalar(
@@ -235,3 +252,29 @@ def test_run_state_enforcement_for_planning(tmp_path: Path, session_factory) -> 
     run_service.transition_run(run_apply.id, RunState.APPLYING)
     with pytest.raises(PlanningStateError):
         planner.plan_run(run_apply.id, [file_path])
+
+
+def test_planner_skips_when_metadata_missing_after_preextract(
+    tmp_path: Path, session_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_service = RunService(session_factory)
+    planner = PlanningService(session_factory)
+    run = run_service.create_run()
+    file_path = _write_file(tmp_path / "x.jpg", b"x")
+
+    from media_manager.app.core import metadata_extractor
+    from media_manager.app.core.metadata_extractor import ExtractResult
+
+    original = metadata_extractor.pre_extract_for_paths
+
+    def _wrapped(session, paths, *, run_id=None):
+        result = original(session, paths, run_id=run_id)
+        session.execute(text("DELETE FROM media_metadata"))
+        return {k: ExtractResult(v.file_hash, v.codes_extracted, v.defaults_used) for k, v in result.items()}
+
+    monkeypatch.setattr(metadata_extractor, "pre_extract_for_paths", _wrapped)
+    monkeypatch.setattr("media_manager.app.persistence.planner.pre_extract_for_paths", _wrapped)
+
+    summary = planner.plan_run(run.id, [file_path])
+    assert summary.scanned_count == 0
+    assert summary.skipped_count == 1

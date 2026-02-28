@@ -20,6 +20,10 @@ class _StructuredDefaultsFilter(logging.Filter):
             record.filename = "-"
         if not hasattr(record, "action"):
             record.action = "-"
+        if not hasattr(record, "file_hash"):
+            record.file_hash = "-"
+        if not hasattr(record, "codes_extracted"):
+            record.codes_extracted = "-"
         if not hasattr(record, "scanned"):
             record.scanned = "-"
         if not hasattr(record, "supported"):
@@ -53,7 +57,8 @@ def configure_logging() -> None:
         format=(
             "%(asctime)s %(levelname)s %(name)s "
             "run_id=%(run_id)s phase=%(phase)s action_type=%(action_type)s "
-            "filename=%(filename)s action=%(action)s "
+            "filename=%(filename)s file_hash=%(file_hash)s action=%(action)s "
+            "codes_extracted=%(codes_extracted)s "
             "scanned=%(scanned)s supported=%(supported)s skipped=%(skipped)s "
             "moves=%(moves)s duplicates=%(duplicates)s noop=%(noop)s "
             "applied=%(applied)s errors=%(errors)s %(message)s"
@@ -65,7 +70,8 @@ def configure_logging() -> None:
     formatter = logging.Formatter(
         "%(asctime)s %(levelname)s %(name)s "
         "run_id=%(run_id)s phase=%(phase)s action_type=%(action_type)s "
-        "filename=%(filename)s action=%(action)s "
+        "filename=%(filename)s file_hash=%(file_hash)s action=%(action)s "
+        "codes_extracted=%(codes_extracted)s "
         "scanned=%(scanned)s supported=%(supported)s skipped=%(skipped)s "
         "moves=%(moves)s duplicates=%(duplicates)s noop=%(noop)s "
         "applied=%(applied)s errors=%(errors)s %(message)s",
@@ -74,7 +80,9 @@ def configure_logging() -> None:
             "phase": "-",
             "action_type": "-",
             "filename": "-",
+            "file_hash": "-",
             "action": "-",
+            "codes_extracted": "-",
             "scanned": "-",
             "supported": "-",
             "skipped": "-",
