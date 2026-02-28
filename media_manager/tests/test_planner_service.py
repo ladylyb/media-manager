@@ -85,8 +85,7 @@ def test_planning_transaction_rollback(tmp_path: Path, session_factory) -> None:
         assert count_actions == 0
         assert len(failures) == 1
         assert persisted_run is not None
-        # Under current state machine, CREATED -> FAILED is invalid for planner failures.
-        assert persisted_run.state.value == RunState.CREATED.value
+        assert persisted_run.state.value == RunState.FAILED.value
 
 
 def test_run_state_enforcement_for_planning(tmp_path: Path, session_factory) -> None:
