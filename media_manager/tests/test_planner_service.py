@@ -43,6 +43,46 @@ def test_duplicate_detection_workflow(tmp_path: Path, session_factory) -> None:
         assert any(a.action_type == PlannedActionType.MARK_DUPLICATE.value for a in actions)
 
 
+def test_duplicate_original_selection_deterministic_across_runs(
+    tmp_path: Path, session_factory
+) -> None:
+    run_service = RunService(session_factory)
+    planner = PlanningService(session_factory)
+
+    first = _write_file(tmp_path / "a_dup.jpg", b"same-content")
+    second = _write_file(tmp_path / "b_dup.jpg", b"same-content")
+
+    run_1 = run_service.create_run()
+    planner.plan_run(run_1.id, [first, second])
+
+    with session_factory() as session:
+        files = session.scalars(select(File).where(File.path.in_([str(first), str(second)]))).all()
+        assert len(files) == 2
+
+        originals = [f for f in files if not f.is_duplicate]
+        duplicates = [f for f in files if f.is_duplicate]
+        assert len(originals) == 1
+        assert len(duplicates) == 1
+
+        expected_original = sorted(files, key=lambda f: (f.created_at, f.id))[0]
+        assert originals[0].id == expected_original.id
+        assert duplicates[0].original_file_id == expected_original.id
+
+    run_2 = run_service.create_run()
+    planner.plan_run(run_2.id, [first, second])
+
+    with session_factory() as session:
+        files_after = session.scalars(select(File).where(File.path.in_([str(first), str(second)]))).all()
+        assert len(files_after) == 2
+
+        originals_after = [f for f in files_after if not f.is_duplicate]
+        duplicates_after = [f for f in files_after if f.is_duplicate]
+        assert len(originals_after) == 1
+        assert len(duplicates_after) == 1
+        assert originals_after[0].id == expected_original.id
+        assert duplicates_after[0].original_file_id == expected_original.id
+
+
 def test_planned_action_generation_move_and_noop(tmp_path: Path, session_factory) -> None:
     run_service = RunService(session_factory)
     planner = PlanningService(session_factory)

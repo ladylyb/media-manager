@@ -131,14 +131,18 @@ class PlanningService:
         session.flush()
         return record
 
-    def _deterministic_original(self, session: Session, current_file: File) -> File | None:
+    def _deterministic_original_for_hash(self, session: Session, digest: str) -> File | None:
         stmt = (
             select(File)
-            .where(File.hash == current_file.hash, File.id != current_file.id)
+            .where(File.hash == digest)
             .order_by(File.created_at.asc(), File.id.asc())
             .limit(1)
         )
         return session.scalar(stmt)
+
+    def _source_matches_canonical(self, source: Path, target: str) -> bool:
+        source_posix = source.as_posix()
+        return source_posix == target or source_posix.endswith(f"/{target}")
 
     def _plan_single_path(self, session: Session, run: Run, candidate: Path) -> str:
         if not candidate.exists() or not candidate.is_file():
@@ -165,16 +169,20 @@ class PlanningService:
             digest=digest,
         )
 
-        original = self._deterministic_original(session, file_row)
-        if original is not None:
+        original = self._deterministic_original_for_hash(session, digest)
+        if original is not None and file_row.id != original.id:
             file_row.is_duplicate = True
             file_row.original_file_id = original.id
             target = resolve_duplicate_path(candidate, digest)
             action_type = PlannedActionType.MARK_DUPLICATE.value
         else:
+            file_row.is_duplicate = False
+            file_row.original_file_id = None
             target = resolve_canonical_path(candidate, mime_info.media_kind, date_info, digest)
             action_type = (
-                PlannedActionType.NOOP.value if str(candidate) == target else PlannedActionType.MOVE.value
+                PlannedActionType.NOOP.value
+                if self._source_matches_canonical(candidate, target)
+                else PlannedActionType.MOVE.value
             )
 
         plan = PlannedAction(
