@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from media_manager.app.core.date_extraction import extract_best_date
 from media_manager.app.core.errors import PlanningStateError
 from media_manager.app.core.hashing import sha256_file
+from media_manager.app.core.logging_config import get_logger
 from media_manager.app.core.mime import detect_mime
 from media_manager.app.core.path_resolver import resolve_canonical_path, resolve_duplicate_path
 from media_manager.app.core.state_machine import RunState, validate_transition
@@ -28,6 +29,8 @@ from media_manager.app.persistence.models import (
     RunStateDB,
 )
 
+logger = get_logger(__name__)
+
 
 @dataclass(frozen=True)
 class PlanningSummary:
@@ -39,6 +42,17 @@ class PlanningSummary:
     noop_actions: int
     duplicate_actions: int
 
+    def to_dict(self) -> dict[str, int | str]:
+        return {
+            "run_id": str(self.run_id),
+            "scanned_count": self.scanned_count,
+            "supported_count": self.supported_count,
+            "skipped_count": self.skipped_count,
+            "move_actions": self.move_actions,
+            "noop_actions": self.noop_actions,
+            "duplicate_actions": self.duplicate_actions,
+        }
+
 
 class PlanningService:
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
@@ -49,8 +63,20 @@ class PlanningService:
             with transactional_session(self._session_factory) as session:
                 run = self._lock_run(session, run_id)
                 self._validate_planning_state(run)
+                logger.info("Run started", extra={"run_id": str(run.id), "phase": "plan", "action_type": ""})
 
+                old_state = run.state.value
                 validate_transition(RunState(run.state.value), RunState.PLANNED)
+                logger.info(
+                    "Transitioning run state",
+                    extra={
+                        "run_id": str(run.id),
+                        "phase": "plan",
+                        "action_type": "",
+                        "from": old_state,
+                        "to": RunState.PLANNED.value,
+                    },
+                )
                 run.state = RunStateDB.PLANNED
                 run.version += 1
                 run.updated_at = func.now()
@@ -79,7 +105,7 @@ class PlanningService:
                     elif action == "SKIPPED_UNSUPPORTED_MIME":
                         skipped_count += 1
 
-                return PlanningSummary(
+                summary = PlanningSummary(
                     run_id=run.id,
                     scanned_count=scanned_count,
                     supported_count=supported_count,
@@ -88,7 +114,33 @@ class PlanningService:
                     noop_actions=noop_actions,
                     duplicate_actions=duplicate_actions,
                 )
+                logger.info(
+                    "Summary counts",
+                    extra={
+                        "run_id": str(run.id),
+                        "phase": "plan",
+                        "action_type": "",
+                        "scanned": summary.scanned_count,
+                        "supported": summary.supported_count,
+                        "skipped": summary.skipped_count,
+                        "moves": summary.move_actions,
+                        "duplicates": summary.duplicate_actions,
+                        "noop": summary.noop_actions,
+                        "errors": 0,
+                    },
+                )
+                logger.info(
+                    "Run completed",
+                    extra={
+                        "run_id": str(run.id),
+                        "phase": "plan",
+                        "action_type": "",
+                        "summary": summary.to_dict(),
+                    },
+                )
+                return summary
         except Exception as exc:
+            logger.exception("Plan failed", extra={"run_id": str(run_id), "phase": "plan", "action_type": ""})
             self._record_planning_failure(run_id, "PLANNING_FAILED", str(exc))
             raise
 

@@ -9,9 +9,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from media_manager.app.core.errors import ApplyStateError, RunNotFoundError
+from media_manager.app.core.logging_config import get_logger
 from media_manager.app.core.state_machine import RunState, validate_transition
 from media_manager.app.persistence.base import transactional_session
 from media_manager.app.persistence.models import FailureEvent, FailurePhase, PlannedAction, Run, RunStateDB
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -22,6 +25,16 @@ class ApplySummary:
     noop_count: int
     errors_count: int
     moves_count: int
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "applied_count": self.applied_count,
+            "skipped_count": self.skipped_count,
+            "duplicates_count": self.duplicates_count,
+            "noop_count": self.noop_count,
+            "errors_count": self.errors_count,
+            "moves_count": self.moves_count,
+        }
 
 
 class ApplyService:
@@ -35,8 +48,20 @@ class ApplyService:
             with transactional_session(self._session_factory) as session:
                 run = self._lock_run(session, run_id)
                 self._validate_apply_state(run)
+                logger.info("Run started", extra={"run_id": str(run.id), "phase": "apply", "action_type": ""})
 
+                old_state = run.state.value
                 validate_transition(RunState(run.state.value), RunState.APPLYING)
+                logger.info(
+                    "Transitioning run state",
+                    extra={
+                        "run_id": str(run.id),
+                        "phase": "apply",
+                        "action_type": "",
+                        "from": old_state,
+                        "to": RunState.APPLYING.value,
+                    },
+                )
                 run.state = RunStateDB.APPLYING
                 run.version += 1
                 run.updated_at = func.now()
@@ -72,7 +97,18 @@ class ApplyService:
                     else:
                         skipped_count += 1
 
+                old_state = run.state.value
                 validate_transition(RunState(run.state.value), RunState.COMPLETED)
+                logger.info(
+                    "Transitioning run state",
+                    extra={
+                        "run_id": str(run.id),
+                        "phase": "apply",
+                        "action_type": "",
+                        "from": old_state,
+                        "to": RunState.COMPLETED.value,
+                    },
+                )
                 run.state = RunStateDB.COMPLETED
                 run.version += 1
                 run.updated_at = func.now()
@@ -85,8 +121,32 @@ class ApplyService:
                     errors_count=0,
                     moves_count=moves_count,
                 )
+                logger.info(
+                    "Summary counts",
+                    extra={
+                        "run_id": str(run.id),
+                        "phase": "apply",
+                        "action_type": "",
+                        "applied": summary.applied_count,
+                        "skipped": summary.skipped_count,
+                        "moves": summary.moves_count,
+                        "duplicates": summary.duplicates_count,
+                        "noop": summary.noop_count,
+                        "errors": summary.errors_count,
+                    },
+                )
+                logger.info(
+                    "Run completed",
+                    extra={
+                        "run_id": str(run.id),
+                        "phase": "apply",
+                        "action_type": "",
+                        "summary": summary.to_dict(),
+                    },
+                )
                 return summary
         except Exception as exc:
+            logger.exception("Apply failed", extra={"run_id": str(run_id), "phase": "apply", "action_type": ""})
             self._record_apply_failure(run_id, str(exc))
             raise
 
@@ -123,6 +183,16 @@ class ApplyService:
             try:
                 if current == RunState.PLANNED:
                     validate_transition(current, RunState.APPLYING)
+                    logger.info(
+                        "Transitioning run state",
+                        extra={
+                            "run_id": str(run_id),
+                            "phase": "apply",
+                            "action_type": "",
+                            "from": current.value,
+                            "to": RunState.APPLYING.value,
+                        },
+                    )
                     run.state = RunStateDB.APPLYING
                     run.version += 1
                     run.updated_at = func.now()
@@ -130,6 +200,16 @@ class ApplyService:
 
                 if current == RunState.APPLYING:
                     validate_transition(current, RunState.FAILED)
+                    logger.info(
+                        "Transitioning run state",
+                        extra={
+                            "run_id": str(run_id),
+                            "phase": "apply",
+                            "action_type": "",
+                            "from": current.value,
+                            "to": RunState.FAILED.value,
+                        },
+                    )
                     run.state = RunStateDB.FAILED
                     run.version += 1
                     run.updated_at = func.now()
