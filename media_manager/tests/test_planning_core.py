@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from media_manager.app.core.date_extraction import extract_best_date
 from media_manager.app.core.mime import detect_mime
@@ -54,6 +57,28 @@ def test_date_extraction_fs_over_unknown(tmp_path: Path) -> None:
     assert result.source == "filesystem"
     assert result.year == "2021"
     assert result.month == "01"
+
+
+def test_date_extraction_filesystem_fallback_uses_path_stat_when_higher_sources_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    p = tmp_path / "no-date-name.bin"
+    p.write_bytes(b"abc")
+
+    # 2022-03-01T00:00:00Z
+    mocked_epoch = 1646092800
+    monkeypatch.setattr(Path, "stat", lambda self: SimpleNamespace(st_mtime=mocked_epoch))
+
+    result = extract_best_date(
+        path=p,
+        mime_type="application/octet-stream",
+        stat_meta={},
+        filename=p.name,
+    )
+
+    assert result.source == "filesystem"
+    assert result.year == "2022"
+    assert result.month == "03"
 
 
 def test_canonical_path_resolution_and_duplicates(tmp_path: Path) -> None:

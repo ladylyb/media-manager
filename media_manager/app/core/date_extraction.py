@@ -72,6 +72,17 @@ def _from_filename(filename: str) -> DateInfo | None:
 
 
 def _from_filesystem(path: Path, stat_meta: dict | None) -> DateInfo | None:
+    # Platform semantics note:
+    # - `st_mtime` is modification time across platforms and is the most portable
+    #   timestamp for deterministic fallback.
+    # - `st_ctime` differs by OS: inode metadata change time on Unix-like systems
+    #   and creation time on Windows. We only use it when explicitly supplied in
+    #   `stat_meta` and `mtime` is absent.
+    # - `st_birthtime` is not universally available, so it is intentionally not
+    #   part of this fallback path.
+    # This fallback is acceptable because filesystem timestamps are only used
+    # after metadata and filename extraction fail, and provide a stable,
+    # deterministic ordering source for unknown-date assets.
     epoch = None
     if stat_meta:
         epoch = stat_meta.get("mtime") or stat_meta.get("ctime")
