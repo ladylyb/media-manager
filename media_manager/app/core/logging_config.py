@@ -16,6 +16,10 @@ class _StructuredDefaultsFilter(logging.Filter):
             record.phase = "-"
         if not hasattr(record, "action_type"):
             record.action_type = "-"
+        if not hasattr(record, "filename"):
+            record.filename = "-"
+        if not hasattr(record, "action"):
+            record.action = "-"
         if not hasattr(record, "scanned"):
             record.scanned = "-"
         if not hasattr(record, "supported"):
@@ -49,6 +53,7 @@ def configure_logging() -> None:
         format=(
             "%(asctime)s %(levelname)s %(name)s "
             "run_id=%(run_id)s phase=%(phase)s action_type=%(action_type)s "
+            "filename=%(filename)s action=%(action)s "
             "scanned=%(scanned)s supported=%(supported)s skipped=%(skipped)s "
             "moves=%(moves)s duplicates=%(duplicates)s noop=%(noop)s "
             "applied=%(applied)s errors=%(errors)s %(message)s"
@@ -60,6 +65,7 @@ def configure_logging() -> None:
     formatter = logging.Formatter(
         "%(asctime)s %(levelname)s %(name)s "
         "run_id=%(run_id)s phase=%(phase)s action_type=%(action_type)s "
+        "filename=%(filename)s action=%(action)s "
         "scanned=%(scanned)s supported=%(supported)s skipped=%(skipped)s "
         "moves=%(moves)s duplicates=%(duplicates)s noop=%(noop)s "
         "applied=%(applied)s errors=%(errors)s %(message)s",
@@ -67,6 +73,8 @@ def configure_logging() -> None:
             "run_id": "-",
             "phase": "-",
             "action_type": "-",
+            "filename": "-",
+            "action": "-",
             "scanned": "-",
             "supported": "-",
             "skipped": "-",

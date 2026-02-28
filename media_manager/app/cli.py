@@ -29,8 +29,12 @@ def _collect_input_files(path: Path) -> list[Path]:
 def _render_plan_output(run_id: uuid.UUID, planned_actions: list[PlannedAction], summary) -> None:
     grouped: dict[str, list[PlannedAction]] = {"MOVE": [], "MARK_DUPLICATE": [], "NOOP": []}
     for action in planned_actions:
-        if action.action_type in grouped:
-            grouped[action.action_type].append(action)
+        if action.action_type in {"MOVE", "RENAME"}:
+            grouped["MOVE"].append(action)
+        elif action.action_type in {"MARK_DUPLICATE", "COLLISION_RESOLVED"}:
+            grouped["MARK_DUPLICATE"].append(action)
+        elif action.action_type in {"NOOP", "SKIP"}:
+            grouped["NOOP"].append(action)
 
     section_order = [("MOVE", "MOVE"), ("MARK_DUPLICATE", "DUPLICATE"), ("NOOP", "NOOP")]
     first_section = True
@@ -44,7 +48,7 @@ def _render_plan_output(run_id: uuid.UUID, planned_actions: list[PlannedAction],
         print(label)
         for action in entries:
             print(f"  {action.source_path}")
-            if action.action_type != "NOOP" and action.target_path:
+            if action.action_type not in {"NOOP", "SKIP"} and action.target_path:
                 print(f"    → {action.target_path}")
 
     print()
@@ -62,8 +66,12 @@ def _render_plan_output(run_id: uuid.UUID, planned_actions: list[PlannedAction],
 def _render_apply_output(run_id: uuid.UUID, planned_actions: list[PlannedAction], summary) -> None:
     grouped: dict[str, list[PlannedAction]] = {"MOVE": [], "MARK_DUPLICATE": [], "NOOP": []}
     for action in planned_actions:
-        if action.action_type in grouped:
-            grouped[action.action_type].append(action)
+        if action.action_type in {"MOVE", "RENAME"}:
+            grouped["MOVE"].append(action)
+        elif action.action_type in {"MARK_DUPLICATE", "COLLISION_RESOLVED"}:
+            grouped["MARK_DUPLICATE"].append(action)
+        elif action.action_type in {"NOOP", "SKIP"}:
+            grouped["NOOP"].append(action)
 
     section_order = [("MOVE", "MOVE"), ("MARK_DUPLICATE", "DUPLICATE"), ("NOOP", "NOOP")]
     first_section = True
@@ -77,7 +85,7 @@ def _render_apply_output(run_id: uuid.UUID, planned_actions: list[PlannedAction]
         print(label)
         for action in entries:
             print(f"  {action.source_path}")
-            if action.action_type != "NOOP" and action.target_path:
+            if action.action_type not in {"NOOP", "SKIP"} and action.target_path:
                 print(f"    → {action.target_path}")
 
     print()

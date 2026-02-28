@@ -131,10 +131,10 @@ def test_apply_logs_exception_on_simulated_failure(
     run_id = _create_planned_run(tmp_path, session_factory)
     service = ApplyService(session_factory)
 
-    def _raise(_action) -> None:
+    def _raise(_session, _run_id, _action) -> None:
         raise RuntimeError("simulated apply failure")
 
-    monkeypatch.setattr(service, "_simulate_execute", _raise)
+    monkeypatch.setattr(service, "_execute_action", _raise)
     with pytest.raises(RuntimeError, match="simulated apply failure"):
         service.apply_run(run_id)
 

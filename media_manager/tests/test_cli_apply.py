@@ -50,7 +50,7 @@ def _create_planned_run(tmp_path: Path, session_factory) -> tuple[uuid.UUID, Pat
     return run.id, root
 
 
-def test_cli_apply_happy_path_mixed_actions_and_no_fs_mutation(
+def test_cli_apply_happy_path_mixed_actions_and_renames_files(
     tmp_path: Path, test_database_url: str, session_factory, monkeypatch, capsys
 ) -> None:
     monkeypatch.setenv("DATABASE_URL", test_database_url)
@@ -61,19 +61,24 @@ def test_cli_apply_happy_path_mixed_actions_and_no_fs_mutation(
     after = _snapshot_files(root)
 
     assert exit_code == 0
-    assert before == after
+    assert before != after
 
     stdout = capsys.readouterr().out
     assert "MOVE" in stdout
     assert "DUPLICATE" in stdout
-    assert "NOOP" in stdout
+    assert "NOOP" not in stdout
     assert "Summary" in stdout
     assert "  Files applied: 3" in stdout
-    assert "  Moves: 1" in stdout
+    assert "  Moves: 2" in stdout
     assert "  Duplicates: 1" in stdout
-    assert "  No-op: 1" in stdout
+    assert "  No-op: 0" in stdout
     assert "  Skipped: 0" in stdout
     assert "  Errors: 0" in stdout
+
+    assert not (root / "inbox" / "IMG_20240111.jpg").exists()
+    assert not (root / "inbox" / "dup_copy.jpg").exists()
+    assert any(p.is_file() for p in (root / "Media" / "Photos").rglob("IMG_*.jpg"))
+    assert any(p.is_file() for p in (root / "Media" / "duplicates").rglob("IMG_*.jpg"))
 
     with session_factory() as session:
         run = session.scalar(select(Run).where(Run.id == run_id))
