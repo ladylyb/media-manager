@@ -20,7 +20,7 @@ class RunState(StrEnum):
 
 
 VALID_TRANSITIONS: dict[RunState, tuple[RunState, ...]] = {
-    RunState.CREATED: (RunState.PLANNED,),
+    RunState.CREATED: (RunState.PLANNED, RunState.FAILED),
     RunState.PLANNED: (RunState.APPLYING,),
     RunState.APPLYING: (RunState.COMPLETED, RunState.FAILED),
     RunState.FAILED: (RunState.APPLYING,),
