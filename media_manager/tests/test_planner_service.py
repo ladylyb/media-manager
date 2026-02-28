@@ -4,11 +4,19 @@ import uuid
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from media_manager.app.core.errors import PlanningStateError
-from media_manager.app.core.state_machine import RunState
-from media_manager.app.persistence.models import FailureEvent, File, PlannedAction, PlannedActionType, Run
+from media_manager.app.core.state_machine import RunState, validate_transition
+from media_manager.app.persistence.base import transactional_session
+from media_manager.app.persistence.models import (
+    FailureEvent,
+    File,
+    PlannedAction,
+    PlannedActionType,
+    Run,
+    RunStateDB,
+)
 from media_manager.app.persistence.planner import PlanningService
 from media_manager.app.persistence.runs import RunService
 
@@ -122,6 +130,39 @@ def test_unsupported_mime_is_skipped_without_persistence(tmp_path: Path, session
         actions = session.scalars(select(PlannedAction)).all()
         assert len(files) == 0
         assert len(actions) == 0
+
+
+def test_planned_actions_idempotent_on_reentry_same_transaction(
+    tmp_path: Path, session_factory
+) -> None:
+    run_service = RunService(session_factory)
+    planner = PlanningService(session_factory)
+    run = run_service.create_run()
+    candidate = _write_file(tmp_path / "inbox" / "IMG_20240111.jpg", b"x")
+
+    with transactional_session(session_factory) as session:
+        run_row = planner._lock_run(session, run.id)
+        planner._validate_planning_state(run_row)
+
+        validate_transition(RunState(run_row.state.value), RunState.PLANNED)
+        run_row.state = RunStateDB.PLANNED
+        run_row.version += 1
+        run_row.updated_at = func.now()
+
+        first_action = planner._plan_single_path(session, run_row, candidate)
+        second_action = planner._plan_single_path(session, run_row, candidate)
+        assert first_action == second_action
+
+        count_in_txn = session.scalar(
+            select(func.count()).select_from(PlannedAction).where(PlannedAction.run_id == run.id)
+        )
+        assert count_in_txn == 1
+
+    with session_factory() as session:
+        count_after_commit = session.scalar(
+            select(func.count()).select_from(PlannedAction).where(PlannedAction.run_id == run.id)
+        )
+        assert count_after_commit == 1
 
 
 def test_planning_transaction_rollback(tmp_path: Path, session_factory) -> None:

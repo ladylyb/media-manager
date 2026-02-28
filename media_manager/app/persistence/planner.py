@@ -144,6 +144,28 @@ class PlanningService:
         source_posix = source.as_posix()
         return source_posix == target or source_posix.endswith(f"/{target}")
 
+    def _get_existing_planned_action(
+        self,
+        session: Session,
+        *,
+        run_id: uuid.UUID,
+        file_id: uuid.UUID,
+        action_type: str,
+        source_path: str,
+        target_path: str | None,
+    ) -> PlannedAction | None:
+        stmt = select(PlannedAction).where(
+            PlannedAction.run_id == run_id,
+            PlannedAction.file_id == file_id,
+            PlannedAction.action_type == action_type,
+            PlannedAction.source_path == source_path,
+        )
+        if target_path is None:
+            stmt = stmt.where(PlannedAction.target_path.is_(None))
+        else:
+            stmt = stmt.where(PlannedAction.target_path == target_path)
+        return session.scalar(stmt.limit(1))
+
     def _plan_single_path(self, session: Session, run: Run, candidate: Path) -> str:
         if not candidate.exists() or not candidate.is_file():
             raise ValueError(f"Planning input path is not a file: {candidate}")
@@ -188,15 +210,25 @@ class PlanningService:
                 else PlannedActionType.MOVE.value
             )
 
-        plan = PlannedAction(
+        planned_target = target if action_type != PlannedActionType.NOOP.value else None
+        existing_plan = self._get_existing_planned_action(
+            session,
             run_id=run.id,
             file_id=file_row.id,
             action_type=action_type,
             source_path=str(candidate),
-            target_path=target if action_type != PlannedActionType.NOOP.value else None,
+            target_path=planned_target,
         )
-        session.add(plan)
-        session.flush()
+        if existing_plan is None:
+            plan = PlannedAction(
+                run_id=run.id,
+                file_id=file_row.id,
+                action_type=action_type,
+                source_path=str(candidate),
+                target_path=planned_target,
+            )
+            session.add(plan)
+            session.flush()
         return action_type
 
     def _record_planning_failure(self, run_id: uuid.UUID, code: str, message: str) -> None:
