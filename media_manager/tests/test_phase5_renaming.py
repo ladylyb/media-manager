@@ -10,6 +10,7 @@ from sqlalchemy import select
 import media_manager.app.persistence.apply as apply_module
 import media_manager.app.persistence.planner as planner_module
 import media_manager.app.core.filenames as filenames_module
+import media_manager.app.core.metadata_extractor as metadata_extractor_module
 from media_manager.app.core.filenames import generate_canonical_filename
 from media_manager.app.persistence.apply import ApplyService
 from media_manager.app.persistence.models import PlannedAction
@@ -48,7 +49,13 @@ def test_plan_contains_canonical_full_target_path(
     tmp_path: Path, session_factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixed_dt = datetime(2024, 1, 11, 10, 11, 12, tzinfo=UTC)
-    monkeypatch.setattr(planner_module, "extract_taken_datetime", lambda _path: fixed_dt)
+    monkeypatch.setattr(metadata_extractor_module, "extract_file_metadata", lambda _path, _hash: [
+        metadata_extractor_module.MetadataItem("OWNER", "LL"),
+        metadata_extractor_module.MetadataItem("CONTEXT", "General"),
+        metadata_extractor_module.MetadataItem("TAKEN_DT", fixed_dt.isoformat()),
+        metadata_extractor_module.MetadataItem("FS_CTIME", fixed_dt.isoformat()),
+        metadata_extractor_module.MetadataItem("FS_MTIME", fixed_dt.isoformat()),
+    ])
 
     source = _write_file(tmp_path / "dataset" / "inbox" / "photo_one.jpg", b"one")
     run = RunService(session_factory).create_run()
@@ -67,7 +74,13 @@ def test_collision_resolution_happens_in_plan(
     tmp_path: Path, session_factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixed_dt = datetime(2024, 1, 11, 10, 11, 12, tzinfo=UTC)
-    monkeypatch.setattr(planner_module, "extract_taken_datetime", lambda _path: fixed_dt)
+    monkeypatch.setattr(metadata_extractor_module, "extract_file_metadata", lambda _path, _hash: [
+        metadata_extractor_module.MetadataItem("OWNER", "LL"),
+        metadata_extractor_module.MetadataItem("CONTEXT", "General"),
+        metadata_extractor_module.MetadataItem("TAKEN_DT", fixed_dt.isoformat()),
+        metadata_extractor_module.MetadataItem("FS_CTIME", fixed_dt.isoformat()),
+        metadata_extractor_module.MetadataItem("FS_MTIME", fixed_dt.isoformat()),
+    ])
 
     first = _write_file(tmp_path / "dataset" / "inbox" / "a.jpg", b"first")
     second = _write_file(tmp_path / "dataset" / "inbox" / "b.jpg", b"second")
@@ -88,7 +101,13 @@ def test_replan_is_deterministic_for_targets(
     tmp_path: Path, session_factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixed_dt = datetime(2024, 1, 11, 10, 11, 12, tzinfo=UTC)
-    monkeypatch.setattr(planner_module, "extract_taken_datetime", lambda _path: fixed_dt)
+    monkeypatch.setattr(metadata_extractor_module, "extract_file_metadata", lambda _path, _hash: [
+        metadata_extractor_module.MetadataItem("OWNER", "LL"),
+        metadata_extractor_module.MetadataItem("CONTEXT", "General"),
+        metadata_extractor_module.MetadataItem("TAKEN_DT", fixed_dt.isoformat()),
+        metadata_extractor_module.MetadataItem("FS_CTIME", fixed_dt.isoformat()),
+        metadata_extractor_module.MetadataItem("FS_MTIME", fixed_dt.isoformat()),
+    ])
 
     first = _write_file(tmp_path / "dataset" / "inbox" / "a.jpg", b"first")
     second = _write_file(tmp_path / "dataset" / "inbox" / "b.jpg", b"second")
@@ -120,7 +139,13 @@ def test_apply_does_not_call_generate_canonical_filename(
     tmp_path: Path, session_factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixed_dt = datetime(2024, 1, 11, 10, 11, 12, tzinfo=UTC)
-    monkeypatch.setattr(planner_module, "extract_taken_datetime", lambda _path: fixed_dt)
+    monkeypatch.setattr(metadata_extractor_module, "extract_file_metadata", lambda _path, _hash: [
+        metadata_extractor_module.MetadataItem("OWNER", "LL"),
+        metadata_extractor_module.MetadataItem("CONTEXT", "General"),
+        metadata_extractor_module.MetadataItem("TAKEN_DT", fixed_dt.isoformat()),
+        metadata_extractor_module.MetadataItem("FS_CTIME", fixed_dt.isoformat()),
+        metadata_extractor_module.MetadataItem("FS_MTIME", fixed_dt.isoformat()),
+    ])
 
     source = _write_file(tmp_path / "dataset" / "inbox" / "photo_one.jpg", b"one")
     run = RunService(session_factory).create_run()
@@ -143,7 +168,13 @@ def test_apply_executes_only_planned_paths(
     tmp_path: Path, session_factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixed_dt = datetime(2024, 1, 11, 10, 11, 12, tzinfo=UTC)
-    monkeypatch.setattr(planner_module, "extract_taken_datetime", lambda _path: fixed_dt)
+    monkeypatch.setattr(metadata_extractor_module, "extract_file_metadata", lambda _path, _hash: [
+        metadata_extractor_module.MetadataItem("OWNER", "LL"),
+        metadata_extractor_module.MetadataItem("CONTEXT", "General"),
+        metadata_extractor_module.MetadataItem("TAKEN_DT", fixed_dt.isoformat()),
+        metadata_extractor_module.MetadataItem("FS_CTIME", fixed_dt.isoformat()),
+        metadata_extractor_module.MetadataItem("FS_MTIME", fixed_dt.isoformat()),
+    ])
 
     source = _write_file(tmp_path / "dataset" / "inbox" / "photo_one.jpg", b"one")
     run = RunService(session_factory).create_run()
@@ -170,7 +201,13 @@ def test_apply_logging_reflects_planned_action_types(
 
     monkeypatch.setattr(apply_module.logger, "info", _capture)
     fixed_dt = datetime(2024, 1, 11, 10, 11, 12, tzinfo=UTC)
-    monkeypatch.setattr(planner_module, "extract_taken_datetime", lambda _path: fixed_dt)
+    monkeypatch.setattr(metadata_extractor_module, "extract_file_metadata", lambda _path, _hash: [
+        metadata_extractor_module.MetadataItem("OWNER", "LL"),
+        metadata_extractor_module.MetadataItem("CONTEXT", "General"),
+        metadata_extractor_module.MetadataItem("TAKEN_DT", fixed_dt.isoformat()),
+        metadata_extractor_module.MetadataItem("FS_CTIME", fixed_dt.isoformat()),
+        metadata_extractor_module.MetadataItem("FS_MTIME", fixed_dt.isoformat()),
+    ])
 
     first = _write_file(tmp_path / "dataset" / "inbox" / "a.jpg", b"first")
     second = _write_file(tmp_path / "dataset" / "inbox" / "b.jpg", b"second")

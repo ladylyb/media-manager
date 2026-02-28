@@ -126,6 +126,11 @@ class ContentObject(Base):
         cascade="save-update, merge",
         passive_deletes=True,
     )
+    metadata_rows: Mapped[list[MediaMetadata]] = relationship(
+        back_populates="content_object",
+        cascade="save-update, merge",
+        passive_deletes=True,
+    )
 
 
 class File(Base):
@@ -195,3 +200,48 @@ class PlannedAction(Base):
 Index("idx_planned_actions_run_id", PlannedAction.run_id)
 Index("idx_planned_actions_file_id", PlannedAction.file_id)
 Index("idx_planned_actions_action_type", PlannedAction.action_type)
+
+
+class MetadataCode(Base):
+    __tablename__ = "metadata_codes"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code_type: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+    metadata_rows: Mapped[list[MediaMetadata]] = relationship(
+        back_populates="code",
+        cascade="save-update, merge",
+        passive_deletes=True,
+    )
+
+
+class MediaMetadata(Base):
+    __tablename__ = "media_metadata"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    file_hash: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("content_objects.hash", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    code_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("metadata_codes.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    decode_value: Mapped[str] = mapped_column(Text, nullable=False)
+    extracted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+    content_object: Mapped[ContentObject] = relationship(back_populates="metadata_rows")
+    code: Mapped[MetadataCode] = relationship(back_populates="metadata_rows")
+
+
+Index("idx_media_metadata_file_hash", MediaMetadata.file_hash)
+Index("idx_media_metadata_code_id", MediaMetadata.code_id)
+Index("uq_media_metadata_hash_code", MediaMetadata.file_hash, MediaMetadata.code_id, unique=True)

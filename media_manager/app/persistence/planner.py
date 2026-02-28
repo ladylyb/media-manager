@@ -6,6 +6,7 @@ import os
 import re
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import func, select
@@ -14,12 +15,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from media_manager.app.core.errors import PlanningStateError
 from media_manager.app.core.filenames import (
-    extract_taken_datetime,
     generate_canonical_filename,
     infer_media_type_from_extension,
 )
 from media_manager.app.core.hashing import sha256_file
 from media_manager.app.core.logging_config import get_logger
+from media_manager.app.core.metadata_extractor import ExtractResult, pre_extract_for_paths
 from media_manager.app.core.mime import detect_mime
 from media_manager.app.core.path_resolver import resolve_duplicate_path
 from media_manager.app.core.state_machine import RunState, validate_transition
@@ -29,6 +30,8 @@ from media_manager.app.persistence.models import (
     FailureEvent,
     FailurePhase,
     File,
+    MediaMetadata,
+    MetadataCode,
     PlannedAction,
     PlannedActionType,
     Run,
@@ -94,10 +97,24 @@ class PlanningService:
                 noop_actions = 0
                 duplicate_actions = 0
                 reserved_paths: set[str] = set()
-                base_root = self._determine_base_root(input_paths)
+                sorted_candidates = sorted(input_paths, key=lambda p: p.resolve(strict=False).as_posix())
+                base_root = self._determine_base_root(sorted_candidates)
+                extract_results = pre_extract_for_paths(
+                    session,
+                    sorted_candidates,
+                    run_id=str(run.id),
+                )
 
-                for candidate in sorted(input_paths, key=lambda p: p.resolve(strict=False).as_posix()):
-                    action = self._plan_single_path(session, run, candidate, base_root, reserved_paths)
+                for candidate in sorted_candidates:
+                    result = extract_results.get(str(candidate.resolve(strict=False)))
+                    action = self._plan_single_path(
+                        session,
+                        run,
+                        candidate,
+                        base_root,
+                        reserved_paths,
+                        result,
+                    )
                     if action == PlannedActionType.RENAME.value:
                         scanned_count += 1
                         supported_count += 1
@@ -110,7 +127,7 @@ class PlanningService:
                         scanned_count += 1
                         supported_count += 1
                         duplicate_actions += 1
-                    elif action == "SKIPPED_UNSUPPORTED_MIME":
+                    elif action in {"SKIPPED_UNSUPPORTED_MIME", "SKIPPED_MISSING_METADATA"}:
                         skipped_count += 1
 
                 summary = PlanningSummary(
@@ -285,6 +302,15 @@ class PlanningService:
                 return candidate, True
             idx += 1
 
+    def _load_metadata_by_hash(self, session: Session, file_hash: str) -> dict[str, str]:
+        stmt = (
+            select(MetadataCode.code_type, MediaMetadata.decode_value)
+            .join(MediaMetadata, MediaMetadata.code_id == MetadataCode.id)
+            .where(MediaMetadata.file_hash == file_hash)
+        )
+        rows = session.execute(stmt).all()
+        return {code_type: decode_value for code_type, decode_value in rows}
+
     def _get_existing_planned_action(
         self,
         session: Session,
@@ -333,6 +359,7 @@ class PlanningService:
         candidate: Path,
         base_root: Path,
         reserved_paths: set[str],
+        extract_result: ExtractResult | None,
     ) -> str:
         if not candidate.exists() or not candidate.is_file():
             raise ValueError(f"Planning input path is not a file: {candidate}")
@@ -345,10 +372,9 @@ class PlanningService:
         if media_type is None:
             return "SKIPPED_UNSUPPORTED_MIME"
 
-        digest = sha256_file(candidate)
+        digest = extract_result.file_hash if extract_result is not None else sha256_file(candidate)
         stat = candidate.stat()
         size_bytes = int(stat.st_size)
-        taken_datetime = extract_taken_datetime(candidate)
 
         self._upsert_content_object(session, digest, size_bytes)
         file_row = self._upsert_file(
@@ -380,12 +406,30 @@ class PlanningService:
                 reserved_paths.add(str(Path(existing_for_file.target_path).resolve(strict=False)))
             return existing_for_file.action_type
 
+        metadata_map = self._load_metadata_by_hash(session, digest)
+        owner = metadata_map.get("OWNER")
+        context = metadata_map.get("CONTEXT")
+        taken_dt_raw = metadata_map.get("TAKEN_DT")
+        if not owner or not context or not taken_dt_raw:
+            logger.info(
+                "Metadata skipped",
+                extra={
+                    "run_id": str(run.id),
+                    "phase": "plan",
+                    "file_hash": digest,
+                    "action": "SKIPPED",
+                    "codes_extracted": ",".join(sorted(metadata_map.keys())),
+                },
+            )
+            return "SKIPPED_MISSING_METADATA"
+        taken_datetime = datetime.fromisoformat(taken_dt_raw)
+
         canonical_filename = generate_canonical_filename(
             media_type=media_type,
             taken_datetime=taken_datetime,
             extension=candidate.suffix,
-            owner="LL",
-            context="General",
+            owner=owner,
+            context=context,
         )
         destination_dir = self._resolve_destination_dir(
             base_root=base_root,

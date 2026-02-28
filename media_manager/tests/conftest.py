@@ -31,7 +31,15 @@ def db_engine(test_database_url: str) -> Iterator[Engine]:
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", test_database_url)
 
-    command.upgrade(cfg, "head")
+    original_database_url = os.getenv("DATABASE_URL")
+    os.environ["DATABASE_URL"] = test_database_url
+    try:
+        command.upgrade(cfg, "head")
+    finally:
+        if original_database_url is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = original_database_url
     engine = create_engine(test_database_url, future=True)
     try:
         yield engine
@@ -44,7 +52,7 @@ def clean_tables(db_engine: Engine) -> None:
     with db_engine.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE TABLE planned_actions, failure_events, files, content_objects, runs "
+                "TRUNCATE TABLE media_metadata, metadata_codes, planned_actions, failure_events, files, content_objects, runs "
                 "RESTART IDENTITY CASCADE"
             )
         )
