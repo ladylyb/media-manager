@@ -16,8 +16,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from media_manager.app.core.config import load_environment
+
 
 def get_database_url() -> str:
+    load_environment()
     url = os.getenv("DATABASE_URL")
     if not url:
         raise RuntimeError("DATABASE_URL must be set for PostgreSQL execution.")

@@ -10,12 +10,14 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
+from media_manager.app.core.config import load_environment
 from media_manager.app.persistence.base import create_session_factory
 from media_manager.app.persistence.runs import RunService
 
 
 @pytest.fixture(scope="session")
 def test_database_url() -> str:
+    load_environment()
     url = os.getenv("TEST_DATABASE_URL")
     if not url:
         raise RuntimeError("TEST_DATABASE_URL must be set to a PostgreSQL database URL.")

@@ -73,7 +73,7 @@ def test_cli_plan_mixed_actions_and_no_fs_mutation(
     assert "DUPLICATE" in stdout
     assert "NOOP" in stdout
     assert "Summary" in stdout
-    assert "  Files scanned: 4" in stdout
+    assert "  Files scanned: 3" in stdout
     assert "  Moves: 1" in stdout
     assert "  Duplicates: 1" in stdout
     assert "  No-op: 1" in stdout

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from media_manager.app.core.date_extraction import DateInfo
+
+
+def _to_posix_path(*parts: str) -> str:
+    return str(PurePosixPath(*parts))
 
 
 def resolve_canonical_path(path: Path, media_kind: str, date_info: DateInfo, hash_value: str) -> str:
@@ -16,16 +20,16 @@ def resolve_canonical_path(path: Path, media_kind: str, date_info: DateInfo, has
 
     if date_info.source == "unknown" or not date_info.year or not date_info.month:
         if kind == "video":
-            return str(Path("Media") / "Videos" / "unknown" / filename)
-        return str(Path("Media") / "Photos" / "unknown" / filename)
+            return _to_posix_path("Media", "Videos", "unknown", filename)
+        return _to_posix_path("Media", "Photos", "unknown", filename)
 
     if kind == "video":
-        return str(Path("Media") / "Videos" / date_info.year / date_info.month / filename)
+        return _to_posix_path("Media", "Videos", date_info.year, date_info.month, filename)
 
-    return str(Path("Media") / "Photos" / date_info.year / date_info.month / filename)
+    return _to_posix_path("Media", "Photos", date_info.year, date_info.month, filename)
 
 
 def resolve_duplicate_path(path: Path, hash_value: str, prefix_len: int = 8) -> str:
     filename = path.name
     prefix = hash_value[:prefix_len]
-    return str(Path("Media") / "duplicates" / prefix / filename)
+    return _to_posix_path("Media", "duplicates", prefix, filename)

@@ -63,15 +63,17 @@ class PlanningService:
                 duplicate_actions = 0
 
                 for candidate in sorted(input_paths, key=lambda p: str(p)):
-                    scanned_count += 1
                     action = self._plan_single_path(session, run, candidate)
                     if action == PlannedActionType.MOVE.value:
+                        scanned_count += 1
                         supported_count += 1
                         move_actions += 1
                     elif action == PlannedActionType.NOOP.value:
+                        scanned_count += 1
                         supported_count += 1
                         noop_actions += 1
                     elif action == PlannedActionType.MARK_DUPLICATE.value:
+                        scanned_count += 1
                         supported_count += 1
                         duplicate_actions += 1
                     elif action == "SKIPPED_UNSUPPORTED_MIME":

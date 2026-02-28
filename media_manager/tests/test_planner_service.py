@@ -112,6 +112,31 @@ def test_planned_action_generation_move_and_noop(tmp_path: Path, session_factory
         assert any(a.action_type == PlannedActionType.MOVE.value for a in actions)
 
 
+def test_mixed_summary_counts_exclude_unsupported_from_scanned(tmp_path: Path, session_factory) -> None:
+    run_service = RunService(session_factory)
+    planner = PlanningService(session_factory)
+
+    run = run_service.create_run()
+    noop_path = _write_file(tmp_path / "Media" / "Photos" / "2024" / "01" / "IMG_20240110.jpg", b"noop")
+    move_path = _write_file(tmp_path / "inbox" / "IMG_20240111.jpg", b"dup-content")
+    dup_path = _write_file(tmp_path / "inbox" / "dup_copy.jpg", b"dup-content")
+    _write_file(tmp_path / "inbox" / "unsupported.customext", b"unsupported")
+
+    summary = planner.plan_run(run.id, [noop_path, move_path, dup_path, tmp_path / "inbox" / "unsupported.customext"])
+    assert summary.scanned_count == 3
+    assert summary.supported_count == 3
+    assert summary.skipped_count == 1
+    assert summary.move_actions == 1
+    assert summary.duplicate_actions == 1
+    assert summary.noop_actions == 1
+
+    with session_factory() as session:
+        actions = session.scalars(select(PlannedAction).where(PlannedAction.run_id == run.id)).all()
+        files = session.scalars(select(File)).all()
+        assert len(actions) == 3
+        assert len(files) == 3
+
+
 def test_unsupported_mime_is_skipped_without_persistence(tmp_path: Path, session_factory) -> None:
     run_service = RunService(session_factory)
     planner = PlanningService(session_factory)
@@ -120,7 +145,7 @@ def test_unsupported_mime_is_skipped_without_persistence(tmp_path: Path, session
     unknown = _write_file(tmp_path / "mystery.xyzabc", b"blob")
 
     summary = planner.plan_run(run.id, [unknown])
-    assert summary.scanned_count == 1
+    assert summary.scanned_count == 0
     assert summary.supported_count == 0
     assert summary.skipped_count == 1
     assert summary.move_actions == 0
