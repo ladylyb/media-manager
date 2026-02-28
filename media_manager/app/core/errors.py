@@ -30,3 +30,11 @@ class TransitionConflictError(MediaManagerError):
 
 class AppendOnlyViolationError(MediaManagerError):
     """Raised when an append-only model is mutated unexpectedly."""
+
+
+class PlanningStateError(MediaManagerError):
+    """Raised when planning is attempted from an invalid run state."""
+
+
+class ApplyStateError(MediaManagerError):
+    """Raised when apply is attempted from an invalid run state."""

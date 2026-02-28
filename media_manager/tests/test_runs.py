@@ -72,3 +72,9 @@ def test_resume_failed_to_applying(run_service: RunService) -> None:
 
     resumed = run_service.transition_run(run.id, RunState.APPLYING)
     assert resumed.state == RunState.APPLYING
+
+
+def test_created_to_failed_transition_allowed(run_service: RunService) -> None:
+    run = run_service.create_run()
+    failed = run_service.transition_run(run.id, RunState.FAILED)
+    assert failed.state == RunState.FAILED
