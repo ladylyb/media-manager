@@ -32,7 +32,9 @@ from media_manager.app.persistence.models import (
 @dataclass(frozen=True)
 class PlanningSummary:
     run_id: uuid.UUID
-    scanned: int
+    scanned_count: int
+    supported_count: int
+    skipped_count: int
     move_actions: int
     noop_actions: int
     duplicate_actions: int
@@ -53,24 +55,33 @@ class PlanningService:
                 run.version += 1
                 run.updated_at = func.now()
 
-                scanned = 0
+                scanned_count = 0
+                supported_count = 0
+                skipped_count = 0
                 move_actions = 0
                 noop_actions = 0
                 duplicate_actions = 0
 
                 for candidate in sorted(input_paths, key=lambda p: str(p)):
-                    scanned += 1
+                    scanned_count += 1
                     action = self._plan_single_path(session, run, candidate)
                     if action == PlannedActionType.MOVE.value:
+                        supported_count += 1
                         move_actions += 1
                     elif action == PlannedActionType.NOOP.value:
+                        supported_count += 1
                         noop_actions += 1
                     elif action == PlannedActionType.MARK_DUPLICATE.value:
+                        supported_count += 1
                         duplicate_actions += 1
+                    elif action == "SKIPPED_UNSUPPORTED_MIME":
+                        skipped_count += 1
 
                 return PlanningSummary(
                     run_id=run.id,
-                    scanned=scanned,
+                    scanned_count=scanned_count,
+                    supported_count=supported_count,
+                    skipped_count=skipped_count,
                     move_actions=move_actions,
                     noop_actions=noop_actions,
                     duplicate_actions=duplicate_actions,

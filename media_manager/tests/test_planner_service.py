@@ -120,7 +120,9 @@ def test_unsupported_mime_is_skipped_without_persistence(tmp_path: Path, session
     unknown = _write_file(tmp_path / "mystery.xyzabc", b"blob")
 
     summary = planner.plan_run(run.id, [unknown])
-    assert summary.scanned == 1
+    assert summary.scanned_count == 1
+    assert summary.supported_count == 0
+    assert summary.skipped_count == 1
     assert summary.move_actions == 0
     assert summary.noop_actions == 0
     assert summary.duplicate_actions == 0
