@@ -148,11 +148,14 @@ class PlanningService:
         if not candidate.exists() or not candidate.is_file():
             raise ValueError(f"Planning input path is not a file: {candidate}")
 
+        mime_info = detect_mime(candidate)
+        if not mime_info.is_supported:
+            return "SKIPPED_UNSUPPORTED_MIME"
+
         digest = sha256_file(candidate)
         stat = candidate.stat()
         size_bytes = int(stat.st_size)
 
-        mime_info = detect_mime(candidate)
         date_info = extract_best_date(
             path=candidate,
             mime_type=mime_info.mime_type,

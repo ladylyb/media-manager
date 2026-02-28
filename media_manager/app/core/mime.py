@@ -1,4 +1,12 @@
-"""MIME detection and deterministic media kind classification."""
+"""MIME detection and deterministic media kind classification.
+
+Deterministic classification rules:
+- If `mimetypes.guess_type()` returns `None`, MIME is normalized to
+  `application/octet-stream`.
+- Only `image/*` and `video/*` MIME values are considered supported media.
+- Unsupported MIME values (including `application/octet-stream`) are marked
+  unsupported so the planner can deterministically skip them.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +19,7 @@ from pathlib import Path
 class MimeInfo:
     mime_type: str
     media_kind: str
+    is_supported: bool
 
 
 def detect_mime(path: Path) -> MimeInfo:
@@ -18,17 +27,8 @@ def detect_mime(path: Path) -> MimeInfo:
     mime = guessed or "application/octet-stream"
 
     if mime.startswith("image/"):
-        kind = "photo"
+        return MimeInfo(mime_type=mime, media_kind="photo", is_supported=True)
     elif mime.startswith("video/"):
-        kind = "video"
-    else:
-        suffix = path.suffix.lower()
-        if suffix in {".jpg", ".jpeg", ".png", ".heic", ".webp", ".gif", ".bmp", ".tif", ".tiff"}:
-            kind = "photo"
-        elif suffix in {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".mpeg", ".mpg"}:
-            kind = "video"
-        else:
-            # Default to photo bucket for unknowns to keep deterministic canonical pathing.
-            kind = "photo"
+        return MimeInfo(mime_type=mime, media_kind="video", is_supported=True)
 
-    return MimeInfo(mime_type=mime, media_kind=kind)
+    return MimeInfo(mime_type=mime, media_kind="unsupported", is_supported=False)

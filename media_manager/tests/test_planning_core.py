@@ -109,3 +109,13 @@ def test_mime_detection_classifies_photo_video(tmp_path: Path) -> None:
 
     assert detect_mime(p1).media_kind == "photo"
     assert detect_mime(p2).media_kind == "video"
+
+
+def test_mime_detection_marks_unsupported_types(tmp_path: Path) -> None:
+    p = tmp_path / "unknown.customext"
+    p.write_bytes(b"x")
+
+    info = detect_mime(p)
+    assert info.mime_type == "application/octet-stream"
+    assert info.media_kind == "unsupported"
+    assert info.is_supported is False

@@ -104,6 +104,26 @@ def test_planned_action_generation_move_and_noop(tmp_path: Path, session_factory
         assert any(a.action_type == PlannedActionType.MOVE.value for a in actions)
 
 
+def test_unsupported_mime_is_skipped_without_persistence(tmp_path: Path, session_factory) -> None:
+    run_service = RunService(session_factory)
+    planner = PlanningService(session_factory)
+
+    run = run_service.create_run()
+    unknown = _write_file(tmp_path / "mystery.xyzabc", b"blob")
+
+    summary = planner.plan_run(run.id, [unknown])
+    assert summary.scanned == 1
+    assert summary.move_actions == 0
+    assert summary.noop_actions == 0
+    assert summary.duplicate_actions == 0
+
+    with session_factory() as session:
+        files = session.scalars(select(File)).all()
+        actions = session.scalars(select(PlannedAction)).all()
+        assert len(files) == 0
+        assert len(actions) == 0
+
+
 def test_planning_transaction_rollback(tmp_path: Path, session_factory) -> None:
     run_service = RunService(session_factory)
     planner = PlanningService(session_factory)
