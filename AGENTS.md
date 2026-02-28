@@ -1,5 +1,16 @@
 # AGENTS.md
 
+This file is the single source of truth for agent operating instructions in this repository.
+
+## Scoped Instructions
+
+- `documentation/LOCAL_INSTRUCTIONS.md`
+  - Scope: `documentation/` folder only.
+  - Purpose: documentation-specific handling notes.
+  - Precedence: this root `AGENTS.md` remains authoritative if any conflict exists.
+
+---
+
 This repository is developed using agent-driven workflows.
 
 Agents are expected to read this file before proposing or applying changes.
