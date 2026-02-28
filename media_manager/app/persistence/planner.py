@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,12 +12,16 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
-from media_manager.app.core.date_extraction import extract_best_date
 from media_manager.app.core.errors import PlanningStateError
+from media_manager.app.core.filenames import (
+    extract_taken_datetime,
+    generate_canonical_filename,
+    infer_media_type_from_extension,
+)
 from media_manager.app.core.hashing import sha256_file
 from media_manager.app.core.logging_config import get_logger
 from media_manager.app.core.mime import detect_mime
-from media_manager.app.core.path_resolver import resolve_canonical_path, resolve_duplicate_path
+from media_manager.app.core.path_resolver import resolve_duplicate_path
 from media_manager.app.core.state_machine import RunState, validate_transition
 from media_manager.app.persistence.base import transactional_session
 from media_manager.app.persistence.models import (
@@ -87,18 +93,20 @@ class PlanningService:
                 move_actions = 0
                 noop_actions = 0
                 duplicate_actions = 0
+                reserved_paths: set[str] = set()
+                base_root = self._determine_base_root(input_paths)
 
-                for candidate in sorted(input_paths, key=lambda p: str(p)):
-                    action = self._plan_single_path(session, run, candidate)
-                    if action == PlannedActionType.MOVE.value:
+                for candidate in sorted(input_paths, key=lambda p: p.resolve(strict=False).as_posix()):
+                    action = self._plan_single_path(session, run, candidate, base_root, reserved_paths)
+                    if action == PlannedActionType.RENAME.value:
                         scanned_count += 1
                         supported_count += 1
                         move_actions += 1
-                    elif action == PlannedActionType.NOOP.value:
+                    elif action == PlannedActionType.SKIP.value:
                         scanned_count += 1
                         supported_count += 1
                         noop_actions += 1
-                    elif action == PlannedActionType.MARK_DUPLICATE.value:
+                    elif action == PlannedActionType.COLLISION_RESOLVED.value:
                         scanned_count += 1
                         supported_count += 1
                         duplicate_actions += 1
@@ -205,9 +213,77 @@ class PlanningService:
         )
         return session.scalar(stmt)
 
-    def _source_matches_canonical(self, source: Path, target: str) -> bool:
-        source_posix = source.as_posix()
-        return source_posix == target or source_posix.endswith(f"/{target}")
+    def _determine_base_root(self, input_paths: list[Path]) -> Path:
+        if not input_paths:
+            return Path.cwd()
+        roots = [str(self._infer_root_from_source(path.resolve(strict=False))) for path in input_paths]
+        return Path(os.path.commonpath(roots))
+
+    def _infer_root_from_source(self, source: Path) -> Path:
+        lower_parts = [part.lower() for part in source.parts]
+        for marker in ("media", "inbox"):
+            if marker in lower_parts:
+                idx = lower_parts.index(marker)
+                if idx > 0:
+                    return Path(*source.parts[:idx])
+        return source.parent
+
+    def _resolve_destination_dir(
+        self,
+        *,
+        base_root: Path,
+        media_type: str,
+        taken_datetime,
+        is_duplicate: bool,
+        source: Path,
+        digest: str,
+    ) -> Path:
+        if is_duplicate:
+            duplicate_rel = Path(resolve_duplicate_path(source, digest)).parent
+            return base_root / duplicate_rel
+
+        year = taken_datetime.strftime("%Y")
+        month = taken_datetime.strftime("%m")
+        if media_type == "VID":
+            return base_root / "Media" / "Videos" / year / month
+        return base_root / "Media" / "Photos" / year / month
+
+    def _is_canonical_variant(self, filename: str, canonical_filename: str) -> bool:
+        if filename == canonical_filename:
+            return True
+        stem = Path(canonical_filename).stem
+        suffix = Path(canonical_filename).suffix
+        pattern = re.compile(rf"^{re.escape(stem)}_\d+{re.escape(suffix)}$")
+        return bool(pattern.fullmatch(filename))
+
+    def _resolve_planning_collision(
+        self,
+        source: Path,
+        destination: Path,
+        reserved_paths: set[str],
+    ) -> tuple[Path, bool]:
+        destination_key = str(destination.resolve(strict=False))
+        if source.resolve(strict=False) == destination.resolve(strict=False):
+            reserved_paths.add(destination_key)
+            return destination, False
+
+        if destination_key not in reserved_paths and not destination.exists():
+            reserved_paths.add(destination_key)
+            return destination, False
+
+        stem = destination.stem
+        suffix = destination.suffix
+        idx = 1
+        while True:
+            candidate = destination.with_name(f"{stem}_{idx}{suffix}")
+            candidate_key = str(candidate.resolve(strict=False))
+            if source.resolve(strict=False) == candidate.resolve(strict=False):
+                reserved_paths.add(candidate_key)
+                return candidate, False
+            if candidate_key not in reserved_paths and not candidate.exists():
+                reserved_paths.add(candidate_key)
+                return candidate, True
+            idx += 1
 
     def _get_existing_planned_action(
         self,
@@ -231,29 +307,53 @@ class PlanningService:
             stmt = stmt.where(PlannedAction.target_path == target_path)
         return session.scalar(stmt.limit(1))
 
-    def _plan_single_path(self, session: Session, run: Run, candidate: Path) -> str:
+    def _get_existing_plan_for_file(
+        self,
+        session: Session,
+        *,
+        run_id: uuid.UUID,
+        file_id: uuid.UUID,
+        source_path: str,
+    ) -> PlannedAction | None:
+        stmt = (
+            select(PlannedAction)
+            .where(
+                PlannedAction.run_id == run_id,
+                PlannedAction.file_id == file_id,
+                PlannedAction.source_path == source_path,
+            )
+            .limit(1)
+        )
+        return session.scalar(stmt)
+
+    def _plan_single_path(
+        self,
+        session: Session,
+        run: Run,
+        candidate: Path,
+        base_root: Path,
+        reserved_paths: set[str],
+    ) -> str:
         if not candidate.exists() or not candidate.is_file():
             raise ValueError(f"Planning input path is not a file: {candidate}")
+        source_path = str(candidate.resolve(strict=False))
 
         mime_info = detect_mime(candidate)
         if not mime_info.is_supported:
+            return "SKIPPED_UNSUPPORTED_MIME"
+        media_type = infer_media_type_from_extension(candidate)
+        if media_type is None:
             return "SKIPPED_UNSUPPORTED_MIME"
 
         digest = sha256_file(candidate)
         stat = candidate.stat()
         size_bytes = int(stat.st_size)
-
-        date_info = extract_best_date(
-            path=candidate,
-            mime_type=mime_info.mime_type,
-            stat_meta={"mtime": stat.st_mtime, "ctime": stat.st_ctime},
-            filename=candidate.name,
-        )
+        taken_datetime = extract_taken_datetime(candidate)
 
         self._upsert_content_object(session, digest, size_bytes)
         file_row = self._upsert_file(
             session,
-            source_path=str(candidate),
+            source_path=source_path,
             mime_type=mime_info.mime_type,
             size_bytes=size_bytes,
             digest=digest,
@@ -263,34 +363,75 @@ class PlanningService:
         if original is not None and file_row.id != original.id:
             file_row.is_duplicate = True
             file_row.original_file_id = original.id
-            target = resolve_duplicate_path(candidate, digest)
-            action_type = PlannedActionType.MARK_DUPLICATE.value
+            is_duplicate = True
         else:
             file_row.is_duplicate = False
             file_row.original_file_id = None
-            target = resolve_canonical_path(candidate, mime_info.media_kind, date_info, digest)
-            action_type = (
-                PlannedActionType.NOOP.value
-                if self._source_matches_canonical(candidate, target)
-                else PlannedActionType.MOVE.value
-            )
+            is_duplicate = False
 
-        planned_target = target if action_type != PlannedActionType.NOOP.value else None
+        existing_for_file = self._get_existing_plan_for_file(
+            session,
+            run_id=run.id,
+            file_id=file_row.id,
+            source_path=source_path,
+        )
+        if existing_for_file is not None:
+            if existing_for_file.target_path:
+                reserved_paths.add(str(Path(existing_for_file.target_path).resolve(strict=False)))
+            return existing_for_file.action_type
+
+        canonical_filename = generate_canonical_filename(
+            media_type=media_type,
+            taken_datetime=taken_datetime,
+            extension=candidate.suffix,
+            owner="LL",
+            context="General",
+        )
+        destination_dir = self._resolve_destination_dir(
+            base_root=base_root,
+            media_type=media_type,
+            taken_datetime=taken_datetime,
+            is_duplicate=is_duplicate,
+            source=candidate,
+            digest=digest,
+        )
+        if (
+            candidate.resolve(strict=False).parent == destination_dir.resolve(strict=False)
+            and self._is_canonical_variant(candidate.name, canonical_filename)
+        ):
+            planned_target_path = str(candidate.resolve(strict=False))
+            action_type = PlannedActionType.SKIP.value
+            reserved_paths.add(planned_target_path)
+        else:
+            desired_destination = destination_dir / canonical_filename
+            final_destination, had_collision = self._resolve_planning_collision(
+                candidate.resolve(strict=False),
+                desired_destination.resolve(strict=False),
+                reserved_paths,
+            )
+            planned_target_path = str(final_destination.resolve(strict=False))
+            if candidate.resolve(strict=False) == final_destination.resolve(strict=False):
+                action_type = PlannedActionType.SKIP.value
+            elif had_collision:
+                action_type = PlannedActionType.COLLISION_RESOLVED.value
+            else:
+                action_type = PlannedActionType.RENAME.value
+
         existing_plan = self._get_existing_planned_action(
             session,
             run_id=run.id,
             file_id=file_row.id,
             action_type=action_type,
-            source_path=str(candidate),
-            target_path=planned_target,
+            source_path=source_path,
+            target_path=planned_target_path,
         )
         if existing_plan is None:
             plan = PlannedAction(
                 run_id=run.id,
                 file_id=file_row.id,
                 action_type=action_type,
-                source_path=str(candidate),
-                target_path=planned_target,
+                source_path=source_path,
+                target_path=planned_target_path,
             )
             session.add(plan)
             session.flush()

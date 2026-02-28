@@ -1,9 +1,10 @@
-"""Deterministic apply service skeleton (no filesystem mutation)."""
+"""Deterministic apply service with canonical rename enforcement."""
 
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -12,7 +13,7 @@ from media_manager.app.core.errors import ApplyStateError, RunNotFoundError
 from media_manager.app.core.logging_config import get_logger
 from media_manager.app.core.state_machine import RunState, validate_transition
 from media_manager.app.persistence.base import transactional_session
-from media_manager.app.persistence.models import FailureEvent, FailurePhase, PlannedAction, Run, RunStateDB
+from media_manager.app.persistence.models import FailureEvent, FailurePhase, File, PlannedAction, Run, RunStateDB
 
 logger = get_logger(__name__)
 
@@ -38,7 +39,7 @@ class ApplySummary:
 
 
 class ApplyService:
-    """Transactional apply-stage scaffold that simulates execution only."""
+    """Transactional apply-stage with deterministic rename/move behavior."""
 
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
@@ -84,16 +85,18 @@ class ApplyService:
                 moves_count = 0
 
                 for action in actions:
-                    self._simulate_execute(action)
-                    if action.action_type == "MOVE":
+                    executed = self._execute_action(session, run.id, action)
+                    if action.action_type in {"RENAME", "MOVE"}:
                         moves_count += 1
                         applied_count += 1
-                    elif action.action_type == "MARK_DUPLICATE":
+                    elif action.action_type in {"COLLISION_RESOLVED", "MARK_DUPLICATE"}:
                         duplicates_count += 1
                         applied_count += 1
-                    elif action.action_type == "NOOP":
+                    elif action.action_type in {"SKIP", "NOOP"}:
                         noop_count += 1
                         applied_count += 1
+                    elif not executed:
+                        skipped_count += 1
                     else:
                         skipped_count += 1
 
@@ -161,8 +164,58 @@ class ApplyService:
         if run.state != RunStateDB.PLANNED:
             raise ApplyStateError(f"Apply is only allowed from PLANNED. Current state: {run.state.value}")
 
-    def _simulate_execute(self, action: PlannedAction) -> None:
-        _ = action
+    def _execute_action(
+        self,
+        session: Session,
+        run_id: uuid.UUID,
+        action: PlannedAction,
+    ) -> bool:
+        source = Path(action.source_path)
+        if not source.exists() or not source.is_file():
+            logger.info(
+                "Skipped missing source",
+                extra={
+                    "run_id": str(run_id),
+                    "phase": "apply",
+                    "filename": source.name,
+                    "action_type": action.action_type,
+                    "action": "SKIPPED",
+                },
+            )
+            return False
+
+        destination = Path(action.target_path) if action.target_path else source
+        if source.resolve(strict=False) == destination.resolve(strict=False):
+            logger.info(
+                "Rename skipped",
+                extra={
+                    "run_id": str(run_id),
+                    "phase": "apply",
+                    "filename": source.name,
+                    "action_type": action.action_type,
+                    "action": "SKIPPED",
+                },
+            )
+            return True
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        source.rename(destination)
+
+        file_row = session.get(File, action.file_id)
+        if file_row is not None:
+            file_row.path = str(destination.resolve(strict=False))
+
+        logger.info(
+            "File renamed",
+            extra={
+                "run_id": str(run_id),
+                "phase": "apply",
+                "filename": destination.name,
+                "action_type": action.action_type,
+                "action": action.action_type,
+            },
+        )
+        return True
 
     def _record_apply_failure(self, run_id: uuid.UUID, message: str) -> None:
         with transactional_session(self._session_factory) as session:

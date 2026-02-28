@@ -43,9 +43,9 @@ class FailurePhase(StrEnum):
 
 
 class PlannedActionType(StrEnum):
-    MOVE = "MOVE"
-    NOOP = "NOOP"
-    MARK_DUPLICATE = "MARK_DUPLICATE"
+    SKIP = "SKIP"
+    RENAME = "RENAME"
+    COLLISION_RESOLVED = "COLLISION_RESOLVED"
 
 
 class Run(Base):

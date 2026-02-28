@@ -37,7 +37,7 @@ def test_duplicate_detection_workflow(tmp_path: Path, session_factory) -> None:
     f2 = _write_file(tmp_path / "dup2.jpg", b"same-content")
 
     summary = planner.plan_run(run.id, [f1, f2])
-    assert summary.duplicate_actions == 1
+    assert summary.duplicate_actions == 0
 
     with session_factory() as session:
         files = session.scalars(select(File).order_by(File.path)).all()
@@ -48,7 +48,7 @@ def test_duplicate_detection_workflow(tmp_path: Path, session_factory) -> None:
 
         actions = session.scalars(select(PlannedAction).order_by(PlannedAction.source_path)).all()
         assert len(actions) == 2
-        assert any(a.action_type == PlannedActionType.MARK_DUPLICATE.value for a in actions)
+        assert all(a.action_type == PlannedActionType.RENAME.value for a in actions)
 
 
 def test_duplicate_original_selection_deterministic_across_runs(
@@ -91,25 +91,26 @@ def test_duplicate_original_selection_deterministic_across_runs(
         assert duplicates_after[0].original_file_id == expected_original.id
 
 
-def test_planned_action_generation_move_and_noop(tmp_path: Path, session_factory) -> None:
+def test_planned_action_generation_move_and_collision(tmp_path: Path, session_factory) -> None:
     run_service = RunService(session_factory)
     planner = PlanningService(session_factory)
 
     run = run_service.create_run()
 
-    # This path is already canonical for photo/year/month and should produce NOOP.
+    # Both files will be planned as renames, with one collision-resolved target.
     noop_path = _write_file(tmp_path / "Media" / "Photos" / "2024" / "01" / "IMG_20240110.jpg", b"a")
     move_path = _write_file(tmp_path / "inbox" / "IMG_20240111.jpg", b"b")
 
     summary = planner.plan_run(run.id, [noop_path, move_path])
-    assert summary.noop_actions == 1
+    assert summary.noop_actions == 0
     assert summary.move_actions == 1
+    assert summary.duplicate_actions == 1
 
     with session_factory() as session:
         actions = session.scalars(select(PlannedAction)).all()
         assert len(actions) == 2
-        assert any(a.action_type == PlannedActionType.NOOP.value for a in actions)
-        assert any(a.action_type == PlannedActionType.MOVE.value for a in actions)
+        assert any(a.action_type == PlannedActionType.RENAME.value for a in actions)
+        assert any(a.action_type == PlannedActionType.COLLISION_RESOLVED.value for a in actions)
 
 
 def test_mixed_summary_counts_exclude_unsupported_from_scanned(tmp_path: Path, session_factory) -> None:
@@ -126,9 +127,9 @@ def test_mixed_summary_counts_exclude_unsupported_from_scanned(tmp_path: Path, s
     assert summary.scanned_count == 3
     assert summary.supported_count == 3
     assert summary.skipped_count == 1
-    assert summary.move_actions == 1
+    assert summary.move_actions == 2
     assert summary.duplicate_actions == 1
-    assert summary.noop_actions == 1
+    assert summary.noop_actions == 0
 
     with session_factory() as session:
         actions = session.scalars(select(PlannedAction).where(PlannedAction.run_id == run.id)).all()
@@ -176,8 +177,10 @@ def test_planned_actions_idempotent_on_reentry_same_transaction(
         run_row.version += 1
         run_row.updated_at = func.now()
 
-        first_action = planner._plan_single_path(session, run_row, candidate)
-        second_action = planner._plan_single_path(session, run_row, candidate)
+        base_root = planner._determine_base_root([candidate])
+        reserved_paths: set[str] = set()
+        first_action = planner._plan_single_path(session, run_row, candidate, base_root, reserved_paths)
+        second_action = planner._plan_single_path(session, run_row, candidate, base_root, reserved_paths)
         assert first_action == second_action
 
         count_in_txn = session.scalar(
