@@ -387,7 +387,7 @@ class ApplyService:
                 "phase": "apply",
                 "planned_action_id": str(action.id),
                 "file_instance_id": str(action.file_id),
-                "filename": final_destination.name,
+                "target_filename": final_destination.name,
                 "action_type": action.action_type,
                 "action": action.action_type,
             },
