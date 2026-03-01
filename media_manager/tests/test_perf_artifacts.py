@@ -15,6 +15,7 @@ from media_manager.app.core.perf_artifacts import (
     load_all_baselines,
     load_baseline_json,
     read_performance_artifact_json,
+    store_baseline_json,
     write_performance_artifact_json,
 )
 
@@ -130,11 +131,15 @@ def test_baseline_loader_explicit_dataset_env_match(tmp_path: Path) -> None:
     baseline_dir = tmp_path / "baselines"
     baseline_dir.mkdir(parents=True, exist_ok=True)
     path = baseline_file_path("dataset-1", "ci", baseline_dir)
-    path.write_text(json.dumps({"dataset_id": "dataset-1", "env_class": "ci"}), encoding="utf-8")
+    path.write_text(
+        json.dumps({"dataset_id": "dataset-1", "env_class": "ci", "metrics_version": METRICS_VERSION}),
+        encoding="utf-8",
+    )
 
     loaded = load_baseline_json("dataset-1", "ci", baseline_dir)
     assert loaded["dataset_id"] == "dataset-1"
     assert loaded["env_class"] == "ci"
+    assert loaded["metrics_version"] == METRICS_VERSION
 
 
 def test_baseline_loader_missing_file_raises_file_not_found(tmp_path: Path) -> None:
@@ -145,9 +150,18 @@ def test_baseline_loader_missing_file_raises_file_not_found(tmp_path: Path) -> N
 def test_load_all_baselines_returns_sorted_results(tmp_path: Path) -> None:
     baseline_dir = tmp_path / "baselines"
     baseline_dir.mkdir(parents=True, exist_ok=True)
-    (baseline_dir / "baseline_b_ci.json").write_text(json.dumps({"id": "b"}), encoding="utf-8")
-    (baseline_dir / "baseline_a_ci.json").write_text(json.dumps({"id": "a"}), encoding="utf-8")
-    (baseline_dir / "baseline_c_ci.json").write_text(json.dumps({"id": "c"}), encoding="utf-8")
+    (baseline_dir / "baseline_b_ci.json").write_text(
+        json.dumps({"id": "b", "dataset_id": "b", "env_class": "ci", "metrics_version": METRICS_VERSION}),
+        encoding="utf-8",
+    )
+    (baseline_dir / "baseline_a_ci.json").write_text(
+        json.dumps({"id": "a", "dataset_id": "a", "env_class": "ci", "metrics_version": METRICS_VERSION}),
+        encoding="utf-8",
+    )
+    (baseline_dir / "baseline_c_ci.json").write_text(
+        json.dumps({"id": "c", "dataset_id": "c", "env_class": "ci", "metrics_version": METRICS_VERSION}),
+        encoding="utf-8",
+    )
 
     loaded = load_all_baselines(baseline_dir)
     assert [item["id"] for item in loaded] == ["a", "b", "c"]
@@ -183,3 +197,53 @@ def test_metrics_version_pass_through() -> None:
 def test_constants_exposed() -> None:
     assert METRICS_VERSION == "phase9.v1"
     assert BASELINE_DIR.as_posix() == "artifacts/perf/baselines"
+
+
+def test_store_baseline_json_writes_expected_path(tmp_path: Path) -> None:
+    payload = {"dataset_id": "dataset-1", "env_class": "ci", "metrics_version": METRICS_VERSION, "x": 1}
+    path = store_baseline_json(payload, dataset_id="dataset-1", env_class="ci", baseline_dir=tmp_path)
+    assert path == tmp_path / "baseline_dataset-1_ci.json"
+    loaded = json.loads(path.read_text(encoding="utf-8"))
+    assert loaded["dataset_id"] == "dataset-1"
+
+
+def test_store_baseline_json_rejects_missing_metrics_version(tmp_path: Path) -> None:
+    payload = {"dataset_id": "dataset-1", "env_class": "ci"}
+    with pytest.raises(ValueError, match="missing required field: metrics_version"):
+        store_baseline_json(payload, dataset_id="dataset-1", env_class="ci", baseline_dir=tmp_path)
+
+
+def test_store_baseline_json_rejects_metrics_version_mismatch(tmp_path: Path) -> None:
+    payload = {"dataset_id": "dataset-1", "env_class": "ci", "metrics_version": "phase9.v0"}
+    with pytest.raises(ValueError, match="metrics_version mismatch"):
+        store_baseline_json(payload, dataset_id="dataset-1", env_class="ci", baseline_dir=tmp_path)
+
+
+def test_store_baseline_json_rejects_dataset_env_mismatch(tmp_path: Path) -> None:
+    payload = {"dataset_id": "dataset-x", "env_class": "ci", "metrics_version": METRICS_VERSION}
+    with pytest.raises(ValueError, match="dataset_id mismatch"):
+        store_baseline_json(payload, dataset_id="dataset-1", env_class="ci", baseline_dir=tmp_path)
+
+
+def test_load_baseline_json_validates_metrics_version(tmp_path: Path) -> None:
+    baseline_dir = tmp_path / "baselines"
+    baseline_dir.mkdir(parents=True, exist_ok=True)
+    path = baseline_file_path("dataset-1", "ci", baseline_dir)
+    path.write_text(
+        json.dumps({"dataset_id": "dataset-1", "env_class": "ci", "metrics_version": "phase9.v0"}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="metrics_version mismatch"):
+        load_baseline_json("dataset-1", "ci", baseline_dir)
+
+
+def test_load_baseline_json_can_skip_version_check_when_none(tmp_path: Path) -> None:
+    baseline_dir = tmp_path / "baselines"
+    baseline_dir.mkdir(parents=True, exist_ok=True)
+    path = baseline_file_path("dataset-1", "ci", baseline_dir)
+    path.write_text(
+        json.dumps({"dataset_id": "dataset-1", "env_class": "ci", "metrics_version": "phase9.v0"}),
+        encoding="utf-8",
+    )
+    loaded = load_baseline_json("dataset-1", "ci", baseline_dir, expected_metrics_version=None)
+    assert loaded["metrics_version"] == "phase9.v0"

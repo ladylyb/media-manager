@@ -194,10 +194,65 @@ def baseline_file_path(
     return baseline_dir / f"baseline_{_safe_name(dataset_id)}_{_safe_name(env_class)}.json"
 
 
+def _validate_baseline_payload(
+    payload: dict[str, Any],
+    *,
+    dataset_id: str,
+    env_class: str,
+    expected_metrics_version: str | None,
+) -> None:
+    required = ("dataset_id", "env_class", "metrics_version")
+    for field in required:
+        if field not in payload:
+            raise ValueError(f"Baseline payload missing required field: {field}")
+        if not isinstance(payload[field], str) or not payload[field].strip():
+            raise ValueError(f"Baseline field {field} must be a non-empty string")
+
+    if payload["dataset_id"] != dataset_id:
+        raise ValueError(
+            f"Baseline dataset_id mismatch: expected {dataset_id!r}, got {payload['dataset_id']!r}"
+        )
+    if payload["env_class"] != env_class:
+        raise ValueError(
+            f"Baseline env_class mismatch: expected {env_class!r}, got {payload['env_class']!r}"
+        )
+
+    if expected_metrics_version is not None and payload["metrics_version"] != expected_metrics_version:
+        raise ValueError(
+            "Baseline metrics_version mismatch: "
+            f"expected {expected_metrics_version!r}, got {payload['metrics_version']!r}"
+        )
+
+
+def store_baseline_json(
+    payload: dict[str, Any],
+    *,
+    dataset_id: str,
+    env_class: str,
+    baseline_dir: Path = BASELINE_DIR,
+    expected_metrics_version: str = METRICS_VERSION,
+) -> Path:
+    """Persist a baseline JSON artifact for explicit dataset/environment keys."""
+
+    if not isinstance(payload, dict):
+        raise ValueError("Baseline payload must be an object")
+    _validate_baseline_payload(
+        payload,
+        dataset_id=dataset_id,
+        env_class=env_class,
+        expected_metrics_version=expected_metrics_version,
+    )
+    baseline_dir.mkdir(parents=True, exist_ok=True)
+    path = baseline_file_path(dataset_id, env_class, baseline_dir)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=False), encoding="utf-8")
+    return path
+
+
 def load_baseline_json(
     dataset_id: str,
     env_class: str,
     baseline_dir: Path = BASELINE_DIR,
+    expected_metrics_version: str | None = METRICS_VERSION,
 ) -> dict[str, Any]:
     """Load one explicit baseline JSON by dataset/environment key."""
 
@@ -212,6 +267,12 @@ def load_baseline_json(
         raise ValueError(f"Invalid baseline JSON at {path}: {exc}") from exc
     if not isinstance(payload, dict):
         raise ValueError(f"Baseline at {path} must decode to an object")
+    _validate_baseline_payload(
+        payload,
+        dataset_id=dataset_id,
+        env_class=env_class,
+        expected_metrics_version=expected_metrics_version,
+    )
     return payload
 
 
