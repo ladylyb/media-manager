@@ -9,6 +9,7 @@ from media_manager.app.core.errors import MissingRequiredMetadataError, Planning
 from media_manager.app.core.state_machine import RunState
 from media_manager.app.persistence.ingest import IngestService
 from media_manager.app.persistence.models import (
+    CanonicalAssignment,
     FailureEvent,
     FileContent,
     FileInstance,
@@ -37,12 +38,15 @@ def test_duplicate_identity_and_canonical_selection(tmp_path: Path, session_fact
     with session_factory() as session:
         contents = session.scalars(select(FileContent)).all()
         instances = session.scalars(select(FileInstance).order_by(FileInstance.absolute_path)).all()
+        assignments = session.scalars(
+            select(CanonicalAssignment).order_by(CanonicalAssignment.assigned_at.desc(), CanonicalAssignment.assignment_id.desc())
+        ).all()
         assert len(contents) == 1
         assert len(instances) == 2
+        assert len(assignments) >= 1
         content = contents[0]
-        assert content.canonical_file_instance_id is not None
         expected = sorted(instances, key=lambda i: (i.first_seen_at, i.file_instance_id))[0]
-        assert content.canonical_file_instance_id == expected.file_instance_id
+        assert assignments[-1].canonical_instance_id == expected.file_instance_id
 
 
 def test_planner_generates_actions_from_canonical_instances_only(tmp_path: Path, session_factory) -> None:
@@ -225,5 +229,45 @@ def test_planner_missing_metadata_warning_has_structured_fields(
     extra = warnings[0]
     assert extra["content_id"]
     assert extra["file_instance_id"]
+    assert extra["canonical_instance_id"]
     assert extra["missing_codes"] == ["OWNER"]
     assert extra["strict_missing_metadata"] is False
+
+
+def test_planner_reads_canonical_assignment_and_ignores_legacy_column(tmp_path: Path, session_factory) -> None:
+    run_service = RunService(session_factory)
+    planner = PlanningService(session_factory)
+    ingest = IngestService(session_factory)
+
+    first = _write_file(tmp_path / "first.jpg", b"same")
+    second = _write_file(tmp_path / "copy" / "second.jpg", b"same")
+    ingest.ingest_paths([first, second])
+
+    with session_factory.begin() as session:
+        content = session.scalar(select(FileContent))
+        assert content is not None
+        instances = session.scalars(
+            select(FileInstance).where(FileInstance.content_id == content.content_id).order_by(FileInstance.absolute_path.asc())
+        ).all()
+        assert len(instances) == 2
+        assignment_authority_instance = instances[0]
+        legacy_instance = instances[1]
+        # Force legacy pointer to disagree with active canonical assignment authority.
+        content.canonical_file_instance_id = legacy_instance.file_instance_id
+        session.add(
+            CanonicalAssignment(
+                content_id=content.content_id,
+                canonical_instance_id=assignment_authority_instance.file_instance_id,
+                policy_name="FIRST_SEEN",
+                policy_version="v1",
+            )
+        )
+
+    run = run_service.create_run()
+    summary = planner.plan_run(run.id, [first, second], ingest_if_needed=False)
+    assert summary.scanned_count >= 1
+    with session_factory() as session:
+        actions = session.scalars(select(PlannedAction).where(PlannedAction.run_id == run.id)).all()
+        planned_source_paths = {Path(action.source_path).resolve(strict=False) for action in actions}
+        assert Path(assignment_authority_instance.absolute_path).resolve(strict=False) in planned_source_paths
+        assert Path(legacy_instance.absolute_path).resolve(strict=False) not in planned_source_paths

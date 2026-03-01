@@ -7,10 +7,13 @@ from pathlib import Path
 
 from sqlalchemy import select
 
+from media_manager.app.canonical.context import CanonicalContext
+from media_manager.app.canonical.factory import build_canonical_policy
 from media_manager.app.core.errors import MediaManagerError
 from media_manager.app.persistence.apply import ApplyService
-from media_manager.app.persistence.ingest import IngestService
 from media_manager.app.persistence.base import create_db_engine, create_session_factory
+from media_manager.app.persistence.canonicalization import RecomputeMode, recompute_canonical_assignments
+from media_manager.app.persistence.ingest import IngestService
 from media_manager.app.persistence.models import PlannedAction
 from media_manager.app.persistence.planner import PlanningService
 from media_manager.app.persistence.runs import RunService
@@ -114,6 +117,26 @@ def _render_ingest_output(summary) -> None:
     print("----------------------------------------")
 
 
+def _render_canonical_recompute_output(summary) -> None:
+    print("----------------------------------------")
+    print("Canonical Recompute Summary")
+    print(f"  Run ID: {summary.run_id}")
+    print(f"  Status: {summary.status}")
+    print(f"  Duplicate contents scanned: {summary.scanned_count}")
+    print(f"  Assignments changed: {summary.changed_count}")
+    print(f"  Assignments applied: {summary.applied_count}")
+    print(f"  Failed contents: {summary.failed_count}")
+    if summary.changed_content_ids:
+        print("  Changed content IDs:")
+        for content_id in summary.changed_content_ids:
+            print(f"    {content_id}")
+    if summary.failed_content_ids:
+        print("  Failed content IDs:")
+        for content_id in summary.failed_content_ids:
+            print(f"    {content_id}")
+    print("----------------------------------------")
+
+
 def _plan_command(path_arg: str, *, strict_metadata: bool = False) -> int:
     path = Path(path_arg)
     if not path.exists():
@@ -198,6 +221,45 @@ def _ingest_command(path_arg: str) -> int:
     return 0
 
 
+def _canonical_recompute_command(
+    *,
+    policy_name: str,
+    dry_run: bool,
+    apply: bool,
+    preferred_roots: list[str],
+) -> int:
+    if dry_run and apply:
+        print("Specify only one of --dry-run or --apply.", file=sys.stderr)
+        return 2
+
+    engine = create_db_engine()
+    session_factory = create_session_factory(engine)
+    mode = RecomputeMode.APPLY if apply else RecomputeMode.DRY_RUN
+    try:
+        policy = build_canonical_policy(policy_name)
+    except MediaManagerError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    context = CanonicalContext(preferred_roots=tuple(Path(root) for root in preferred_roots))
+    try:
+        summary = recompute_canonical_assignments(
+            session_factory,
+            policy=policy,
+            context=context,
+            mode=mode,
+        )
+    except MediaManagerError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    _render_canonical_recompute_output(summary)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="media-manager")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -219,6 +281,21 @@ def main(argv: list[str] | None = None) -> int:
         default="rename",
         help="Collision behavior when target path already exists.",
     )
+    canonical_parser = subparsers.add_parser("canonical", help="Canonicalization commands.")
+    canonical_subparsers = canonical_parser.add_subparsers(dest="canonical_command", required=True)
+    canonical_recompute = canonical_subparsers.add_parser(
+        "recompute",
+        help="Deterministically recompute canonical assignments for duplicate contents.",
+    )
+    canonical_recompute.add_argument("--policy", required=True, help="Canonical policy name.")
+    canonical_recompute.add_argument("--dry-run", action="store_true", help="Compute diff without appending assignments.")
+    canonical_recompute.add_argument("--apply", action="store_true", help="Append changed canonical assignments.")
+    canonical_recompute.add_argument(
+        "--preferred-root",
+        action="append",
+        default=[],
+        help="Preferred root path for PREFER_ROOT policy. Can be provided multiple times.",
+    )
 
     args = parser.parse_args(argv)
     if args.command == "plan":
@@ -227,6 +304,13 @@ def main(argv: list[str] | None = None) -> int:
         return _ingest_command(args.path)
     if args.command == "apply":
         return _apply_command(args.run_id, collision_mode=args.collision_mode)
+    if args.command == "canonical" and args.canonical_command == "recompute":
+        return _canonical_recompute_command(
+            policy_name=args.policy,
+            dry_run=args.dry_run,
+            apply=args.apply,
+            preferred_roots=args.preferred_root,
+        )
 
     parser.print_help()
     return 2

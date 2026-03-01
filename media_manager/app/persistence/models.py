@@ -53,6 +53,25 @@ class FileInstanceStatus(StrEnum):
     DELETED = "DELETED"
 
 
+class CanonicalRecomputeMode(StrEnum):
+    DRY_RUN = "DRY_RUN"
+    APPLY = "APPLY"
+
+
+class CanonicalRecomputeStatus(StrEnum):
+    STARTED = "STARTED"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    COMPLETED_WITH_ERRORS = "COMPLETED_WITH_ERRORS"
+
+
+class CanonicalRecomputeItemResult(StrEnum):
+    UNCHANGED = "UNCHANGED"
+    CHANGED = "CHANGED"
+    APPLIED = "APPLIED"
+    FAILED = "FAILED"
+
+
 class Run(Base):
     __tablename__ = "runs"
 
@@ -205,6 +224,11 @@ class FileContent(Base):
         cascade="save-update, merge",
         passive_deletes=True,
     )
+    canonical_assignments: Mapped[list[CanonicalAssignment]] = relationship(
+        back_populates="content",
+        cascade="save-update, merge",
+        passive_deletes=True,
+    )
 
 
 Index("idx_file_contents_sha256_hash", FileContent.sha256_hash)
@@ -243,11 +267,106 @@ class FileInstance(Base):
         cascade="save-update, merge",
         passive_deletes=True,
     )
+    canonical_assignments: Mapped[list[CanonicalAssignment]] = relationship(
+        back_populates="canonical_instance",
+        cascade="save-update, merge",
+        passive_deletes=True,
+    )
 
 
 Index("idx_file_instances_content_id", FileInstance.content_id)
 Index("idx_file_instances_absolute_path", FileInstance.absolute_path)
 Index("idx_file_instances_status", FileInstance.status)
+
+
+class CanonicalAssignment(Base):
+    __tablename__ = "canonical_assignments"
+
+    assignment_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    content_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("file_contents.content_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    canonical_instance_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("file_instances.file_instance_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    policy_name: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_version: Mapped[str] = mapped_column(Text, nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+    content: Mapped[FileContent] = relationship(back_populates="canonical_assignments")
+    canonical_instance: Mapped[FileInstance] = relationship(back_populates="canonical_assignments")
+
+
+Index("idx_canonical_assignments_content_id", CanonicalAssignment.content_id)
+Index("idx_canonical_assignments_instance_id", CanonicalAssignment.canonical_instance_id)
+Index(
+    "idx_canonical_assignments_latest",
+    CanonicalAssignment.content_id,
+    CanonicalAssignment.assigned_at.desc(),
+    CanonicalAssignment.assignment_id.desc(),
+)
+
+
+class CanonicalRecomputeRun(Base):
+    __tablename__ = "canonical_recompute_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    policy_name: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_version: Mapped[str] = mapped_column(Text, nullable=False)
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    scanned_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    changed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    applied_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    items: Mapped[list[CanonicalRecomputeItem]] = relationship(
+        back_populates="run",
+        cascade="save-update, merge",
+        passive_deletes=True,
+    )
+
+
+Index("idx_canonical_recompute_runs_started_at", CanonicalRecomputeRun.started_at)
+
+
+class CanonicalRecomputeItem(Base):
+    __tablename__ = "canonical_recompute_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("canonical_recompute_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    content_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("file_contents.content_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    old_canonical_instance_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    new_canonical_instance_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    duplicate_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    result: Mapped[str] = mapped_column(Text, nullable=False)
+    sequence_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    run: Mapped[CanonicalRecomputeRun] = relationship(back_populates="items")
+
+
+Index("idx_canonical_recompute_items_run_id", CanonicalRecomputeItem.run_id)
+Index("idx_canonical_recompute_items_content_id", CanonicalRecomputeItem.content_id)
+Index("uq_canonical_recompute_items_run_sequence", CanonicalRecomputeItem.run_id, CanonicalRecomputeItem.sequence_no, unique=True)
 
 
 class PlannedAction(Base):

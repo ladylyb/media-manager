@@ -63,3 +63,7 @@ class CollisionResolutionError(MediaManagerError):
 
 class ApplyIntegrityException(MediaManagerError):
     """Raised when post-apply verification detects integrity violations."""
+
+
+class CanonicalPolicyException(MediaManagerError):
+    """Raised when canonical policy selection cannot deterministically resolve an instance."""

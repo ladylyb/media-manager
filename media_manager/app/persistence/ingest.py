@@ -10,10 +10,13 @@ from time import perf_counter
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from media_manager.app.canonical.context import CanonicalContext
+from media_manager.app.canonical.factory import build_canonical_policy, resolve_default_policy_name
 from media_manager.app.core.hashing import sha256_file
 from media_manager.app.core.logging_config import get_logger
 import media_manager.app.core.metadata_extractor as metadata_extractor
 from media_manager.app.persistence.base import transactional_session
+from media_manager.app.persistence.canonicalization import append_assignment, get_active_assignment
 from media_manager.app.persistence.models import FileContent, FileInstance, FileInstanceStatus, MediaMetadata
 
 logger = get_logger(__name__)
@@ -29,24 +32,29 @@ class IngestSummary:
     duration_s: float
 
 
-def select_canonical_instance(session: Session, content_id: uuid.UUID) -> uuid.UUID | None:
-    content = session.scalar(select(FileContent).where(FileContent.content_id == content_id).with_for_update())
-    if content is None:
-        return None
-    if content.canonical_file_instance_id is not None:
-        return content.canonical_file_instance_id
+def ensure_canonical_assignment(session: Session, content_id: uuid.UUID) -> uuid.UUID | None:
+    active = get_active_assignment(session, content_id)
+    if active is not None:
+        return active.canonical_instance_id
 
-    candidate = session.scalar(
+    instances = session.scalars(
         select(FileInstance)
         .where(FileInstance.content_id == content_id)
-        .order_by(FileInstance.first_seen_at.asc(), FileInstance.file_instance_id.asc())
-        .limit(1)
-    )
-    if candidate is None:
+        .order_by(FileInstance.first_seen_at.asc(), FileInstance.absolute_path.asc(), FileInstance.file_instance_id.asc())
+    ).all()
+    if not instances:
         return None
-    content.canonical_file_instance_id = candidate.file_instance_id
-    session.flush()
-    return content.canonical_file_instance_id
+
+    policy = build_canonical_policy(resolve_default_policy_name())
+    selected = policy.select(str(content_id), instances, CanonicalContext())
+    row = append_assignment(
+        session,
+        content_id=content_id,
+        canonical_instance_id=selected.file_instance_id,
+        policy_name=policy.name,
+        policy_version=policy.version,
+    )
+    return row.canonical_instance_id
 
 
 def ingest_paths_in_session(session: Session, files: list[Path]) -> IngestSummary:
@@ -93,9 +101,6 @@ def ingest_paths_in_session(session: Session, files: list[Path]) -> IngestSummar
             instance.last_seen_at = func.now()
             instance.status = FileInstanceStatus.ACTIVE.value
 
-        if content.canonical_file_instance_id is None:
-            content.canonical_file_instance_id = instance.file_instance_id
-
         if content_was_new:
             existing_rows = session.scalar(
                 select(func.count())
@@ -107,7 +112,7 @@ def ingest_paths_in_session(session: Session, files: list[Path]) -> IngestSummar
                 metadata_extractor.upsert_metadata_for_content(session, rows, content.content_id)
                 metadata_extracted += len(rows)
 
-        select_canonical_instance(session, content.content_id)
+        ensure_canonical_assignment(session, content.content_id)
 
     duration_s = perf_counter() - t_start
     logger.info(

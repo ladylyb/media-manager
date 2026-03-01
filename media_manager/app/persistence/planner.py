@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from media_manager.app.core.config import resolve_required_metadata_codes
@@ -22,9 +22,9 @@ from media_manager.app.core.state_machine import RunState, validate_transition
 from media_manager.app.persistence.base import transactional_session
 from media_manager.app.persistence.ingest import ingest_paths_in_session
 from media_manager.app.persistence.models import (
+    CanonicalAssignment,
     FailureEvent,
     FailurePhase,
-    FileContent,
     FileInstance,
     FileInstanceStatus,
     MediaMetadata,
@@ -123,7 +123,6 @@ class PlanningService:
                 rows = self._load_candidate_instances(session, input_paths)
                 if input_paths and ingest_if_needed:
                     ingest_paths_in_session(session, sorted(input_paths, key=lambda p: p.resolve(strict=False).as_posix()))
-                    self._ensure_canonical_instances(session)
                     rows = self._load_candidate_instances(session, input_paths)
                 base_root = self._determine_base_root([Path(row.absolute_path) for row in rows])
 
@@ -245,9 +244,29 @@ class PlanningService:
             raise PlanningStateError(f"Planning is only allowed from CREATED. Current state: {run.state.value}")
 
     def _load_candidate_instances(self, session: Session, input_paths: list[Path] | None) -> list[FileInstance]:
+        latest_assignments = (
+            select(
+                CanonicalAssignment.content_id.label("content_id"),
+                CanonicalAssignment.canonical_instance_id.label("canonical_instance_id"),
+                func.row_number()
+                .over(
+                    partition_by=CanonicalAssignment.content_id,
+                    order_by=(
+                        CanonicalAssignment.assigned_at.desc(),
+                        CanonicalAssignment.assignment_id.desc(),
+                    ),
+                )
+                .label("rn"),
+            )
+            .subquery()
+        )
         stmt = (
             select(FileInstance)
-            .join(FileContent, FileContent.canonical_file_instance_id == FileInstance.file_instance_id)
+            .join(
+                latest_assignments,
+                (latest_assignments.c.canonical_instance_id == FileInstance.file_instance_id)
+                & (latest_assignments.c.rn == 1),
+            )
             .order_by(FileInstance.absolute_path.asc(), FileInstance.file_instance_id.asc())
         )
         if input_paths:
@@ -256,26 +275,6 @@ class PlanningService:
                 return []
             stmt = stmt.where(FileInstance.absolute_path.in_(normalized))
         return session.scalars(stmt).all()
-
-    def _ensure_canonical_instances(self, session: Session) -> None:
-        session.execute(
-            text(
-                """
-                WITH canonical AS (
-                    SELECT DISTINCT ON (fi.content_id)
-                        fi.content_id,
-                        fi.file_instance_id
-                    FROM file_instances fi
-                    ORDER BY fi.content_id, fi.first_seen_at ASC, fi.file_instance_id ASC
-                )
-                UPDATE file_contents fc
-                SET canonical_file_instance_id = canonical.file_instance_id
-                FROM canonical
-                WHERE fc.content_id = canonical.content_id
-                  AND fc.canonical_file_instance_id IS NULL
-                """
-            )
-        )
 
     def _determine_base_root(self, input_paths: list[Path]) -> Path:
         if not input_paths:
@@ -441,6 +440,7 @@ class PlanningService:
                     "action": "SKIPPED",
                     "content_id": str(instance.content_id),
                     "file_instance_id": str(instance.file_instance_id),
+                    "canonical_instance_id": str(instance.file_instance_id),
                     "missing_codes": missing_required,
                     "strict_missing_metadata": strict_missing_metadata,
                     "codes_extracted": ",".join(sorted(metadata_map.keys())),
