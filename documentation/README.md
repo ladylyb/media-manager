@@ -17,6 +17,8 @@ This folder contains the canonical documentation set for the media-manager rewri
 - `project/05-release-plan.md`: rollout sequencing and gates.
 - `project/06-operational-guardrails.md`: authoritative runtime guardrails.
 - `project/07-unified-architecture-spec.md`: canonical technical specification.
+- `project/09-redefined-roadmap-phases-7-12.md`: disciplined next-phase roadmap after redefined Phase 6.
+- `project/10-phase-8.1-canonical-policy-governance.md`: deterministic canonical policy design and evolution guardrails.
 
 ## Reference Material
 - `reference/data-dictionary.md`: schema/data dictionary reference from legacy system for context.
