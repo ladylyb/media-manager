@@ -67,3 +67,11 @@ class ApplyIntegrityException(MediaManagerError):
 
 class CanonicalPolicyException(MediaManagerError):
     """Raised when canonical policy selection cannot deterministically resolve an instance."""
+
+
+class PolicySettingsValidationError(MediaManagerError):
+    """Raised when operator policy settings payload fails deterministic validation."""
+
+
+class PolicySettingsVersionConflictError(MediaManagerError):
+    """Raised when a policy update is based on a stale version."""
