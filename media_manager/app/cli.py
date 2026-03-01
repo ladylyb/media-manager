@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from media_manager.app.core.errors import MediaManagerError
 from media_manager.app.persistence.apply import ApplyService
+from media_manager.app.persistence.ingest import IngestService
 from media_manager.app.persistence.base import create_db_engine, create_session_factory
 from media_manager.app.persistence.models import PlannedAction
 from media_manager.app.persistence.planner import PlanningService
@@ -101,20 +102,35 @@ def _render_apply_output(run_id: uuid.UUID, planned_actions: list[PlannedAction]
     print(f"Run ID: {run_id}")
 
 
+def _render_ingest_output(summary) -> None:
+    print("----------------------------------------")
+    print("Ingest Summary")
+    print(f"  Files scanned: {summary.files_scanned}")
+    print(f"  New contents: {summary.new_contents}")
+    print(f"  New instances: {summary.new_instances}")
+    print(f"  Duplicates detected: {summary.duplicates_detected}")
+    print(f"  Metadata extracted: {summary.metadata_extracted}")
+    print(f"  Duration (s): {summary.duration_s:.3f}")
+    print("----------------------------------------")
+
+
 def _plan_command(path_arg: str) -> int:
     path = Path(path_arg)
     if not path.exists():
         print(f"Path does not exist: {path}", file=sys.stderr)
         return 2
 
-    files = _collect_input_files(path)
     engine = create_db_engine()
     session_factory = create_session_factory(engine)
     run_service = RunService(session_factory)
+    ingest_service = IngestService(session_factory)
     planner = PlanningService(session_factory)
 
+    ingest_files = _collect_input_files(path)
+    ingest_service.ingest_paths(ingest_files)
+
     run = run_service.create_run()
-    summary = planner.plan_run(run.id, files)
+    summary = planner.plan_run(run.id, ingest_files, ingest_if_needed=False)
 
     with session_factory() as session:
         planned_actions = session.scalars(
@@ -163,18 +179,36 @@ def _apply_command(run_id_arg: str) -> int:
     return 0
 
 
+def _ingest_command(path_arg: str) -> int:
+    path = Path(path_arg)
+    if not path.exists():
+        print(f"Path does not exist: {path}", file=sys.stderr)
+        return 2
+
+    engine = create_db_engine()
+    session_factory = create_session_factory(engine)
+    ingest_service = IngestService(session_factory)
+    summary = ingest_service.ingest_path(path)
+    _render_ingest_output(summary)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="media-manager")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     plan_parser = subparsers.add_parser("plan", help="Create a deterministic plan for file organization.")
     plan_parser.add_argument("path", help="File or directory path to plan.")
+    ingest_parser = subparsers.add_parser("ingest", help="Ingest files into logical content/instance tables.")
+    ingest_parser.add_argument("path", help="File or directory path to ingest.")
     apply_parser = subparsers.add_parser("apply", help="Apply an existing planned run.")
     apply_parser.add_argument("run_id", help="Run identifier to apply.")
 
     args = parser.parse_args(argv)
     if args.command == "plan":
         return _plan_command(args.path)
+    if args.command == "ingest":
+        return _ingest_command(args.path)
     if args.command == "apply":
         return _apply_command(args.run_id)
 

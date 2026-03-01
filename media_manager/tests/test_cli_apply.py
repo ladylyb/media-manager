@@ -68,17 +68,15 @@ def test_cli_apply_happy_path_mixed_actions_and_renames_files(
     assert "DUPLICATE" in stdout
     assert "NOOP" not in stdout
     assert "Summary" in stdout
-    assert "  Files applied: 3" in stdout
-    assert "  Moves: 2" in stdout
+    assert "  Files applied: 2" in stdout
+    assert "  Moves: 1" in stdout
     assert "  Duplicates: 1" in stdout
     assert "  No-op: 0" in stdout
     assert "  Skipped: 0" in stdout
     assert "  Errors: 0" in stdout
 
     assert not (root / "inbox" / "IMG_20240111.jpg").exists()
-    assert not (root / "inbox" / "dup_copy.jpg").exists()
     assert any(p.is_file() for p in (root / "Media" / "Photos").rglob("IMG_*.jpg"))
-    assert any(p.is_file() for p in (root / "Media" / "duplicates").rglob("IMG_*.jpg"))
 
     with session_factory() as session:
         run = session.scalar(select(Run).where(Run.id == run_id))

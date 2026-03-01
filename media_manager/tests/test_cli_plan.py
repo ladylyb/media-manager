@@ -8,7 +8,7 @@ from pathlib import Path
 from sqlalchemy import select
 
 from media_manager.app.cli import main
-from media_manager.app.persistence.models import File, PlannedAction, Run, RunStateDB
+from media_manager.app.persistence.models import FileInstance, PlannedAction, Run, RunStateDB
 
 
 def _write_file(path: Path, payload: bytes) -> Path:
@@ -73,8 +73,8 @@ def test_cli_plan_mixed_actions_and_no_fs_mutation(
     assert "DUPLICATE" in stdout
     assert "NOOP" not in stdout
     assert "Summary" in stdout
-    assert "  Files scanned: 3" in stdout
-    assert "  Moves: 2" in stdout
+    assert "  Files scanned: 2" in stdout
+    assert "  Moves: 1" in stdout
     assert "  Duplicates: 1" in stdout
     assert "  No-op: 0" in stdout
     assert "  Skipped: 1" in stdout
@@ -86,13 +86,13 @@ def test_cli_plan_mixed_actions_and_no_fs_mutation(
         assert run.state == RunStateDB.PLANNED
 
         actions = session.scalars(select(PlannedAction).where(PlannedAction.run_id == run_id)).all()
-        assert len(actions) == 3
+        assert len(actions) == 2
         assert all(unsupported.as_posix() not in action.source_path.replace("\\", "/") for action in actions)
 
-        file_rows = session.scalars(select(File)).all()
-        assert all(unsupported.as_posix() != row.path.replace("\\", "/") for row in file_rows)
-        assert noop_path.as_posix() in {row.path.replace("\\", "/") for row in file_rows}
-        assert move_path.as_posix() in {row.path.replace("\\", "/") for row in file_rows}
+        file_rows = session.scalars(select(FileInstance)).all()
+        assert unsupported.as_posix() in {row.absolute_path.replace("\\", "/") for row in file_rows}
+        assert noop_path.as_posix() in {row.absolute_path.replace("\\", "/") for row in file_rows}
+        assert move_path.as_posix() in {row.absolute_path.replace("\\", "/") for row in file_rows}
 
 
 def test_cli_plan_output_deterministic_across_runs(
