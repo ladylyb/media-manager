@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import mimetypes
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -91,6 +92,48 @@ class RunHistoryItem:
             "duplicates_found": self.duplicates_found,
             "runtime_ms": self.runtime_ms,
             "regression_status": self.regression_status,
+        }
+
+
+@dataclass(frozen=True)
+class DuplicateFileItem:
+    """File row shown under a duplicate content group."""
+
+    file_instance_id: str
+    absolute_path: str
+    is_image: bool
+    thumbnail_url: str | None
+
+    def to_dict(self) -> dict[str, str | bool | None]:
+        """Return a JSON-serializable mapping."""
+        return {
+            "file_instance_id": self.file_instance_id,
+            "absolute_path": self.absolute_path,
+            "is_image": self.is_image,
+            "thumbnail_url": self.thumbnail_url,
+        }
+
+
+@dataclass(frozen=True)
+class DuplicateGroupItem:
+    """Duplicate content group row for operator console browsing."""
+
+    group_id: str
+    files: tuple[DuplicateFileItem, ...]
+    canonical_file: DuplicateFileItem | None
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-serializable mapping."""
+        canonical = None
+        if self.canonical_file is not None:
+            canonical = {
+                "file_instance_id": self.canonical_file.file_instance_id,
+                "absolute_path": self.canonical_file.absolute_path,
+            }
+        return {
+            "group_id": self.group_id,
+            "files": [item.to_dict() for item in self.files],
+            "canonical_file": canonical,
         }
 
 
@@ -196,6 +239,90 @@ class OperatorConsoleReadService:
             )
         return items
 
+    def get_duplicate_groups(self, limit: int | None = None) -> list[DuplicateGroupItem]:
+        """Return duplicate groups with active file instances and canonical mapping."""
+        with self._session_factory() as session:
+            duplicate_content_ids = self._duplicate_content_ids(session, limit)
+            if not duplicate_content_ids:
+                return []
+
+            latest_canonical_by_content = self._latest_canonical_instance_by_content_id(
+                session, duplicate_content_ids
+            )
+
+            instance_rows = session.execute(
+                select(
+                    FileInstance.content_id,
+                    FileInstance.file_instance_id,
+                    FileInstance.absolute_path,
+                )
+                .where(
+                    FileInstance.status == FileInstanceStatus.ACTIVE.value,
+                    FileInstance.content_id.in_(duplicate_content_ids),
+                )
+                .order_by(
+                    FileInstance.content_id.asc(),
+                    FileInstance.first_seen_at.asc(),
+                    FileInstance.absolute_path.asc(),
+                    FileInstance.file_instance_id.asc(),
+                )
+            ).all()
+
+        grouped: dict[UUID, list[DuplicateFileItem]] = {}
+        by_group_by_instance: dict[UUID, dict[str, DuplicateFileItem]] = {}
+        for content_id, file_instance_id, absolute_path in instance_rows:
+            instance_id_str = str(file_instance_id)
+            is_image = infer_media_type_from_extension(Path(absolute_path)) == "IMG"
+            file_item = DuplicateFileItem(
+                file_instance_id=instance_id_str,
+                absolute_path=absolute_path,
+                is_image=is_image,
+                thumbnail_url=f"/api/thumbnail/{instance_id_str}" if is_image else None,
+            )
+            grouped.setdefault(content_id, []).append(file_item)
+            by_group_by_instance.setdefault(content_id, {})[instance_id_str] = file_item
+
+        output: list[DuplicateGroupItem] = []
+        for content_id in sorted(grouped.keys(), key=str):
+            files = tuple(grouped[content_id])
+            canonical_file: DuplicateFileItem | None = None
+            canonical_instance_id = latest_canonical_by_content.get(content_id)
+            if canonical_instance_id is not None:
+                canonical_file = by_group_by_instance.get(content_id, {}).get(str(canonical_instance_id))
+            output.append(
+                DuplicateGroupItem(
+                    group_id=str(content_id),
+                    files=files,
+                    canonical_file=canonical_file,
+                )
+            )
+        return output
+
+    def resolve_thumbnail_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:
+        """Resolve an active image file path and media type for thumbnail streaming."""
+        with self._session_factory() as session:
+            instance = session.scalar(
+                select(FileInstance).where(
+                    FileInstance.file_instance_id == file_instance_id,
+                    FileInstance.status == FileInstanceStatus.ACTIVE.value,
+                )
+            )
+            if instance is None:
+                return None
+
+        path = Path(instance.absolute_path)
+        if infer_media_type_from_extension(path) != "IMG":
+            return None
+        if not path.exists() or not path.is_file():
+            return None
+        try:
+            with path.open("rb"):
+                pass
+        except OSError:
+            return None
+        mime, _ = mimetypes.guess_type(path.name)
+        return path, (mime or "image/jpeg")
+
     def _count_total_files(self, session: Session) -> int:
         value = session.scalar(
             select(func.count())
@@ -255,6 +382,49 @@ class OperatorConsoleReadService:
             .group_by(PlannedAction.run_id)
         ).all()
         return {run_id: int(count) for run_id, count in rows}
+
+    def _duplicate_content_ids(self, session: Session, limit: int | None) -> list[UUID]:
+        stmt = (
+            select(FileInstance.content_id)
+            .where(FileInstance.status == FileInstanceStatus.ACTIVE.value)
+            .group_by(FileInstance.content_id)
+            .having(func.count(FileInstance.file_instance_id) > 1)
+            .order_by(FileInstance.content_id.asc())
+        )
+        if limit is not None:
+            stmt = stmt.limit(max(1, int(limit)))
+        return list(session.scalars(stmt).all())
+
+    def _latest_canonical_instance_by_content_id(
+        self,
+        session: Session,
+        content_ids: list[UUID],
+    ) -> dict[UUID, UUID]:
+        if not content_ids:
+            return {}
+        latest_assignments = (
+            select(
+                CanonicalAssignment.content_id.label("content_id"),
+                CanonicalAssignment.canonical_instance_id.label("canonical_instance_id"),
+                func.row_number()
+                .over(
+                    partition_by=CanonicalAssignment.content_id,
+                    order_by=(
+                        CanonicalAssignment.assigned_at.desc(),
+                        CanonicalAssignment.assignment_id.desc(),
+                    ),
+                )
+                .label("rn"),
+            )
+            .where(CanonicalAssignment.content_id.in_(content_ids))
+            .subquery()
+        )
+        rows = session.execute(
+            select(latest_assignments.c.content_id, latest_assignments.c.canonical_instance_id).where(
+                latest_assignments.c.rn == 1
+            )
+        ).all()
+        return {content_id: canonical_instance_id for content_id, canonical_instance_id in rows}
 
     def _load_latest_artifact(self) -> dict[str, Any] | None:
         if not self._perf_run_dir.exists():
