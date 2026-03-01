@@ -27,8 +27,9 @@ def upgrade() -> None:
         "COMPLETED",
         "ABORTED",
         name="run_state",
+        create_type=False,
     )
-    failure_phase = postgresql.ENUM("planning", "apply", name="failure_phase")
+    failure_phase = postgresql.ENUM("planning", "apply", name="failure_phase", create_type=False)
 
     run_state.create(op.get_bind(), checkfirst=True)
     failure_phase.create(op.get_bind(), checkfirst=True)

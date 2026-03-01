@@ -6,12 +6,15 @@ import os
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from media_manager.app.core.config import load_environment
 from media_manager.app.persistence.models import Base
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+load_environment()
 
 
 def get_url() -> str:
