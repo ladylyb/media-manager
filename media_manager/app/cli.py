@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from media_manager.app.canonical.context import CanonicalContext
 from media_manager.app.canonical.factory import build_canonical_policy
+from media_manager.app.core import perf_cli
 from media_manager.app.core.errors import MediaManagerError
 from media_manager.app.persistence.apply import ApplyService
 from media_manager.app.persistence.base import create_db_engine, create_session_factory
@@ -296,6 +297,43 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help="Preferred root path for PREFER_ROOT policy. Can be provided multiple times.",
     )
+    perf_run_parser = subparsers.add_parser(
+        "perf-run",
+        help="Run ingest/plan/apply perf workflow and emit performance artifact JSON.",
+    )
+    perf_run_parser.add_argument("--dataset", required=True, help="Dataset path to process.")
+    perf_run_parser.add_argument("--env-class", required=True, help="Environment class label (e.g., ci/local).")
+    perf_run_parser.add_argument("--policy", default="FIRST_SEEN", help="Policy label for perf metadata context.")
+    perf_run_parser.add_argument("--dry-run", action="store_true", help="Run ingest+plan only (skip apply).")
+    perf_run_parser.add_argument(
+        "--strict-metadata",
+        action="store_true",
+        help="Raise on missing required metadata codes during planning.",
+    )
+
+    perf_compare_parser = subparsers.add_parser(
+        "perf-compare",
+        help="Compare current perf artifact against baseline.",
+    )
+    perf_compare_parser.add_argument("--dataset", required=True, help="Dataset id key for baseline lookup.")
+    perf_compare_parser.add_argument("--env-class", required=True, help="Environment class label.")
+    perf_compare_parser.add_argument("--artifact", help="Optional current artifact path.")
+    perf_compare_parser.add_argument("--policy", default="FIRST_SEEN", help="Policy label passthrough.")
+    perf_compare_parser.add_argument("--dry-run", action="store_true", help="No-op flag for workflow parity.")
+
+    perf_refresh_parser = subparsers.add_parser(
+        "perf-refresh-baseline",
+        help="Store current perf artifact as baseline for dataset/env.",
+    )
+    perf_refresh_parser.add_argument("--dataset", required=True, help="Dataset id key.")
+    perf_refresh_parser.add_argument("--env-class", required=True, help="Environment class label.")
+    perf_refresh_parser.add_argument("--artifact", help="Optional current artifact path.")
+    perf_refresh_parser.add_argument("--policy", default="FIRST_SEEN", help="Policy label passthrough.")
+    perf_refresh_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate baseline write contract without persisting.",
+    )
 
     args = parser.parse_args(argv)
     if args.command == "plan":
@@ -310,6 +348,31 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             apply=args.apply,
             preferred_roots=args.preferred_root,
+        )
+    if args.command == "perf-run":
+        return perf_cli.run_perf_run(
+            dataset=args.dataset,
+            env_class=args.env_class,
+            policy=args.policy,
+            dry_run=args.dry_run,
+            strict_metadata=args.strict_metadata,
+            argv=argv or sys.argv[1:],
+        )
+    if args.command == "perf-compare":
+        return perf_cli.run_perf_compare(
+            dataset=args.dataset,
+            env_class=args.env_class,
+            policy=args.policy,
+            dry_run=args.dry_run,
+            artifact=args.artifact,
+        )
+    if args.command == "perf-refresh-baseline":
+        return perf_cli.run_perf_refresh_baseline(
+            dataset=args.dataset,
+            env_class=args.env_class,
+            policy=args.policy,
+            dry_run=args.dry_run,
+            artifact=args.artifact,
         )
 
     parser.print_help()
