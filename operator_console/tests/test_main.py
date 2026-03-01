@@ -1,0 +1,405 @@
+"""Smoke tests for the Operator Console FastAPI application."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi.testclient import TestClient
+
+from media_manager.app.core.errors import PolicySettingsVersionConflictError
+from operator_console.main import (
+    app,
+    get_operator_console_service,
+    get_policy_settings_service,
+    get_operator_run_trigger_service,
+)
+
+
+class _FakeService:
+    """Simple fake read service for endpoint dependency overrides."""
+
+    def get_dashboard_summary(self) -> "_FakePayload":
+        return _FakePayload(
+            {
+                "total_files": 10,
+                "total_images": 6,
+                "total_videos": 4,
+                "duplicate_groups": 2,
+                "canonical_files": 8,
+                "total_runs": 3,
+            }
+        )
+
+    def get_latest_metrics(self) -> "_FakePayload":
+        return _FakePayload(
+            {
+                "ingest_time_ms": 12.5,
+                "plan_time_ms": 6.0,
+                "apply_time_ms": 4.5,
+                "db_time_ms": 9.2,
+                "cache_hit_rate": 92.0,
+                "last_regression_status": "PASS",
+            }
+        )
+
+    def get_run_history(self, limit: int = 50) -> list["_FakePayload"]:
+        _ = limit
+        return [
+            _FakePayload(
+                {
+                    "run_id": "11111111-1111-1111-1111-111111111111",
+                    "timestamp": "2026-03-01T09:30:00+00:00",
+                    "files_processed": 24,
+                    "duplicates_found": 2,
+                    "runtime_ms": 1250.4,
+                    "regression_status": "PASS",
+                }
+            ),
+            _FakePayload(
+                {
+                    "run_id": "22222222-2222-2222-2222-222222222222",
+                    "timestamp": "2026-03-01T08:15:00+00:00",
+                    "files_processed": 18,
+                    "duplicates_found": 1,
+                    "runtime_ms": 980.0,
+                    "regression_status": "FAIL",
+                }
+            ),
+        ]
+
+
+class _FakePayload:
+    """Fake dataclass-like payload exposing a `to_dict` contract."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._payload = payload
+
+    def to_dict(self) -> dict[str, Any]:
+        return dict(self._payload)
+
+
+class _FakePolicyService:
+    """Simple fake service for policy API/page tests."""
+
+    def __init__(self) -> None:
+        self._version = 7
+
+    def get_settings(self) -> _FakePayload:
+        return _FakePayload(
+            {
+                "canonical_priority": {
+                    "selected_policy": "PREFER_ROOT",
+                    "preferred_roots": ["/archive", "/media"],
+                },
+                "tie_breaker_rules": {
+                    "effective_order": [
+                        "preferred_root_match DESC",
+                        "first_seen_at ASC",
+                        "file_instance_id ASC",
+                    ],
+                    "policy_name": "PREFER_ROOT",
+                    "policy_version": "v1",
+                },
+                "recanonicalization": {"enabled": True},
+                "metadata": {
+                    "updated_at": "2026-03-01T10:00:00+00:00",
+                    "version": self._version,
+                },
+            }
+        )
+
+    def update_settings(self, command) -> _FakePayload:
+        if command.version != self._version:
+            raise PolicySettingsVersionConflictError("Policy settings version conflict: expected 7, got stale.")
+        self._version += 1
+        return _FakePayload(
+            {
+                "canonical_priority": {
+                    "selected_policy": command.selected_policy,
+                    "preferred_roots": list(command.preferred_roots),
+                },
+                "tie_breaker_rules": {
+                    "effective_order": [
+                        "preferred_root_match DESC",
+                        "first_seen_at ASC",
+                        "file_instance_id ASC",
+                    ],
+                    "policy_name": command.selected_policy,
+                    "policy_version": "v1",
+                },
+                "recanonicalization": {"enabled": command.recanonicalization_enabled},
+                "metadata": {
+                    "updated_at": "2026-03-01T10:30:00+00:00",
+                    "version": self._version,
+                },
+            }
+        )
+
+
+class _FakeRunTriggerResult:
+    """Simple fake trigger result that matches API contract shape."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._payload = payload
+
+    def to_dict(self) -> dict[str, Any]:
+        return dict(self._payload)
+
+
+class _FakeRunTriggerService:
+    """Simple fake run-trigger service for API tests."""
+
+    def trigger_run(self, command) -> _FakeRunTriggerResult:
+        if command.folder_path == "/missing":
+            raise ValueError("Folder path does not exist: /missing")
+        return _FakeRunTriggerResult(
+            {
+                "run_id": "33333333-3333-3333-3333-333333333333",
+                "summary_metrics": {
+                    "ingest": {
+                        "files_scanned": 12,
+                        "new_contents": 6,
+                        "new_instances": 8,
+                        "duplicates_detected": 4,
+                        "metadata_extracted": 10,
+                    },
+                    "plan": {
+                        "scanned_count": 8,
+                        "move_actions": 3,
+                        "duplicate_actions": 2,
+                        "noop_actions": 2,
+                        "skipped_count": 1,
+                    },
+                    "apply": None if command.dry_run else {"applied_count": 5, "moves_count": 3, "duplicates_count": 2, "noop_count": 0, "errors_count": 0, "skipped_count": 0},
+                    "dry_run": command.dry_run,
+                    "policy_name": command.policy_name.upper(),
+                },
+                "duplicates_found": 2,
+                "canonical_changes": 1,
+            }
+        )
+
+
+def test_dashboard_route_renders_template() -> None:
+    """GET / should render the dashboard template through the base layout."""
+    client = TestClient(app)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Dashboard" in response.text
+    assert "Run Trigger" in response.text
+    assert "Folder Path" in response.text
+    assert "Execute" in response.text
+    assert "Total Files" in response.text
+    assert "Performance Metrics" in response.text
+    assert "Media Manager Operator Console" in response.text
+    assert "Dashboard</a>" in response.text
+    assert "Runs</a>" in response.text
+    assert "Policy</a>" in response.text
+    assert "https://cdn.tailwindcss.com" in response.text
+
+
+def test_dashboard_summary_endpoint_returns_json() -> None:
+    """GET /api/dashboard-summary should return summary fields as JSON."""
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/api/dashboard-summary")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "total_files": 10,
+        "total_images": 6,
+        "total_videos": 4,
+        "duplicate_groups": 2,
+        "canonical_files": 8,
+        "total_runs": 3,
+    }
+
+
+def test_latest_metrics_endpoint_returns_json() -> None:
+    """GET /api/latest-metrics should return metrics fields as JSON."""
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/api/latest-metrics")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ingest_time_ms": 12.5,
+        "plan_time_ms": 6.0,
+        "apply_time_ms": 4.5,
+        "db_time_ms": 9.2,
+        "cache_hit_rate": 92.0,
+        "last_regression_status": "PASS",
+    }
+
+
+def test_runs_page_renders_template() -> None:
+    """GET /runs should render the run history page template."""
+    client = TestClient(app)
+
+    response = client.get("/runs")
+
+    assert response.status_code == 200
+    assert "Run History" in response.text
+    assert "Files Processed" in response.text
+    assert "Duplicates Found" in response.text
+    assert "Runtime (ms)" in response.text
+    assert "Regression" in response.text
+
+
+def test_runs_endpoint_returns_json() -> None:
+    """GET /api/runs should return run history rows as JSON."""
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/api/runs")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "run_id": "11111111-1111-1111-1111-111111111111",
+            "timestamp": "2026-03-01T09:30:00+00:00",
+            "files_processed": 24,
+            "duplicates_found": 2,
+            "runtime_ms": 1250.4,
+            "regression_status": "PASS",
+        },
+        {
+            "run_id": "22222222-2222-2222-2222-222222222222",
+            "timestamp": "2026-03-01T08:15:00+00:00",
+            "files_processed": 18,
+            "duplicates_found": 1,
+            "runtime_ms": 980.0,
+            "regression_status": "FAIL",
+        },
+    ]
+
+
+def test_policy_page_renders_template() -> None:
+    """GET /policy should render the policy management page template."""
+    client = TestClient(app)
+
+    response = client.get("/policy")
+
+    assert response.status_code == 200
+    assert "Policy Configuration" in response.text
+    assert "Canonical Priority Rules" in response.text
+    assert "Tie-breaker Rules" in response.text
+    assert "Recanonicalization" in response.text
+
+
+def test_get_policy_endpoint_returns_structured_json() -> None:
+    """GET /api/policy should return structured policy payload."""
+    app.dependency_overrides[get_policy_settings_service] = _FakePolicyService
+    client = TestClient(app)
+    try:
+        response = client.get("/api/policy")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["canonical_priority"]["selected_policy"] == "PREFER_ROOT"
+    assert payload["canonical_priority"]["preferred_roots"] == ["/archive", "/media"]
+    assert payload["recanonicalization"]["enabled"] is True
+    assert payload["metadata"]["version"] == 7
+
+
+def test_post_policy_endpoint_updates_settings() -> None:
+    """POST /api/policy should persist settings and return confirmation payload."""
+    app.dependency_overrides[get_policy_settings_service] = _FakePolicyService
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/policy",
+            json={
+                "selected_policy": "PREFER_ROOT",
+                "preferred_roots": ["/a", "/b"],
+                "recanonicalization_enabled": False,
+                "version": 7,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["message"] == "Policy settings saved."
+    assert payload["canonical_priority"]["preferred_roots"] == ["/a", "/b"]
+    assert payload["metadata"]["version"] == 8
+
+
+def test_post_policy_endpoint_returns_version_conflict() -> None:
+    """POST /api/policy should return 409 on stale version updates."""
+    app.dependency_overrides[get_policy_settings_service] = _FakePolicyService
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/policy",
+            json={
+                "selected_policy": "FIRST_SEEN",
+                "preferred_roots": [],
+                "recanonicalization_enabled": False,
+                "version": 6,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 409
+    assert "version conflict" in response.json()["detail"].lower()
+
+
+def test_post_run_endpoint_returns_trigger_summary() -> None:
+    """POST /api/run should return run trigger result payload."""
+    app.dependency_overrides[get_operator_run_trigger_service] = _FakeRunTriggerService
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/run",
+            json={
+                "folder_path": "/dataset",
+                "policy_name": "PREFER_ROOT",
+                "dry_run": True,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["run_id"] == "33333333-3333-3333-3333-333333333333"
+    assert payload["duplicates_found"] == 2
+    assert payload["canonical_changes"] == 1
+    assert payload["summary_metrics"]["policy_name"] == "PREFER_ROOT"
+    assert payload["summary_metrics"]["dry_run"] is True
+    assert payload["summary_metrics"]["ingest"]["files_scanned"] == 12
+
+
+def test_post_run_endpoint_returns_bad_request_for_invalid_folder() -> None:
+    """POST /api/run should return 400 for invalid folder paths."""
+    app.dependency_overrides[get_operator_run_trigger_service] = _FakeRunTriggerService
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/run",
+            json={
+                "folder_path": "/missing",
+                "policy_name": "FIRST_SEEN",
+                "dry_run": False,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert "does not exist" in response.json()["detail"]

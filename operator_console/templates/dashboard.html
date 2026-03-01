@@ -1,0 +1,348 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<section class="space-y-8">
+  <div class="space-y-2">
+    <h2 class="text-3xl font-semibold tracking-tight">Dashboard</h2>
+    <p class="text-sm text-slate-600">Live operational snapshot for media inventory and performance health.</p>
+  </div>
+
+  <section aria-labelledby="run-trigger-heading" class="space-y-4 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+    <h3 id="run-trigger-heading" class="text-lg font-semibold text-slate-900">Run Trigger</h3>
+    <p class="text-xs text-slate-500">Trigger ingest, canonical recompute, plan, and optional apply from the console.</p>
+
+    <div id="run-trigger-error" class="hidden rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800"></div>
+
+    <form id="run-trigger-form" class="grid grid-cols-1 gap-4 md:grid-cols-2">
+      <label class="block space-y-2 md:col-span-2">
+        <span class="text-sm font-medium text-slate-700">Folder Path</span>
+        <input
+          id="run-folder-path"
+          name="folder_path"
+          type="text"
+          placeholder="/absolute/path/to/folder"
+          class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200"
+          required
+        />
+      </label>
+
+      <label class="block space-y-2">
+        <span class="text-sm font-medium text-slate-700">Policy</span>
+        <select
+          id="run-policy-name"
+          name="policy_name"
+          class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200"
+        >
+          <option value="FIRST_SEEN">FIRST_SEEN</option>
+          <option value="PREFER_ROOT">PREFER_ROOT</option>
+          <option value="SHORTEST_PATH">SHORTEST_PATH</option>
+        </select>
+      </label>
+
+      <label class="flex items-center gap-3 self-end pb-1 text-sm text-slate-700">
+        <input id="run-dry-run" name="dry_run" type="checkbox" class="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400" />
+        Dry run (skip apply)
+      </label>
+
+      <div class="md:col-span-2 flex items-center gap-3">
+        <button
+          id="run-execute-button"
+          type="submit"
+          class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+        >
+          Execute
+        </button>
+        <span id="run-loading-indicator" class="hidden text-sm text-slate-600">Running...</span>
+      </div>
+    </form>
+
+    <div id="run-summary" class="hidden space-y-2 rounded-lg bg-slate-50 p-4 ring-1 ring-slate-200">
+      <h4 class="text-sm font-semibold text-slate-900">Latest Run Summary</h4>
+      <dl class="grid grid-cols-1 gap-2 text-sm text-slate-700 md:grid-cols-2">
+        <div><dt class="font-medium">Run ID</dt><dd id="run-result-run-id" class="font-mono text-xs">--</dd></div>
+        <div><dt class="font-medium">Policy</dt><dd id="run-result-policy">--</dd></div>
+        <div><dt class="font-medium">Dry Run</dt><dd id="run-result-dry-run">--</dd></div>
+        <div><dt class="font-medium">Duplicates Found</dt><dd id="run-result-duplicates-found">--</dd></div>
+        <div><dt class="font-medium">Canonical Changes</dt><dd id="run-result-canonical-changes">--</dd></div>
+        <div><dt class="font-medium">Files Scanned</dt><dd id="run-result-files-scanned">--</dd></div>
+      </dl>
+    </div>
+  </section>
+
+  <section aria-labelledby="library-summary-heading" class="space-y-4">
+    <h3 id="library-summary-heading" class="text-lg font-semibold text-slate-900">Library Summary</h3>
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <article class="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+        <p class="text-sm text-slate-500">Total Files</p>
+        <p id="total-files" class="mt-2 text-3xl font-semibold text-slate-900">--</p>
+      </article>
+      <article class="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+        <p class="text-sm text-slate-500">Images</p>
+        <p id="total-images" class="mt-2 text-3xl font-semibold text-slate-900">--</p>
+      </article>
+      <article class="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+        <p class="text-sm text-slate-500">Videos</p>
+        <p id="total-videos" class="mt-2 text-3xl font-semibold text-slate-900">--</p>
+      </article>
+      <article class="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+        <p class="text-sm text-slate-500">Duplicate Groups</p>
+        <p id="duplicate-groups" class="mt-2 text-3xl font-semibold text-slate-900">--</p>
+      </article>
+      <article class="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+        <p class="text-sm text-slate-500">Canonical Files</p>
+        <p id="canonical-files" class="mt-2 text-3xl font-semibold text-slate-900">--</p>
+      </article>
+      <article class="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+        <p class="text-sm text-slate-500">Total Runs</p>
+        <p id="total-runs" class="mt-2 text-3xl font-semibold text-slate-900">--</p>
+      </article>
+    </div>
+    <p id="summary-error" class="text-xs text-slate-500"></p>
+  </section>
+
+  <section aria-labelledby="performance-metrics-heading" class="space-y-4">
+    <div class="flex items-center justify-between gap-3">
+      <h3 id="performance-metrics-heading" class="text-lg font-semibold text-slate-900">Performance Metrics</h3>
+      <span
+        id="regression-status-badge"
+        class="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-700 ring-1 ring-slate-200"
+      >
+        UNKNOWN
+      </span>
+    </div>
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <article class="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+        <p class="text-sm text-slate-500">Ingest Time</p>
+        <p id="ingest-time-ms" class="mt-2 text-2xl font-semibold text-slate-900">--</p>
+      </article>
+      <article class="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+        <p class="text-sm text-slate-500">Plan Time</p>
+        <p id="plan-time-ms" class="mt-2 text-2xl font-semibold text-slate-900">--</p>
+      </article>
+      <article class="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+        <p class="text-sm text-slate-500">Apply Time</p>
+        <p id="apply-time-ms" class="mt-2 text-2xl font-semibold text-slate-900">--</p>
+      </article>
+      <article class="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+        <p class="text-sm text-slate-500">DB Time</p>
+        <p id="db-time-ms" class="mt-2 text-2xl font-semibold text-slate-900">--</p>
+      </article>
+      <article class="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+        <p class="text-sm text-slate-500">Cache Hit Rate</p>
+        <p id="cache-hit-rate" class="mt-2 text-2xl font-semibold text-slate-900">--</p>
+      </article>
+    </div>
+    <p id="metrics-error" class="text-xs text-slate-500"></p>
+  </section>
+</section>
+
+<script>
+  const REGRESSION_BADGE_BASE_CLASSES = [
+    "inline-flex",
+    "items-center",
+    "rounded-full",
+    "px-3",
+    "py-1",
+    "text-xs",
+    "font-semibold",
+    "uppercase",
+    "tracking-wide",
+    "ring-1",
+  ];
+
+  function setText(id, value) {
+    const node = document.getElementById(id);
+    if (node) {
+      node.textContent = value;
+    }
+  }
+
+  function formatMs(value) {
+    if (typeof value !== "number" || Number.isNaN(value)) {
+      return "--";
+    }
+    return `${value.toFixed(1)} ms`;
+  }
+
+  function formatPercent(value) {
+    if (typeof value !== "number" || Number.isNaN(value)) {
+      return "--";
+    }
+    return `${value.toFixed(1)}%`;
+  }
+
+  function applyRegressionBadge(status) {
+    const badge = document.getElementById("regression-status-badge");
+    if (!badge) {
+      return;
+    }
+
+    const normalized = typeof status === "string" ? status.toUpperCase() : "UNKNOWN";
+    badge.className = REGRESSION_BADGE_BASE_CLASSES.join(" ");
+
+    if (normalized === "PASS") {
+      badge.classList.add("bg-emerald-100", "text-emerald-800", "ring-emerald-200");
+    } else if (normalized === "FAIL") {
+      badge.classList.add("bg-rose-100", "text-rose-800", "ring-rose-200");
+    } else {
+      badge.classList.add("bg-slate-100", "text-slate-700", "ring-slate-200");
+    }
+
+    badge.textContent = normalized;
+  }
+
+  async function loadDashboardSummary() {
+    try {
+      const response = await fetch("/api/dashboard-summary", {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(`dashboard-summary status ${response.status}`);
+      }
+      const payload = await response.json();
+      setText("total-files", String(payload.total_files ?? "--"));
+      setText("total-images", String(payload.total_images ?? "--"));
+      setText("total-videos", String(payload.total_videos ?? "--"));
+      setText("duplicate-groups", String(payload.duplicate_groups ?? "--"));
+      setText("canonical-files", String(payload.canonical_files ?? "--"));
+      setText("total-runs", String(payload.total_runs ?? "--"));
+      setText("summary-error", "");
+    } catch (error) {
+      setText("summary-error", "Unable to load library summary.");
+    }
+  }
+
+  async function loadLatestMetrics() {
+    try {
+      const response = await fetch("/api/latest-metrics", {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(`latest-metrics status ${response.status}`);
+      }
+      const payload = await response.json();
+      setText("ingest-time-ms", formatMs(payload.ingest_time_ms));
+      setText("plan-time-ms", formatMs(payload.plan_time_ms));
+      setText("apply-time-ms", formatMs(payload.apply_time_ms));
+      setText("db-time-ms", formatMs(payload.db_time_ms));
+      setText("cache-hit-rate", formatPercent(payload.cache_hit_rate));
+      applyRegressionBadge(payload.last_regression_status);
+      setText("metrics-error", "");
+    } catch (error) {
+      setText("metrics-error", "Unable to load performance metrics.");
+      applyRegressionBadge("UNKNOWN");
+    }
+  }
+
+  function setRunControlsDisabled(disabled) {
+    const folder = document.getElementById("run-folder-path");
+    const policy = document.getElementById("run-policy-name");
+    const dryRun = document.getElementById("run-dry-run");
+    const execute = document.getElementById("run-execute-button");
+    const loading = document.getElementById("run-loading-indicator");
+    for (const node of [folder, policy, dryRun, execute]) {
+      if (node) {
+        node.disabled = disabled;
+      }
+    }
+    if (loading) {
+      loading.classList.toggle("hidden", !disabled);
+    }
+  }
+
+  function clearRunError() {
+    const error = document.getElementById("run-trigger-error");
+    if (!error) {
+      return;
+    }
+    error.classList.add("hidden");
+    error.textContent = "";
+  }
+
+  function showRunError(message) {
+    const error = document.getElementById("run-trigger-error");
+    if (!error) {
+      return;
+    }
+    error.textContent = message;
+    error.classList.remove("hidden");
+  }
+
+  function renderRunSummary(payload) {
+    const summary = document.getElementById("run-summary");
+    if (summary) {
+      summary.classList.remove("hidden");
+    }
+
+    const metrics = payload.summary_metrics || {};
+    const ingest = metrics.ingest || {};
+    const duplicatesFound = payload.duplicates_found;
+    const canonicalChanges = payload.canonical_changes;
+
+    setText("run-result-run-id", String(payload.run_id ?? "--"));
+    setText("run-result-policy", String(metrics.policy_name ?? "--"));
+    setText("run-result-dry-run", String(metrics.dry_run ?? "--"));
+    setText("run-result-duplicates-found", String(duplicatesFound ?? "--"));
+    setText("run-result-canonical-changes", String(canonicalChanges ?? "--"));
+    setText("run-result-files-scanned", String(ingest.files_scanned ?? "--"));
+  }
+
+  async function executeRunTrigger(event) {
+    event.preventDefault();
+    clearRunError();
+    setRunControlsDisabled(true);
+
+    const folderPathNode = document.getElementById("run-folder-path");
+    const policyNameNode = document.getElementById("run-policy-name");
+    const dryRunNode = document.getElementById("run-dry-run");
+
+    const payload = {
+      folder_path: folderPathNode ? folderPathNode.value : "",
+      policy_name: policyNameNode ? policyNameNode.value : "FIRST_SEEN",
+      dry_run: dryRunNode ? dryRunNode.checked : false,
+    };
+
+    try {
+      const response = await fetch("/api/run", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        let message = `Run trigger failed (${response.status})`;
+        try {
+          const errorPayload = await response.json();
+          if (errorPayload && typeof errorPayload.detail === "string") {
+            message = errorPayload.detail;
+          }
+        } catch (error) {
+          // Use fallback message.
+        }
+        throw new Error(message);
+      }
+
+      const result = await response.json();
+      renderRunSummary(result);
+    } catch (error) {
+      showRunError(error instanceof Error ? error.message : "Run trigger failed.");
+    } finally {
+      setRunControlsDisabled(false);
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    loadDashboardSummary();
+    loadLatestMetrics();
+    const runForm = document.getElementById("run-trigger-form");
+    if (runForm) {
+      runForm.addEventListener("submit", executeRunTrigger);
+    }
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+
+{% block title %}Run History{% endblock %}
+
+{% block content %}
+<section class="space-y-6">
+  <div class="space-y-2">
+    <h2 class="text-3xl font-semibold tracking-tight">Run History</h2>
+    <p class="text-sm text-slate-600">Recent execution runs with planner counts, runtime estimates, and regression status.</p>
+  </div>
+
+  <section class="rounded-xl bg-white shadow-sm ring-1 ring-slate-200">
+    <div class="overflow-x-auto">
+      <table class="min-w-full divide-y divide-slate-200 text-sm">
+        <thead class="bg-slate-50">
+          <tr>
+            <th scope="col" class="px-4 py-3 text-left font-medium text-slate-600">Run ID</th>
+            <th scope="col" class="px-4 py-3 text-left font-medium text-slate-600">Timestamp</th>
+            <th scope="col" class="px-4 py-3 text-left font-medium text-slate-600">Files Processed</th>
+            <th scope="col" class="px-4 py-3 text-left font-medium text-slate-600">Duplicates Found</th>
+            <th scope="col" class="px-4 py-3 text-left font-medium text-slate-600">Runtime (ms)</th>
+            <th scope="col" class="px-4 py-3 text-left font-medium text-slate-600">Regression</th>
+          </tr>
+        </thead>
+        <tbody id="runs-table-body" class="divide-y divide-slate-100 bg-white">
+          <tr>
+            <td class="px-4 py-4 text-slate-500" colspan="6">Loading run history...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <p id="runs-error" class="text-xs text-slate-500"></p>
+</section>
+
+<script>
+  function formatRuntimeMs(value) {
+    if (typeof value !== "number" || Number.isNaN(value)) {
+      return "--";
+    }
+    return `${value.toFixed(1)} ms`;
+  }
+
+  function badgeClasses(status) {
+    const normalized = typeof status === "string" ? status.toUpperCase() : "UNKNOWN";
+    const base = "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1";
+    if (normalized === "PASS") {
+      return { text: "PASS", cls: `${base} bg-emerald-100 text-emerald-800 ring-emerald-200` };
+    }
+    if (normalized === "FAIL") {
+      return { text: "FAIL", cls: `${base} bg-rose-100 text-rose-800 ring-rose-200` };
+    }
+    return { text: "UNKNOWN", cls: `${base} bg-slate-100 text-slate-700 ring-slate-200` };
+  }
+
+  function clearRows(body) {
+    while (body.firstChild) {
+      body.removeChild(body.firstChild);
+    }
+  }
+
+  function appendCell(row, value, extraClass = "") {
+    const cell = document.createElement("td");
+    cell.className = `whitespace-nowrap px-4 py-3 text-slate-700 ${extraClass}`.trim();
+    cell.textContent = value;
+    row.appendChild(cell);
+    return cell;
+  }
+
+  function renderRows(items) {
+    const body = document.getElementById("runs-table-body");
+    if (!body) {
+      return;
+    }
+
+    clearRows(body);
+
+    if (!Array.isArray(items) || items.length === 0) {
+      const row = document.createElement("tr");
+      const cell = document.createElement("td");
+      cell.className = "px-4 py-4 text-slate-500";
+      cell.colSpan = 6;
+      cell.textContent = "No runs found.";
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+
+    for (const item of items) {
+      const row = document.createElement("tr");
+      appendCell(row, String(item.run_id ?? "--"), "font-mono text-xs");
+      appendCell(row, String(item.timestamp ?? "--"));
+      appendCell(row, String(item.files_processed ?? "0"));
+      appendCell(row, String(item.duplicates_found ?? "0"));
+      appendCell(row, formatRuntimeMs(item.runtime_ms));
+
+      const badgeCell = document.createElement("td");
+      badgeCell.className = "whitespace-nowrap px-4 py-3";
+      const badge = document.createElement("span");
+      const status = badgeClasses(item.regression_status);
+      badge.className = status.cls;
+      badge.textContent = status.text;
+      badgeCell.appendChild(badge);
+      row.appendChild(badgeCell);
+
+      body.appendChild(row);
+    }
+  }
+
+  async function loadRunHistory() {
+    try {
+      const response = await fetch("/api/runs", { headers: { Accept: "application/json" } });
+      if (!response.ok) {
+        throw new Error(`runs status ${response.status}`);
+      }
+      const payload = await response.json();
+      renderRows(payload);
+      const errorNode = document.getElementById("runs-error");
+      if (errorNode) {
+        errorNode.textContent = "";
+      }
+    } catch (error) {
+      renderRows([]);
+      const errorNode = document.getElementById("runs-error");
+      if (errorNode) {
+        errorNode.textContent = "Unable to load run history.";
+      }
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    loadRunHistory();
+  });
+</script>
+{% endblock %}
