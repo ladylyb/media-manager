@@ -3,15 +3,17 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 
-from media_manager.app.core.errors import PlanningStateError
+from media_manager.app.core.errors import MissingRequiredMetadataError, PlanningStateError
 from media_manager.app.core.state_machine import RunState
 from media_manager.app.persistence.ingest import IngestService
 from media_manager.app.persistence.models import (
     FailureEvent,
     FileContent,
     FileInstance,
+    MediaMetadata,
+    MetadataCode,
     PlannedAction,
     PlannedActionType,
     Run,
@@ -122,3 +124,106 @@ def test_planner_skips_inactive_canonical_instances(tmp_path: Path, session_fact
     summary = planner.plan_run(run.id, [path], ingest_if_needed=False)
     assert summary.scanned_count == 0
     assert summary.skipped_count >= 1
+
+
+def test_planner_skips_missing_required_metadata_when_not_strict(tmp_path: Path, session_factory) -> None:
+    run_service = RunService(session_factory)
+    planner = PlanningService(session_factory)
+    ingest = IngestService(session_factory)
+
+    path = _write_file(tmp_path / "missing-owner.jpg", b"x")
+    ingest.ingest_paths([path])
+    with session_factory.begin() as session:
+        content_id = session.scalar(select(FileInstance.content_id).where(FileInstance.absolute_path == str(path.resolve())))
+        owner_code_id = session.scalar(select(MetadataCode.id).where(MetadataCode.code_type == "OWNER"))
+        session.execute(
+            delete(MediaMetadata).where(
+                MediaMetadata.content_id == content_id,
+                MediaMetadata.code_id == owner_code_id,
+            )
+        )
+
+    run = run_service.create_run()
+    summary = planner.plan_run(
+        run.id,
+        [path],
+        ingest_if_needed=False,
+        strict_missing_metadata=False,
+        required_metadata_codes={"OWNER", "CONTEXT", "TAKEN_DT"},
+    )
+    assert summary.scanned_count == 0
+    assert summary.skipped_count == 1
+    with session_factory() as session:
+        actions = session.scalars(select(PlannedAction).where(PlannedAction.run_id == run.id)).all()
+        assert actions == []
+
+
+def test_planner_raises_missing_required_metadata_when_strict(tmp_path: Path, session_factory) -> None:
+    run_service = RunService(session_factory)
+    planner = PlanningService(session_factory)
+    ingest = IngestService(session_factory)
+
+    path = _write_file(tmp_path / "missing-context.jpg", b"x")
+    ingest.ingest_paths([path])
+    with session_factory.begin() as session:
+        content_id = session.scalar(select(FileInstance.content_id).where(FileInstance.absolute_path == str(path.resolve())))
+        context_code_id = session.scalar(select(MetadataCode.id).where(MetadataCode.code_type == "CONTEXT"))
+        session.execute(
+            delete(MediaMetadata).where(
+                MediaMetadata.content_id == content_id,
+                MediaMetadata.code_id == context_code_id,
+            )
+        )
+
+    run = run_service.create_run()
+    with pytest.raises(MissingRequiredMetadataError):
+        planner.plan_run(
+            run.id,
+            [path],
+            ingest_if_needed=False,
+            strict_missing_metadata=True,
+            required_metadata_codes={"OWNER", "CONTEXT", "TAKEN_DT"},
+        )
+
+
+def test_planner_missing_metadata_warning_has_structured_fields(
+    tmp_path: Path, session_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_service = RunService(session_factory)
+    planner = PlanningService(session_factory)
+    ingest = IngestService(session_factory)
+    warnings: list[dict] = []
+
+    path = _write_file(tmp_path / "missing-owner-structured.jpg", b"x")
+    ingest.ingest_paths([path])
+    with session_factory.begin() as session:
+        content_id = session.scalar(select(FileInstance.content_id).where(FileInstance.absolute_path == str(path.resolve())))
+        owner_code_id = session.scalar(select(MetadataCode.id).where(MetadataCode.code_type == "OWNER"))
+        session.execute(
+            delete(MediaMetadata).where(
+                MediaMetadata.content_id == content_id,
+                MediaMetadata.code_id == owner_code_id,
+            )
+        )
+
+    def _capture(message: str, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        if message == "Missing required metadata":
+            warnings.append(kwargs.get("extra", {}))
+
+    import media_manager.app.persistence.planner as planner_module
+
+    monkeypatch.setattr(planner_module.logger, "warning", _capture)
+    run = run_service.create_run()
+    planner.plan_run(
+        run.id,
+        [path],
+        ingest_if_needed=False,
+        strict_missing_metadata=False,
+        required_metadata_codes={"OWNER", "CONTEXT", "TAKEN_DT"},
+    )
+    assert len(warnings) == 1
+    extra = warnings[0]
+    assert extra["content_id"]
+    assert extra["file_instance_id"]
+    assert extra["missing_codes"] == ["OWNER"]
+    assert extra["strict_missing_metadata"] is False

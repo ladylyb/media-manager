@@ -80,6 +80,11 @@ class Run(Base):
         cascade="save-update, merge",
         passive_deletes=True,
     )
+    apply_audit_runs: Mapped[list[ApplyAuditRun]] = relationship(
+        back_populates="run",
+        cascade="save-update, merge",
+        passive_deletes=True,
+    )
 
 
 Index(
@@ -268,11 +273,73 @@ class PlannedAction(Base):
 
     run: Mapped[Run] = relationship(back_populates="planned_actions")
     file_instance: Mapped[FileInstance] = relationship(back_populates="planned_actions")
+    apply_audit_items: Mapped[list[ApplyAuditItem]] = relationship(
+        back_populates="planned_action",
+        cascade="save-update, merge",
+        passive_deletes=True,
+    )
 
 
 Index("idx_planned_actions_run_id", PlannedAction.run_id)
 Index("idx_planned_actions_file_id", PlannedAction.file_id)
 Index("idx_planned_actions_action_type", PlannedAction.action_type)
+
+
+class ApplyAuditRun(Base):
+    __tablename__ = "apply_audit_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("runs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    total_actions: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    applied_actions: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    skipped_actions: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    collision_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    run: Mapped[Run] = relationship(back_populates="apply_audit_runs")
+    items: Mapped[list[ApplyAuditItem]] = relationship(
+        back_populates="audit_run",
+        cascade="save-update, merge",
+        passive_deletes=True,
+    )
+
+
+Index("idx_apply_audit_runs_run_id", ApplyAuditRun.run_id)
+
+
+class ApplyAuditItem(Base):
+    __tablename__ = "apply_audit_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("apply_audit_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    planned_action_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("planned_actions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    source_path: Mapped[str] = mapped_column(Text, nullable=False)
+    target_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result: Mapped[str] = mapped_column(Text, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    audit_run: Mapped[ApplyAuditRun] = relationship(back_populates="items")
+    planned_action: Mapped[PlannedAction] = relationship(back_populates="apply_audit_items")
+
+
+Index("idx_apply_audit_items_run_id", ApplyAuditItem.run_id)
+Index("idx_apply_audit_items_planned_action_id", ApplyAuditItem.planned_action_id)
 
 
 class MetadataCode(Base):

@@ -114,7 +114,7 @@ def _render_ingest_output(summary) -> None:
     print("----------------------------------------")
 
 
-def _plan_command(path_arg: str) -> int:
+def _plan_command(path_arg: str, *, strict_metadata: bool = False) -> int:
     path = Path(path_arg)
     if not path.exists():
         print(f"Path does not exist: {path}", file=sys.stderr)
@@ -130,7 +130,12 @@ def _plan_command(path_arg: str) -> int:
     ingest_service.ingest_paths(ingest_files)
 
     run = run_service.create_run()
-    summary = planner.plan_run(run.id, ingest_files, ingest_if_needed=False)
+    summary = planner.plan_run(
+        run.id,
+        ingest_files,
+        ingest_if_needed=False,
+        strict_missing_metadata=strict_metadata,
+    )
 
     with session_factory() as session:
         planned_actions = session.scalars(
@@ -143,7 +148,7 @@ def _plan_command(path_arg: str) -> int:
     return 0
 
 
-def _apply_command(run_id_arg: str) -> int:
+def _apply_command(run_id_arg: str, *, collision_mode: str = "rename") -> int:
     try:
         run_id = uuid.UUID(run_id_arg)
     except ValueError:
@@ -155,7 +160,7 @@ def _apply_command(run_id_arg: str) -> int:
     apply_service = ApplyService(session_factory)
 
     try:
-        summary = apply_service.apply_run(run_id)
+        summary = apply_service.apply_run(run_id, collision_mode=collision_mode)  # type: ignore[arg-type]
     except MediaManagerError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -199,18 +204,29 @@ def main(argv: list[str] | None = None) -> int:
 
     plan_parser = subparsers.add_parser("plan", help="Create a deterministic plan for file organization.")
     plan_parser.add_argument("path", help="File or directory path to plan.")
+    plan_parser.add_argument(
+        "--strict-metadata",
+        action="store_true",
+        help="Raise on missing required metadata codes during planning.",
+    )
     ingest_parser = subparsers.add_parser("ingest", help="Ingest files into logical content/instance tables.")
     ingest_parser.add_argument("path", help="File or directory path to ingest.")
     apply_parser = subparsers.add_parser("apply", help="Apply an existing planned run.")
     apply_parser.add_argument("run_id", help="Run identifier to apply.")
+    apply_parser.add_argument(
+        "--collision-mode",
+        choices=["rename", "skip", "fail"],
+        default="rename",
+        help="Collision behavior when target path already exists.",
+    )
 
     args = parser.parse_args(argv)
     if args.command == "plan":
-        return _plan_command(args.path)
+        return _plan_command(args.path, strict_metadata=args.strict_metadata)
     if args.command == "ingest":
         return _ingest_command(args.path)
     if args.command == "apply":
-        return _apply_command(args.run_id)
+        return _apply_command(args.run_id, collision_mode=args.collision_mode)
 
     parser.print_help()
     return 2

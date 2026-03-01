@@ -13,7 +13,8 @@ from time import perf_counter
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from media_manager.app.core.errors import PlanningStateError
+from media_manager.app.core.config import resolve_required_metadata_codes
+from media_manager.app.core.errors import MissingRequiredMetadataError, PlanningStateError
 from media_manager.app.core.filenames import generate_canonical_filename, infer_media_type_from_extension
 from media_manager.app.core.logging_config import get_logger
 from media_manager.app.core.metadata_cache import MetadataCache
@@ -72,6 +73,8 @@ class PlanningService:
         input_paths: list[Path] | None = None,
         *,
         ingest_if_needed: bool = True,
+        required_metadata_codes: set[str] | None = None,
+        strict_missing_metadata: bool = False,
     ) -> PlanningSummary:
         try:
             with transactional_session(self._session_factory) as session:
@@ -109,6 +112,13 @@ class PlanningService:
                 duplicate_actions = 0
                 canonical_instances_processed = 0
                 skipped_inactive_instances = 0
+                skipped_missing_metadata_count = 0
+                total_required_codes_missing = 0
+                resolved_required_codes = (
+                    {code.upper() for code in required_metadata_codes}
+                    if required_metadata_codes is not None
+                    else resolve_required_metadata_codes()
+                )
 
                 rows = self._load_candidate_instances(session, input_paths)
                 if input_paths and ingest_if_needed:
@@ -123,13 +133,16 @@ class PlanningService:
                         skipped_count += 1
                         continue
                     canonical_instances_processed += 1
-                    action = self._plan_single_instance(
+                    action, missing_required_count = self._plan_single_instance(
                         session,
                         run,
                         instance,
                         base_root,
                         reserved_paths,
+                        resolved_required_codes,
+                        strict_missing_metadata,
                     )
+                    total_required_codes_missing += missing_required_count
                     if action == PlannedActionType.RENAME.value:
                         scanned_count += 1
                         supported_count += 1
@@ -142,6 +155,9 @@ class PlanningService:
                         scanned_count += 1
                         supported_count += 1
                         duplicate_actions += 1
+                    elif action == "SKIPPED_MISSING_METADATA":
+                        skipped_count += 1
+                        skipped_missing_metadata_count += 1
                     else:
                         skipped_count += 1
 
@@ -167,6 +183,8 @@ class PlanningService:
                         "duplicates": summary.duplicate_actions,
                         "noop": summary.noop_actions,
                         "errors": 0,
+                        "skipped_missing_metadata_count": skipped_missing_metadata_count,
+                        "total_required_codes_missing": total_required_codes_missing,
                     },
                 )
                 cache_stats = self._metadata_cache.stats()
@@ -186,7 +204,9 @@ class PlanningService:
                             f"lookup_cache_s={self._metadata_lookup_cache_time_s:.6f},"
                             f"hit_rate={cache_stats.hit_rate:.4f},"
                             f"canonical_instances_processed={canonical_instances_processed},"
-                            f"skipped_inactive_instances={skipped_inactive_instances}"
+                            f"skipped_inactive_instances={skipped_inactive_instances},"
+                            f"skipped_missing_metadata_count={skipped_missing_metadata_count},"
+                            f"total_required_codes_missing={total_required_codes_missing}"
                         ),
                     },
                 )
@@ -390,7 +410,9 @@ class PlanningService:
         instance: FileInstance,
         base_root: Path,
         reserved_paths: set[str],
-    ) -> str:
+        required_metadata_codes: set[str],
+        strict_missing_metadata: bool,
+    ) -> tuple[str, int]:
         source = Path(instance.absolute_path)
         source_path = str(source.resolve(strict=False))
         existing_for_file = self._get_existing_plan_for_file(
@@ -399,27 +421,42 @@ class PlanningService:
         if existing_for_file is not None:
             if existing_for_file.target_path:
                 reserved_paths.add(str(Path(existing_for_file.target_path).resolve(strict=False)))
-            return existing_for_file.action_type
+            return existing_for_file.action_type, 0
 
         metadata_map = self._load_metadata_by_content_id(session, instance.content_id)
-        owner = metadata_map.get("OWNER")
-        context = metadata_map.get("CONTEXT")
-        taken_dt_raw = metadata_map.get("TAKEN_DT")
-        if not owner or not context or not taken_dt_raw:
-            logger.info(
-                "Metadata skipped",
+        present_codes = {code.upper() for code in metadata_map.keys()}
+        missing_required = sorted(required_metadata_codes - present_codes)
+        if missing_required:
+            if strict_missing_metadata:
+                raise MissingRequiredMetadataError(
+                    content_id=str(instance.content_id),
+                    file_instance_id=str(instance.file_instance_id),
+                    missing_codes=missing_required,
+                )
+            logger.warning(
+                "Missing required metadata",
                 extra={
                     "run_id": str(run.id),
                     "phase": "plan",
                     "action": "SKIPPED",
+                    "content_id": str(instance.content_id),
+                    "file_instance_id": str(instance.file_instance_id),
+                    "missing_codes": missing_required,
+                    "strict_missing_metadata": strict_missing_metadata,
                     "codes_extracted": ",".join(sorted(metadata_map.keys())),
                 },
             )
-            return "SKIPPED_MISSING_METADATA"
+            return "SKIPPED_MISSING_METADATA", len(missing_required)
+
+        owner = metadata_map.get("OWNER")
+        context = metadata_map.get("CONTEXT")
+        taken_dt_raw = metadata_map.get("TAKEN_DT")
+        if not owner or not context or not taken_dt_raw:
+            return "SKIPPED_MISSING_METADATA", 0
 
         media_type = infer_media_type_from_extension(source)
         if media_type is None:
-            return "SKIPPED_UNSUPPORTED_MIME"
+            return "SKIPPED_UNSUPPORTED_MIME", 0
 
         taken_datetime = datetime.fromisoformat(taken_dt_raw)
         canonical_filename = generate_canonical_filename(
@@ -474,7 +511,7 @@ class PlanningService:
             )
             session.add(plan)
             session.flush()
-        return action_type
+        return action_type, 0
 
     def _record_planning_failure(self, run_id: uuid.UUID, code: str, message: str) -> None:
         with transactional_session(self._session_factory) as session:

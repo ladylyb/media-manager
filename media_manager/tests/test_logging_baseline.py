@@ -131,7 +131,7 @@ def test_apply_logs_exception_on_simulated_failure(
     run_id = _create_planned_run(tmp_path, session_factory)
     service = ApplyService(session_factory)
 
-    def _raise(_session, _run_id, _action) -> None:
+    def _raise(_run_id, _action, _collision_mode) -> None:
         raise RuntimeError("simulated apply failure")
 
     monkeypatch.setattr(service, "_execute_action", _raise)
@@ -139,6 +139,14 @@ def test_apply_logs_exception_on_simulated_failure(
         service.apply_run(run_id)
 
     assert any(msg == "Apply failed" and extra.get("phase") == "apply" for msg, extra in exception_calls)
+    assert any(msg == "Apply failed" and extra.get("collision_mode") == "rename" for msg, extra in exception_calls)
+    assert any(
+        msg == "Apply action failed"
+        and extra.get("planned_action_id")
+        and extra.get("file_instance_id")
+        and extra.get("collision_mode") == "rename"
+        for msg, extra in exception_calls
+    )
 
     with session_factory() as session:
         run = session.scalar(select(Run).where(Run.id == run_id))

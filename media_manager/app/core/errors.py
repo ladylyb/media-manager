@@ -38,3 +38,28 @@ class PlanningStateError(MediaManagerError):
 
 class ApplyStateError(MediaManagerError):
     """Raised when apply is attempted from an invalid run state."""
+
+
+class MissingRequiredMetadataError(MediaManagerError):
+    """Raised when strict planning finds missing required metadata."""
+
+    def __init__(self, content_id: str, file_instance_id: str, missing_codes: list[str]) -> None:
+        missing_joined = ",".join(missing_codes)
+        super().__init__(
+            "Missing required metadata "
+            f"(content_id={content_id}, file_instance_id={file_instance_id}, missing_codes={missing_joined})"
+        )
+
+
+class CollisionResolutionError(MediaManagerError):
+    """Raised when apply cannot resolve a destination collision deterministically."""
+
+    def __init__(self, original_target_path: str, collision_mode: str, attempt_count: int) -> None:
+        super().__init__(
+            "Collision resolution failed "
+            f"(target={original_target_path}, collision_mode={collision_mode}, attempt_count={attempt_count})"
+        )
+
+
+class ApplyIntegrityException(MediaManagerError):
+    """Raised when post-apply verification detects integrity violations."""
