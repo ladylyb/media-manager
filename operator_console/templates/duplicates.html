@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+
+{% block title %}Duplicate Browser{% endblock %}
+
+{% block content %}
+<section class="space-y-6">
+  <div class="space-y-2">
+    <h2 class="text-3xl font-semibold tracking-tight">Duplicate Group Browser</h2>
+    <p class="text-sm text-slate-600">Browse duplicate groups, inspect active file instances, and identify current canonical selections.</p>
+  </div>
+
+  <section class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+    <div class="rounded-xl bg-white shadow-sm ring-1 ring-slate-200 lg:col-span-1">
+      <div class="border-b border-slate-200 px-4 py-3">
+        <h3 class="text-sm font-semibold text-slate-900">Groups</h3>
+        <p id="duplicate-group-count" class="text-xs text-slate-500">Loading...</p>
+      </div>
+      <div id="duplicate-group-list" class="max-h-[28rem] overflow-y-auto p-2">
+        <p class="rounded-md px-3 py-2 text-sm text-slate-500">Loading duplicate groups...</p>
+      </div>
+    </div>
+
+    <div class="rounded-xl bg-white shadow-sm ring-1 ring-slate-200 lg:col-span-2">
+      <div class="border-b border-slate-200 px-4 py-3">
+        <h3 class="text-sm font-semibold text-slate-900">Group Details</h3>
+        <p id="duplicate-selected-group" class="text-xs text-slate-500">Select a group to inspect files.</p>
+      </div>
+      <div id="duplicate-group-detail" class="space-y-3 p-4">
+        <p class="rounded-md border border-dashed border-slate-200 px-3 py-4 text-sm text-slate-500">No group selected.</p>
+      </div>
+    </div>
+  </section>
+
+  <p id="duplicates-error" class="text-xs text-slate-500"></p>
+</section>
+
+<script>
+  let duplicateGroups = [];
+  let selectedGroupId = null;
+
+  function byId(id) {
+    return document.getElementById(id);
+  }
+
+  function setText(id, value) {
+    const node = byId(id);
+    if (!node) {
+      return;
+    }
+    node.textContent = value;
+  }
+
+  function clearNode(node) {
+    while (node.firstChild) {
+      node.removeChild(node.firstChild);
+    }
+  }
+
+  function statusBadge(isCanonical) {
+    const badge = document.createElement("span");
+    badge.className = isCanonical
+      ? "inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-800 ring-1 ring-emerald-200"
+      : "inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200";
+    badge.textContent = isCanonical ? "Canonical" : "Duplicate";
+    return badge;
+  }
+
+  function renderGroupList() {
+    const list = byId("duplicate-group-list");
+    if (!list) {
+      return;
+    }
+    clearNode(list);
+
+    if (!Array.isArray(duplicateGroups) || duplicateGroups.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "rounded-md px-3 py-2 text-sm text-slate-500";
+      empty.textContent = "No duplicate groups found.";
+      list.appendChild(empty);
+      return;
+    }
+
+    for (const group of duplicateGroups) {
+      const button = document.createElement("button");
+      const isActive = group.group_id === selectedGroupId;
+      button.type = "button";
+      button.className = isActive
+        ? "mb-2 w-full rounded-md border border-slate-300 bg-slate-100 px-3 py-2 text-left text-sm"
+        : "mb-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-left text-sm hover:bg-slate-50";
+      button.addEventListener("click", () => {
+        selectedGroupId = group.group_id;
+        renderGroupList();
+        renderGroupDetail();
+      });
+
+      const title = document.createElement("p");
+      title.className = "font-medium text-slate-900";
+      title.textContent = `Group ${group.group_id}`;
+      button.appendChild(title);
+
+      const subtitle = document.createElement("p");
+      subtitle.className = "text-xs text-slate-500";
+      const count = Array.isArray(group.files) ? group.files.length : 0;
+      subtitle.textContent = `${count} file${count === 1 ? "" : "s"}`;
+      button.appendChild(subtitle);
+
+      list.appendChild(button);
+    }
+  }
+
+  function renderGroupDetail() {
+    const detail = byId("duplicate-group-detail");
+    if (!detail) {
+      return;
+    }
+    clearNode(detail);
+
+    if (!selectedGroupId) {
+      const empty = document.createElement("p");
+      empty.className = "rounded-md border border-dashed border-slate-200 px-3 py-4 text-sm text-slate-500";
+      empty.textContent = "No group selected.";
+      detail.appendChild(empty);
+      setText("duplicate-selected-group", "Select a group to inspect files.");
+      return;
+    }
+
+    const group = duplicateGroups.find((item) => item.group_id === selectedGroupId);
+    if (!group || !Array.isArray(group.files) || group.files.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "rounded-md border border-dashed border-slate-200 px-3 py-4 text-sm text-slate-500";
+      empty.textContent = "No files in selected group.";
+      detail.appendChild(empty);
+      setText("duplicate-selected-group", `Group ${selectedGroupId}`);
+      return;
+    }
+
+    setText("duplicate-selected-group", `Group ${selectedGroupId}`);
+
+    const canonicalId = group.canonical_file && group.canonical_file.file_instance_id
+      ? String(group.canonical_file.file_instance_id)
+      : null;
+
+    for (const file of group.files) {
+      const row = document.createElement("div");
+      const isCanonical = canonicalId !== null && String(file.file_instance_id) === canonicalId;
+      row.className = isCanonical
+        ? "flex gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3"
+        : "flex gap-3 rounded-lg border border-slate-200 bg-white p-3";
+
+      const thumbContainer = document.createElement("div");
+      thumbContainer.className = "h-14 w-14 shrink-0 overflow-hidden rounded-md bg-slate-100 ring-1 ring-slate-200";
+      if (file.is_image === true && typeof file.thumbnail_url === "string") {
+        const img = document.createElement("img");
+        img.src = file.thumbnail_url;
+        img.alt = "thumbnail";
+        img.className = "h-full w-full object-cover";
+        img.loading = "lazy";
+        img.addEventListener("error", () => {
+          clearNode(thumbContainer);
+          const fallback = document.createElement("div");
+          fallback.className = "flex h-full w-full items-center justify-center text-[10px] text-slate-500";
+          fallback.textContent = "No preview";
+          thumbContainer.appendChild(fallback);
+        });
+        thumbContainer.appendChild(img);
+      } else {
+        const fallback = document.createElement("div");
+        fallback.className = "flex h-full w-full items-center justify-center text-[10px] text-slate-500";
+        fallback.textContent = "File";
+        thumbContainer.appendChild(fallback);
+      }
+      row.appendChild(thumbContainer);
+
+      const content = document.createElement("div");
+      content.className = "min-w-0 flex-1";
+
+      const pathNode = document.createElement("p");
+      pathNode.className = "truncate font-mono text-xs text-slate-700";
+      pathNode.textContent = String(file.absolute_path ?? "--");
+      content.appendChild(pathNode);
+
+      const metaRow = document.createElement("div");
+      metaRow.className = "mt-2 flex items-center gap-2";
+      metaRow.appendChild(statusBadge(isCanonical));
+      const idNode = document.createElement("span");
+      idNode.className = "text-[11px] text-slate-500";
+      idNode.textContent = `ID: ${String(file.file_instance_id ?? "--")}`;
+      metaRow.appendChild(idNode);
+      content.appendChild(metaRow);
+
+      row.appendChild(content);
+      detail.appendChild(row);
+    }
+  }
+
+  async function loadDuplicateGroups() {
+    try {
+      const response = await fetch("/api/duplicates", { headers: { Accept: "application/json" } });
+      if (!response.ok) {
+        throw new Error(`duplicates status ${response.status}`);
+      }
+
+      const payload = await response.json();
+      duplicateGroups = Array.isArray(payload.groups) ? payload.groups : [];
+      selectedGroupId = duplicateGroups.length > 0 ? String(duplicateGroups[0].group_id) : null;
+
+      setText("duplicate-group-count", `${duplicateGroups.length} group${duplicateGroups.length === 1 ? "" : "s"}`);
+      setText("duplicates-error", "");
+      renderGroupList();
+      renderGroupDetail();
+    } catch (error) {
+      duplicateGroups = [];
+      selectedGroupId = null;
+      setText("duplicate-group-count", "0 groups");
+      setText("duplicates-error", "Unable to load duplicate groups.");
+      renderGroupList();
+      renderGroupDetail();
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    loadDuplicateGroups();
+  });
+</script>
+{% endblock %}

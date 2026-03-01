@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from fastapi.testclient import TestClient
 
@@ -66,6 +68,39 @@ class _FakeService:
                 }
             ),
         ]
+
+    def get_duplicate_groups(self, limit: int | None = None) -> list["_FakePayload"]:
+        _ = limit
+        return [
+            _FakePayload(
+                {
+                    "group_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                    "files": [
+                        {
+                            "file_instance_id": "aaaaaaaa-0000-0000-0000-000000000001",
+                            "absolute_path": "/dataset/a.jpg",
+                            "is_image": True,
+                            "thumbnail_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000001",
+                        },
+                        {
+                            "file_instance_id": "aaaaaaaa-0000-0000-0000-000000000002",
+                            "absolute_path": "/dataset/b.jpg",
+                            "is_image": True,
+                            "thumbnail_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000002",
+                        },
+                    ],
+                    "canonical_file": {
+                        "file_instance_id": "aaaaaaaa-0000-0000-0000-000000000001",
+                        "absolute_path": "/dataset/a.jpg",
+                    },
+                }
+            )
+        ]
+
+    def resolve_thumbnail_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:
+        if str(file_instance_id) == "aaaaaaaa-0000-0000-0000-000000000001":
+            return Path(__file__), "image/jpeg"
+        return None
 
 
 class _FakePayload:
@@ -196,6 +231,7 @@ def test_dashboard_route_renders_template() -> None:
     assert "Media Manager Operator Console" in response.text
     assert "Dashboard</a>" in response.text
     assert "Runs</a>" in response.text
+    assert "Duplicates</a>" in response.text
     assert "Policy</a>" in response.text
     assert "https://cdn.tailwindcss.com" in response.text
 
@@ -282,6 +318,80 @@ def test_runs_endpoint_returns_json() -> None:
             "regression_status": "FAIL",
         },
     ]
+
+
+def test_duplicates_page_renders_template() -> None:
+    """GET /duplicates should render the duplicate group browser page template."""
+    client = TestClient(app)
+
+    response = client.get("/duplicates")
+
+    assert response.status_code == 200
+    assert "Duplicate Group Browser" in response.text
+    assert "Group Details" in response.text
+    assert "Loading duplicate groups" in response.text
+
+
+def test_duplicates_endpoint_returns_json() -> None:
+    """GET /api/duplicates should return duplicate group payload."""
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/api/duplicates")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "groups": [
+            {
+                "group_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "files": [
+                    {
+                        "file_instance_id": "aaaaaaaa-0000-0000-0000-000000000001",
+                        "absolute_path": "/dataset/a.jpg",
+                        "is_image": True,
+                        "thumbnail_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000001",
+                    },
+                    {
+                        "file_instance_id": "aaaaaaaa-0000-0000-0000-000000000002",
+                        "absolute_path": "/dataset/b.jpg",
+                        "is_image": True,
+                        "thumbnail_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000002",
+                    },
+                ],
+                "canonical_file": {
+                    "file_instance_id": "aaaaaaaa-0000-0000-0000-000000000001",
+                    "absolute_path": "/dataset/a.jpg",
+                },
+            }
+        ]
+    }
+
+
+def test_thumbnail_endpoint_returns_file_response() -> None:
+    """GET /api/thumbnail/{id} should stream image bytes when eligible."""
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000001")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/jpeg")
+
+
+def test_thumbnail_endpoint_returns_404_for_missing_or_ineligible() -> None:
+    """GET /api/thumbnail/{id} should return 404 when thumbnail is unavailable."""
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000099")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404
 
 
 def test_policy_page_renders_template() -> None:

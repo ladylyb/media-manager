@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -91,6 +92,11 @@ def create_app() -> FastAPI:
         """Render the Operator Console policy management page."""
         return templates.TemplateResponse(request, "policy.html", {})
 
+    @app.get("/duplicates", response_class=HTMLResponse)
+    def duplicates_page(request: Request) -> HTMLResponse:
+        """Render the Operator Console duplicate group browser page."""
+        return templates.TemplateResponse(request, "duplicates.html", {})
+
     @app.get("/api/dashboard-summary")
     def dashboard_summary(
         service: OperatorConsoleReadService = Depends(get_operator_console_service),
@@ -111,6 +117,25 @@ def create_app() -> FastAPI:
     ) -> list[dict[str, str | int | float | None]]:
         """Return recent run history rows for the Operator Console."""
         return [item.to_dict() for item in service.get_run_history(limit=50)]
+
+    @app.get("/api/duplicates")
+    def duplicates(
+        service: OperatorConsoleReadService = Depends(get_operator_console_service),
+    ) -> dict[str, list[dict[str, object]]]:
+        """Return duplicate groups and canonical-file mapping for browser UI."""
+        return {"groups": [group.to_dict() for group in service.get_duplicate_groups()]}
+
+    @app.get("/api/thumbnail/{file_instance_id}")
+    def thumbnail(
+        file_instance_id: UUID,
+        service: OperatorConsoleReadService = Depends(get_operator_console_service),
+    ) -> FileResponse:
+        """Return source bytes for an active image instance thumbnail preview."""
+        resolved = service.resolve_thumbnail_source(file_instance_id)
+        if resolved is None:
+            raise HTTPException(status_code=404, detail="Thumbnail not available.")
+        path, media_type = resolved
+        return FileResponse(path=path, media_type=media_type)
 
     @app.get("/api/policy")
     def get_policy(
