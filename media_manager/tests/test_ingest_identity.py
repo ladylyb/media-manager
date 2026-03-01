@@ -6,7 +6,7 @@ from time import sleep
 from sqlalchemy import select
 
 from media_manager.app.persistence.ingest import IngestService
-from media_manager.app.persistence.models import FileContent, FileInstance, MediaMetadata
+from media_manager.app.persistence.models import CanonicalAssignment, FileContent, FileInstance, MediaMetadata
 
 
 def _write_file(path: Path, payload: bytes) -> Path:
@@ -57,9 +57,15 @@ def test_canonical_selection_first_seen_wins(tmp_path: Path, session_factory) ->
     with session_factory() as session:
         content = session.scalar(select(FileContent))
         first_instance = session.scalar(select(FileInstance).where(FileInstance.absolute_path == str(first)))
+        assignment = session.scalar(
+            select(CanonicalAssignment)
+            .where(CanonicalAssignment.content_id == content.content_id)  # type: ignore[union-attr]
+            .order_by(CanonicalAssignment.assigned_at.desc(), CanonicalAssignment.assignment_id.desc())
+        )
         assert content is not None
         assert first_instance is not None
-        assert content.canonical_file_instance_id == first_instance.file_instance_id
+        assert assignment is not None
+        assert assignment.canonical_instance_id == first_instance.file_instance_id
 
 
 def test_ingest_rerun_updates_last_seen_without_duplicate_instance(tmp_path: Path, session_factory) -> None:
