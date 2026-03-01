@@ -40,6 +40,16 @@ class _StructuredDefaultsFilter(logging.Filter):
             record.errors = "-"
         if not hasattr(record, "applied"):
             record.applied = "-"
+        if not hasattr(record, "duration_s"):
+            record.duration_s = "-"
+        if not hasattr(record, "files_count"):
+            record.files_count = "-"
+        if not hasattr(record, "batch_size"):
+            record.batch_size = "-"
+        if not hasattr(record, "cache_hits"):
+            record.cache_hits = "-"
+        if not hasattr(record, "cache_misses"):
+            record.cache_misses = "-"
         return True
 
 
@@ -61,7 +71,9 @@ def configure_logging() -> None:
             "codes_extracted=%(codes_extracted)s "
             "scanned=%(scanned)s supported=%(supported)s skipped=%(skipped)s "
             "moves=%(moves)s duplicates=%(duplicates)s noop=%(noop)s "
-            "applied=%(applied)s errors=%(errors)s %(message)s"
+            "applied=%(applied)s errors=%(errors)s "
+            "duration_s=%(duration_s)s files_count=%(files_count)s batch_size=%(batch_size)s "
+            "cache_hits=%(cache_hits)s cache_misses=%(cache_misses)s %(message)s"
         ),
     )
     root_logger = logging.getLogger()
@@ -74,7 +86,9 @@ def configure_logging() -> None:
         "codes_extracted=%(codes_extracted)s "
         "scanned=%(scanned)s supported=%(supported)s skipped=%(skipped)s "
         "moves=%(moves)s duplicates=%(duplicates)s noop=%(noop)s "
-        "applied=%(applied)s errors=%(errors)s %(message)s",
+        "applied=%(applied)s errors=%(errors)s "
+        "duration_s=%(duration_s)s files_count=%(files_count)s batch_size=%(batch_size)s "
+        "cache_hits=%(cache_hits)s cache_misses=%(cache_misses)s %(message)s",
         defaults={
             "run_id": "-",
             "phase": "-",
@@ -91,6 +105,11 @@ def configure_logging() -> None:
             "noop": "-",
             "applied": "-",
             "errors": "-",
+            "duration_s": "-",
+            "files_count": "-",
+            "batch_size": "-",
+            "cache_hits": "-",
+            "cache_misses": "-",
         },
     )
     for handler in root_logger.handlers:

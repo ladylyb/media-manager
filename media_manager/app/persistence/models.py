@@ -48,6 +48,11 @@ class PlannedActionType(StrEnum):
     COLLISION_RESOLVED = "COLLISION_RESOLVED"
 
 
+class FileInstanceStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    DELETED = "DELETED"
+
+
 class Run(Base):
     __tablename__ = "runs"
 
@@ -113,6 +118,8 @@ class FailureEvent(Base):
 
 
 class ContentObject(Base):
+    """Legacy table retained for one transition release."""
+
     __tablename__ = "content_objects"
 
     hash: Mapped[str] = mapped_column(Text, primary_key=True)
@@ -126,14 +133,11 @@ class ContentObject(Base):
         cascade="save-update, merge",
         passive_deletes=True,
     )
-    metadata_rows: Mapped[list[MediaMetadata]] = relationship(
-        back_populates="content_object",
-        cascade="save-update, merge",
-        passive_deletes=True,
-    )
 
 
 class File(Base):
+    """Legacy table retained for one transition release."""
+
     __tablename__ = "files"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -161,15 +165,84 @@ class File(Base):
         remote_side="File.id",
         foreign_keys=[original_file_id],
     )
-    planned_actions: Mapped[list[PlannedAction]] = relationship(
-        back_populates="file",
+
+
+Index("idx_files_hash", File.hash)
+Index("idx_files_original_file_id", File.original_file_id)
+
+
+class FileContent(Base):
+    __tablename__ = "file_contents"
+
+    content_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    sha256_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    canonical_file_instance_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("file_instances.file_instance_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    instances: Mapped[list[FileInstance]] = relationship(
+        back_populates="content",
+        cascade="save-update, merge",
+        passive_deletes=True,
+        foreign_keys="FileInstance.content_id",
+    )
+    canonical_instance: Mapped[FileInstance | None] = relationship(
+        "FileInstance",
+        foreign_keys=[canonical_file_instance_id],
+    )
+    metadata_rows: Mapped[list[MediaMetadata]] = relationship(
+        back_populates="content",
         cascade="save-update, merge",
         passive_deletes=True,
     )
 
 
-Index("idx_files_hash", File.hash)
-Index("idx_files_original_file_id", File.original_file_id)
+Index("idx_file_contents_sha256_hash", FileContent.sha256_hash)
+Index("idx_file_contents_canonical_instance", FileContent.canonical_file_instance_id)
+
+
+class FileInstance(Base):
+    __tablename__ = "file_instances"
+
+    file_instance_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    content_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("file_contents.content_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    absolute_path: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    filesystem_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False, default=FileInstanceStatus.ACTIVE.value)
+    ingestion_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("runs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    content: Mapped[FileContent] = relationship(back_populates="instances", foreign_keys=[content_id])
+    planned_actions: Mapped[list[PlannedAction]] = relationship(
+        back_populates="file_instance",
+        cascade="save-update, merge",
+        passive_deletes=True,
+    )
+
+
+Index("idx_file_instances_content_id", FileInstance.content_id)
+Index("idx_file_instances_absolute_path", FileInstance.absolute_path)
+Index("idx_file_instances_status", FileInstance.status)
 
 
 class PlannedAction(Base):
@@ -183,7 +256,7 @@ class PlannedAction(Base):
     )
     file_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("files.id", ondelete="RESTRICT"),
+        ForeignKey("file_instances.file_instance_id", ondelete="RESTRICT"),
         nullable=False,
     )
     action_type: Mapped[str] = mapped_column(Text, nullable=False)
@@ -194,7 +267,7 @@ class PlannedAction(Base):
     )
 
     run: Mapped[Run] = relationship(back_populates="planned_actions")
-    file: Mapped[File] = relationship(back_populates="planned_actions")
+    file_instance: Mapped[FileInstance] = relationship(back_populates="planned_actions")
 
 
 Index("idx_planned_actions_run_id", PlannedAction.run_id)
@@ -223,9 +296,9 @@ class MediaMetadata(Base):
     __tablename__ = "media_metadata"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    file_hash: Mapped[str] = mapped_column(
-        Text,
-        ForeignKey("content_objects.hash", ondelete="RESTRICT"),
+    content_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("file_contents.content_id", ondelete="RESTRICT"),
         nullable=False,
     )
     code_id: Mapped[uuid.UUID] = mapped_column(
@@ -238,10 +311,10 @@ class MediaMetadata(Base):
         DateTime(timezone=True), nullable=False, default=utc_now
     )
 
-    content_object: Mapped[ContentObject] = relationship(back_populates="metadata_rows")
+    content: Mapped[FileContent] = relationship(back_populates="metadata_rows")
     code: Mapped[MetadataCode] = relationship(back_populates="metadata_rows")
 
 
-Index("idx_media_metadata_file_hash", MediaMetadata.file_hash)
+Index("idx_media_metadata_content_id", MediaMetadata.content_id)
 Index("idx_media_metadata_code_id", MediaMetadata.code_id)
-Index("uq_media_metadata_hash_code", MediaMetadata.file_hash, MediaMetadata.code_id, unique=True)
+Index("uq_media_metadata_content_code", MediaMetadata.content_id, MediaMetadata.code_id, unique=True)

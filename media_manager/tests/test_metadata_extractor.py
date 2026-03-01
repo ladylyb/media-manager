@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 
 import media_manager.app.core.metadata_extractor as metadata_extractor
-from media_manager.app.persistence.models import ContentObject, MediaMetadata, MetadataCode
+from media_manager.app.persistence.models import FileContent, MediaMetadata, MetadataCode
 
 
 def _write_file(path: Path, payload: bytes) -> Path:
@@ -49,9 +49,12 @@ def test_extract_file_metadata_falls_back_to_filesystem_timestamp(
     assert as_dict["FS_MTIME"] == datetime.fromtimestamp(fixed, tz=UTC).isoformat()
 
 
-def test_upsert_metadata_batch_prevents_duplicates(session_factory) -> None:
+def test_upsert_metadata_for_content_prevents_duplicates(session_factory) -> None:
     with session_factory() as session:
-        session.add(ContentObject(hash="h1", size_bytes=100))
+        content = FileContent(sha256_hash="h1")
+        session.add(content)
+        session.flush()
+        content_id = content.content_id
         session.commit()
 
     rows = [
@@ -59,10 +62,10 @@ def test_upsert_metadata_batch_prevents_duplicates(session_factory) -> None:
         metadata_extractor.MetadataItem(code_type="CONTEXT", decode_value="General"),
     ]
     with session_factory() as session:
-        metadata_extractor.upsert_metadata_batch(session, rows, "h1")
+        metadata_extractor.upsert_metadata_for_content(session, rows, content_id)
         session.commit()
     with session_factory() as session:
-        metadata_extractor.upsert_metadata_batch(session, rows, "h1")
+        metadata_extractor.upsert_metadata_for_content(session, rows, content_id)
         session.commit()
 
     with session_factory() as session:
@@ -83,10 +86,6 @@ def test_pre_extract_logs_structured_fields(
     monkeypatch.setattr(metadata_extractor.logger, "info", _capture)
     path = _write_file(tmp_path / "a.jpg", b"x")
     file_hash = metadata_extractor.sha256_file(path)
-    with session_factory() as session:
-        session.add(ContentObject(hash=file_hash, size_bytes=1))
-        session.commit()
-
     with session_factory() as session:
         metadata_extractor.pre_extract_for_paths(session, [path], run_id="run-1")
         session.commit()

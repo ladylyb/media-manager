@@ -52,7 +52,8 @@ def clean_tables(db_engine: Engine) -> None:
     with db_engine.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE TABLE media_metadata, metadata_codes, planned_actions, failure_events, files, content_objects, runs "
+                "TRUNCATE TABLE media_metadata, metadata_codes, planned_actions, "
+                "file_instances, file_contents, failure_events, files, content_objects, runs "
                 "RESTART IDENTITY CASCADE"
             )
         )

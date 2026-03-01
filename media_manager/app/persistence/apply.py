@@ -13,7 +13,14 @@ from media_manager.app.core.errors import ApplyStateError, RunNotFoundError
 from media_manager.app.core.logging_config import get_logger
 from media_manager.app.core.state_machine import RunState, validate_transition
 from media_manager.app.persistence.base import transactional_session
-from media_manager.app.persistence.models import FailureEvent, FailurePhase, File, PlannedAction, Run, RunStateDB
+from media_manager.app.persistence.models import (
+    FailureEvent,
+    FailurePhase,
+    FileInstance,
+    PlannedAction,
+    Run,
+    RunStateDB,
+)
 
 logger = get_logger(__name__)
 
@@ -201,9 +208,9 @@ class ApplyService:
         destination.parent.mkdir(parents=True, exist_ok=True)
         source.rename(destination)
 
-        file_row = session.get(File, action.file_id)
+        file_row = session.get(FileInstance, action.file_id)
         if file_row is not None:
-            file_row.path = str(destination.resolve(strict=False))
+            file_row.absolute_path = str(destination.resolve(strict=False))
 
         logger.info(
             "File renamed",

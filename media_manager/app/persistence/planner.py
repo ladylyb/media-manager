@@ -1,4 +1,4 @@
-"""Deterministic planning service (plan-only, no filesystem mutation)."""
+"""Deterministic planning service (DB-first, no hashing in planner)."""
 
 from __future__ import annotations
 
@@ -8,28 +8,24 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from time import perf_counter
 
-from sqlalchemy import func, select
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from media_manager.app.core.errors import PlanningStateError
-from media_manager.app.core.filenames import (
-    generate_canonical_filename,
-    infer_media_type_from_extension,
-)
-from media_manager.app.core.hashing import sha256_file
+from media_manager.app.core.filenames import generate_canonical_filename, infer_media_type_from_extension
 from media_manager.app.core.logging_config import get_logger
-from media_manager.app.core.metadata_extractor import ExtractResult, pre_extract_for_paths
-from media_manager.app.core.mime import detect_mime
-from media_manager.app.core.path_resolver import resolve_duplicate_path
+from media_manager.app.core.metadata_cache import MetadataCache
 from media_manager.app.core.state_machine import RunState, validate_transition
 from media_manager.app.persistence.base import transactional_session
+from media_manager.app.persistence.ingest import ingest_paths_in_session
 from media_manager.app.persistence.models import (
-    ContentObject,
     FailureEvent,
     FailurePhase,
-    File,
+    FileContent,
+    FileInstance,
+    FileInstanceStatus,
     MediaMetadata,
     MetadataCode,
     PlannedAction,
@@ -66,8 +62,17 @@ class PlanningSummary:
 class PlanningService:
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
+        self._metadata_cache = MetadataCache()
+        self._metadata_lookup_db_time_s = 0.0
+        self._metadata_lookup_cache_time_s = 0.0
 
-    def plan_run(self, run_id: uuid.UUID, input_paths: list[Path]) -> PlanningSummary:
+    def plan_run(
+        self,
+        run_id: uuid.UUID,
+        input_paths: list[Path] | None = None,
+        *,
+        ingest_if_needed: bool = True,
+    ) -> PlanningSummary:
         try:
             with transactional_session(self._session_factory) as session:
                 run = self._lock_run(session, run_id)
@@ -90,30 +95,40 @@ class PlanningService:
                 run.version += 1
                 run.updated_at = func.now()
 
+                self._metadata_cache.clear()
+                self._metadata_lookup_db_time_s = 0.0
+                self._metadata_lookup_cache_time_s = 0.0
+                batch_size = self._get_metadata_batch_size()
+
+                reserved_paths: set[str] = set()
                 scanned_count = 0
                 supported_count = 0
                 skipped_count = 0
                 move_actions = 0
                 noop_actions = 0
                 duplicate_actions = 0
-                reserved_paths: set[str] = set()
-                sorted_candidates = sorted(input_paths, key=lambda p: p.resolve(strict=False).as_posix())
-                base_root = self._determine_base_root(sorted_candidates)
-                extract_results = pre_extract_for_paths(
-                    session,
-                    sorted_candidates,
-                    run_id=str(run.id),
-                )
+                canonical_instances_processed = 0
+                skipped_inactive_instances = 0
 
-                for candidate in sorted_candidates:
-                    result = extract_results.get(str(candidate.resolve(strict=False)))
-                    action = self._plan_single_path(
+                rows = self._load_candidate_instances(session, input_paths)
+                if input_paths and ingest_if_needed:
+                    ingest_paths_in_session(session, sorted(input_paths, key=lambda p: p.resolve(strict=False).as_posix()))
+                    self._ensure_canonical_instances(session)
+                    rows = self._load_candidate_instances(session, input_paths)
+                base_root = self._determine_base_root([Path(row.absolute_path) for row in rows])
+
+                for instance in rows:
+                    if instance.status != FileInstanceStatus.ACTIVE.value:
+                        skipped_inactive_instances += 1
+                        skipped_count += 1
+                        continue
+                    canonical_instances_processed += 1
+                    action = self._plan_single_instance(
                         session,
                         run,
-                        candidate,
+                        instance,
                         base_root,
                         reserved_paths,
-                        result,
                     )
                     if action == PlannedActionType.RENAME.value:
                         scanned_count += 1
@@ -127,7 +142,7 @@ class PlanningService:
                         scanned_count += 1
                         supported_count += 1
                         duplicate_actions += 1
-                    elif action in {"SKIPPED_UNSUPPORTED_MIME", "SKIPPED_MISSING_METADATA"}:
+                    else:
                         skipped_count += 1
 
                 summary = PlanningSummary(
@@ -154,6 +169,27 @@ class PlanningService:
                         "errors": 0,
                     },
                 )
+                cache_stats = self._metadata_cache.stats()
+                logger.info(
+                    "Perf metric",
+                    extra={
+                        "run_id": str(run.id),
+                        "phase": "plan",
+                        "action": "PERF",
+                        "duration_s": f"{self._metadata_lookup_db_time_s + self._metadata_lookup_cache_time_s:.6f}",
+                        "files_count": supported_count,
+                        "batch_size": batch_size,
+                        "cache_hits": cache_stats.hits,
+                        "cache_misses": cache_stats.misses,
+                        "codes_extracted": (
+                            f"lookup_db_s={self._metadata_lookup_db_time_s:.6f},"
+                            f"lookup_cache_s={self._metadata_lookup_cache_time_s:.6f},"
+                            f"hit_rate={cache_stats.hit_rate:.4f},"
+                            f"canonical_instances_processed={canonical_instances_processed},"
+                            f"skipped_inactive_instances={skipped_inactive_instances}"
+                        ),
+                    },
+                )
                 logger.info(
                     "Run completed",
                     extra={
@@ -169,6 +205,14 @@ class PlanningService:
             self._record_planning_failure(run_id, "PLANNING_FAILED", str(exc))
             raise
 
+    def _get_metadata_batch_size(self) -> int:
+        raw = os.getenv("METADATA_UPSERT_BATCH_SIZE", "1000")
+        try:
+            value = int(raw)
+        except ValueError:
+            return 1000
+        return min(max(value, 1), 50_000)
+
     def _lock_run(self, session: Session, run_id: uuid.UUID) -> Run:
         stmt = select(Run).where(Run.id == run_id).with_for_update()
         run = session.scalar(stmt)
@@ -178,57 +222,40 @@ class PlanningService:
 
     def _validate_planning_state(self, run: Run) -> None:
         if run.state != RunStateDB.CREATED:
-            raise PlanningStateError(
-                f"Planning is only allowed from CREATED. Current state: {run.state.value}"
-            )
+            raise PlanningStateError(f"Planning is only allowed from CREATED. Current state: {run.state.value}")
 
-    def _upsert_content_object(self, session: Session, digest: str, size_bytes: int) -> None:
-        stmt = insert(ContentObject).values(hash=digest, size_bytes=size_bytes)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[ContentObject.hash],
-            set_={"size_bytes": size_bytes},
-        )
-        session.execute(stmt)
-
-    def _upsert_file(
-        self,
-        session: Session,
-        *,
-        source_path: str,
-        mime_type: str,
-        size_bytes: int,
-        digest: str,
-    ) -> File:
-        existing = session.scalar(select(File).where(File.path == source_path).with_for_update())
-        if existing is not None:
-            existing.mime_type = mime_type
-            existing.size_bytes = size_bytes
-            existing.hash = digest
-            existing.is_duplicate = False
-            existing.original_file_id = None
-            session.flush()
-            return existing
-
-        record = File(
-            path=source_path,
-            mime_type=mime_type,
-            size_bytes=size_bytes,
-            hash=digest,
-            is_duplicate=False,
-            original_file_id=None,
-        )
-        session.add(record)
-        session.flush()
-        return record
-
-    def _deterministic_original_for_hash(self, session: Session, digest: str) -> File | None:
+    def _load_candidate_instances(self, session: Session, input_paths: list[Path] | None) -> list[FileInstance]:
         stmt = (
-            select(File)
-            .where(File.hash == digest)
-            .order_by(File.created_at.asc(), File.id.asc())
-            .limit(1)
+            select(FileInstance)
+            .join(FileContent, FileContent.canonical_file_instance_id == FileInstance.file_instance_id)
+            .order_by(FileInstance.absolute_path.asc(), FileInstance.file_instance_id.asc())
         )
-        return session.scalar(stmt)
+        if input_paths:
+            normalized = sorted({str(path.resolve(strict=False)) for path in input_paths})
+            if not normalized:
+                return []
+            stmt = stmt.where(FileInstance.absolute_path.in_(normalized))
+        return session.scalars(stmt).all()
+
+    def _ensure_canonical_instances(self, session: Session) -> None:
+        session.execute(
+            text(
+                """
+                WITH canonical AS (
+                    SELECT DISTINCT ON (fi.content_id)
+                        fi.content_id,
+                        fi.file_instance_id
+                    FROM file_instances fi
+                    ORDER BY fi.content_id, fi.first_seen_at ASC, fi.file_instance_id ASC
+                )
+                UPDATE file_contents fc
+                SET canonical_file_instance_id = canonical.file_instance_id
+                FROM canonical
+                WHERE fc.content_id = canonical.content_id
+                  AND fc.canonical_file_instance_id IS NULL
+                """
+            )
+        )
 
     def _determine_base_root(self, input_paths: list[Path]) -> Path:
         if not input_paths:
@@ -245,20 +272,33 @@ class PlanningService:
                     return Path(*source.parts[:idx])
         return source.parent
 
+    def _load_metadata_by_content_id(self, session: Session, content_id: uuid.UUID) -> dict[str, str]:
+        cache_key = str(content_id)
+        t_cache = perf_counter()
+        cached = self._metadata_cache.get(cache_key)
+        if cached is not None:
+            self._metadata_lookup_cache_time_s += perf_counter() - t_cache
+            return cached
+        self._metadata_lookup_cache_time_s += perf_counter() - t_cache
+
+        t_db = perf_counter()
+        rows = session.execute(
+            select(MetadataCode.code_type, MediaMetadata.decode_value)
+            .join(MediaMetadata, MediaMetadata.code_id == MetadataCode.id)
+            .where(MediaMetadata.content_id == content_id)
+        ).all()
+        metadata = {code_type: decode_value for code_type, decode_value in rows}
+        self._metadata_lookup_db_time_s += perf_counter() - t_db
+        self._metadata_cache.set(cache_key, metadata)
+        return metadata
+
     def _resolve_destination_dir(
         self,
         *,
         base_root: Path,
         media_type: str,
-        taken_datetime,
-        is_duplicate: bool,
-        source: Path,
-        digest: str,
+        taken_datetime: datetime,
     ) -> Path:
-        if is_duplicate:
-            duplicate_rel = Path(resolve_duplicate_path(source, digest)).parent
-            return base_root / duplicate_rel
-
         year = taken_datetime.strftime("%Y")
         month = taken_datetime.strftime("%m")
         if media_type == "VID":
@@ -302,15 +342,6 @@ class PlanningService:
                 return candidate, True
             idx += 1
 
-    def _load_metadata_by_hash(self, session: Session, file_hash: str) -> dict[str, str]:
-        stmt = (
-            select(MetadataCode.code_type, MediaMetadata.decode_value)
-            .join(MediaMetadata, MediaMetadata.code_id == MetadataCode.id)
-            .where(MediaMetadata.file_hash == file_hash)
-        )
-        rows = session.execute(stmt).all()
-        return {code_type: decode_value for code_type, decode_value in rows}
-
     def _get_existing_planned_action(
         self,
         session: Session,
@@ -352,61 +383,25 @@ class PlanningService:
         )
         return session.scalar(stmt)
 
-    def _plan_single_path(
+    def _plan_single_instance(
         self,
         session: Session,
         run: Run,
-        candidate: Path,
+        instance: FileInstance,
         base_root: Path,
         reserved_paths: set[str],
-        extract_result: ExtractResult | None,
     ) -> str:
-        if not candidate.exists() or not candidate.is_file():
-            raise ValueError(f"Planning input path is not a file: {candidate}")
-        source_path = str(candidate.resolve(strict=False))
-
-        mime_info = detect_mime(candidate)
-        if not mime_info.is_supported:
-            return "SKIPPED_UNSUPPORTED_MIME"
-        media_type = infer_media_type_from_extension(candidate)
-        if media_type is None:
-            return "SKIPPED_UNSUPPORTED_MIME"
-
-        digest = extract_result.file_hash if extract_result is not None else sha256_file(candidate)
-        stat = candidate.stat()
-        size_bytes = int(stat.st_size)
-
-        self._upsert_content_object(session, digest, size_bytes)
-        file_row = self._upsert_file(
-            session,
-            source_path=source_path,
-            mime_type=mime_info.mime_type,
-            size_bytes=size_bytes,
-            digest=digest,
-        )
-
-        original = self._deterministic_original_for_hash(session, digest)
-        if original is not None and file_row.id != original.id:
-            file_row.is_duplicate = True
-            file_row.original_file_id = original.id
-            is_duplicate = True
-        else:
-            file_row.is_duplicate = False
-            file_row.original_file_id = None
-            is_duplicate = False
-
+        source = Path(instance.absolute_path)
+        source_path = str(source.resolve(strict=False))
         existing_for_file = self._get_existing_plan_for_file(
-            session,
-            run_id=run.id,
-            file_id=file_row.id,
-            source_path=source_path,
+            session, run_id=run.id, file_id=instance.file_instance_id, source_path=source_path
         )
         if existing_for_file is not None:
             if existing_for_file.target_path:
                 reserved_paths.add(str(Path(existing_for_file.target_path).resolve(strict=False)))
             return existing_for_file.action_type
 
-        metadata_map = self._load_metadata_by_hash(session, digest)
+        metadata_map = self._load_metadata_by_content_id(session, instance.content_id)
         owner = metadata_map.get("OWNER")
         context = metadata_map.get("CONTEXT")
         taken_dt_raw = metadata_map.get("TAKEN_DT")
@@ -416,18 +411,21 @@ class PlanningService:
                 extra={
                     "run_id": str(run.id),
                     "phase": "plan",
-                    "file_hash": digest,
                     "action": "SKIPPED",
                     "codes_extracted": ",".join(sorted(metadata_map.keys())),
                 },
             )
             return "SKIPPED_MISSING_METADATA"
-        taken_datetime = datetime.fromisoformat(taken_dt_raw)
 
+        media_type = infer_media_type_from_extension(source)
+        if media_type is None:
+            return "SKIPPED_UNSUPPORTED_MIME"
+
+        taken_datetime = datetime.fromisoformat(taken_dt_raw)
         canonical_filename = generate_canonical_filename(
             media_type=media_type,
             taken_datetime=taken_datetime,
-            extension=candidate.suffix,
+            extension=source.suffix,
             owner=owner,
             context=context,
         )
@@ -435,26 +433,23 @@ class PlanningService:
             base_root=base_root,
             media_type=media_type,
             taken_datetime=taken_datetime,
-            is_duplicate=is_duplicate,
-            source=candidate,
-            digest=digest,
         )
         if (
-            candidate.resolve(strict=False).parent == destination_dir.resolve(strict=False)
-            and self._is_canonical_variant(candidate.name, canonical_filename)
+            source.resolve(strict=False).parent == destination_dir.resolve(strict=False)
+            and self._is_canonical_variant(source.name, canonical_filename)
         ):
-            planned_target_path = str(candidate.resolve(strict=False))
+            planned_target_path = str(source.resolve(strict=False))
             action_type = PlannedActionType.SKIP.value
             reserved_paths.add(planned_target_path)
         else:
             desired_destination = destination_dir / canonical_filename
             final_destination, had_collision = self._resolve_planning_collision(
-                candidate.resolve(strict=False),
+                source.resolve(strict=False),
                 desired_destination.resolve(strict=False),
                 reserved_paths,
             )
             planned_target_path = str(final_destination.resolve(strict=False))
-            if candidate.resolve(strict=False) == final_destination.resolve(strict=False):
+            if source.resolve(strict=False) == final_destination.resolve(strict=False):
                 action_type = PlannedActionType.SKIP.value
             elif had_collision:
                 action_type = PlannedActionType.COLLISION_RESOLVED.value
@@ -464,7 +459,7 @@ class PlanningService:
         existing_plan = self._get_existing_planned_action(
             session,
             run_id=run.id,
-            file_id=file_row.id,
+            file_id=instance.file_instance_id,
             action_type=action_type,
             source_path=source_path,
             target_path=planned_target_path,
@@ -472,7 +467,7 @@ class PlanningService:
         if existing_plan is None:
             plan = PlannedAction(
                 run_id=run.id,
-                file_id=file_row.id,
+                file_id=instance.file_instance_id,
                 action_type=action_type,
                 source_path=source_path,
                 target_path=planned_target_path,
