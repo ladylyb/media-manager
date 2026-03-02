@@ -15,7 +15,7 @@ from media_manager.app.canonical.factory import build_canonical_policy, resolve_
 from media_manager.app.core.hashing import sha256_file
 from media_manager.app.core.logging_config import get_logger
 import media_manager.app.core.metadata_extractor as metadata_extractor
-from media_manager.app.observability import record_ingest_metrics
+from media_manager.app.observability import record_ingest_metrics, record_ingest_structured_metrics
 from media_manager.app.persistence.base import transactional_session
 from media_manager.app.persistence.canonicalization import append_assignment, get_active_assignment
 from media_manager.app.persistence.models import FileContent, FileInstance, FileInstanceStatus, MediaMetadata
@@ -31,6 +31,12 @@ class IngestSummary:
     duplicates_detected: int
     metadata_extracted: int
     duration_s: float
+
+
+@dataclass
+class _IngestLatencySamples:
+    hash_latencies_ms: list[float]
+    db_write_latencies_ms: list[float]
 
 
 def ensure_canonical_assignment(session: Session, content_id: uuid.UUID) -> uuid.UUID | None:
@@ -58,7 +64,12 @@ def ensure_canonical_assignment(session: Session, content_id: uuid.UUID) -> uuid
     return row.canonical_instance_id
 
 
-def ingest_paths_in_session(session: Session, files: list[Path]) -> IngestSummary:
+def ingest_paths_in_session(
+    session: Session,
+    files: list[Path],
+    *,
+    latency_samples: _IngestLatencySamples | None = None,
+) -> IngestSummary:
     t_start = perf_counter()
     scanned = 0
     new_contents = 0
@@ -70,9 +81,14 @@ def ingest_paths_in_session(session: Session, files: list[Path]) -> IngestSummar
         if not candidate.exists() or not candidate.is_file():
             continue
         scanned += 1
+        t_hash_start = perf_counter()
         digest = sha256_file(candidate)
+        hash_latency_ms = (perf_counter() - t_hash_start) * 1000.0
+        if latency_samples is not None:
+            latency_samples.hash_latencies_ms.append(hash_latency_ms)
         absolute_path = str(candidate.resolve(strict=False))
 
+        t_db_start = perf_counter()
         content = session.scalar(select(FileContent).where(FileContent.sha256_hash == digest).with_for_update())
         content_was_new = False
         if content is None:
@@ -114,6 +130,9 @@ def ingest_paths_in_session(session: Session, files: list[Path]) -> IngestSummar
                 metadata_extracted += len(rows)
 
         ensure_canonical_assignment(session, content.content_id)
+        db_write_latency_ms = (perf_counter() - t_db_start) * 1000.0
+        if latency_samples is not None:
+            latency_samples.db_write_latencies_ms.append(db_write_latency_ms)
 
     duration_s = perf_counter() - t_start
     logger.info(
@@ -147,11 +166,23 @@ class IngestService:
         return self.ingest_paths(self.collect_files(root))
 
     def ingest_paths(self, files: list[Path]) -> IngestSummary:
+        latency_samples = _IngestLatencySamples(hash_latencies_ms=[], db_write_latencies_ms=[])
         with transactional_session(self._session_factory) as session:
-            summary = ingest_paths_in_session(session, files)
+            summary = ingest_paths_in_session(session, files, latency_samples=latency_samples)
         # Ingest is not currently run-bound, so run_id is explicitly stable as "none".
         try:
             record_ingest_metrics(run_id="none", files_scanned=summary.files_scanned, new_contents=summary.new_contents)
+            record_ingest_structured_metrics(
+                run_id="none",
+                dataset_id="unknown",
+                policy_name="default",
+                files_scanned=summary.files_scanned,
+                new_contents=summary.new_contents,
+                new_instances=summary.new_instances,
+                duplicates_detected=summary.duplicates_detected,
+                hash_latencies_ms=latency_samples.hash_latencies_ms,
+                db_write_latencies_ms=latency_samples.db_write_latencies_ms,
+            )
         except Exception:
             logger.exception("Observability metric emission failed", extra={"phase": "ingest", "action": "METRICS"})
         return summary
