@@ -17,3 +17,11 @@
 - Capture stderr and summary counters.
 - Re-run with same `run_id` after resolving root cause.
 - Follow [Resume and Recovery](resume-and-recovery.md).
+
+## Decision Table
+
+| Condition | Action | Escalate When |
+| --- | --- | --- |
+| Command exits non-zero before run starts | Check env, path, DB connectivity | Same error repeats after config fix |
+| Plan output unexpected | Re-check input scope and metadata quality | Repeated deterministic mismatch |
+| Apply reports errors | Re-run same `run_id` after remediation | Error count persists across reruns |

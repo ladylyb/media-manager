@@ -66,3 +66,4 @@ Expected output sections:
 - [Ingest Workflow](../guides/ingest-workflow.md)
 - [Plan Workflow](../guides/plan-workflow.md)
 - [Apply Workflow](../guides/apply-workflow.md)
+- [Practical Examples](../examples/index.md)

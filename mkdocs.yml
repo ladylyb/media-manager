@@ -40,6 +40,10 @@ nav:
       - Plan Workflow: guides/plan-workflow.md
       - Apply Workflow: guides/apply-workflow.md
       - Documentation Workflow: guides/documentation-workflow.md
+  - Examples:
+      - Overview: examples/index.md
+      - Ingest to Apply End-to-End: examples/example-ingest-plan-apply.md
+      - Recovery After Interrupted Apply: examples/example-recovery-interrupted-apply.md
   - Operator Guide:
       - Overview: operator-guide/index.md
       - Resume and Recovery: operator-guide/resume-and-recovery.md
@@ -50,6 +54,8 @@ nav:
   - Reference:
       - Overview: reference/index.md
       - Data Dictionary: reference/data-dictionary.md
+      - FAQ: reference/faq.md
+      - Known Limitations: reference/known-limitations.md
   - API:
       - Overview: api/index.md
       - CLI: api/api-cli.md
