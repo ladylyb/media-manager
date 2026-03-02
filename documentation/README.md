@@ -3,25 +3,28 @@
 This folder contains the canonical documentation set for the media-manager rewrite.
 
 ## Governance and Agent Contract
-- `AGENTS.md`: invariant and behavior contract for engineering agents.
-- `ARCHITECTURE_GUARDRAILS.md`: core design philosophy.
-- `STATE_MACHINE.md`: allowed run/action state transitions.
-- `AGENT_CHECKLIST.md`: required pre-merge safety checklist.
+- `AGENTS.md` (repository root): invariant and behavior contract for engineering agents.
+- [`ARCHITECTURE_GUARDRAILS.md`](ARCHITECTURE_GUARDRAILS.md): core design philosophy.
+- [`STATE_MACHINE.md`](STATE_MACHINE.md): allowed run/action state transitions.
+- [`AGENT_CHECKLIST.md`](AGENT_CHECKLIST.md): required pre-merge safety checklist.
 
 ## Project Planning and Architecture
-- `project/00-charter.md`: project intent, goals, non-goals.
-- `project/01-roadmap.md`: narrative sequencing.
-- `project/02-milestones.md`: authoritative milestone definitions.
-- `project/03-test-strategy.md`: test taxonomy and risk coverage.
-- `project/04-risk-register.md`: risk inventory and controls.
-- `project/05-release-plan.md`: rollout sequencing and gates.
-- `project/06-operational-guardrails.md`: authoritative runtime guardrails.
-- `project/07-unified-architecture-spec.md`: canonical technical specification.
-- `project/09-redefined-roadmap-phases-7-12.md`: disciplined next-phase roadmap after redefined Phase 6.
-- `project/10-p8.1-canonical-policy-governance.md`: deterministic canonical policy design and evolution guardrails.
+- [`project/index.md`](project/index.md): project documentation overview.
+- [`project/00-charter.md`](project/00-charter.md): project intent, goals, non-goals.
+- [`project/01-roadmap.md`](project/01-roadmap.md): narrative sequencing.
+- [`project/02-milestones.md`](project/02-milestones.md): authoritative milestone definitions.
+- [`project/03-test-strategy.md`](project/03-test-strategy.md): test taxonomy and risk coverage.
+- [`project/04-risk-register.md`](project/04-risk-register.md): risk inventory and controls.
+- [`project/05-release-plan.md`](project/05-release-plan.md): rollout sequencing and gates.
+- [`project/06-operational-guardrails.md`](project/06-operational-guardrails.md): authoritative runtime guardrails.
+- [`project/07-unified-architecture-spec.md`](project/07-unified-architecture-spec.md): canonical technical specification.
+- [`project/09-redefined-roadmap-phases-7-12.md`](project/09-redefined-roadmap-phases-7-12.md): disciplined next-phase roadmap after redefined Phase 6.
+- [`project/10-p8.1-canonical-policy-governance.md`](project/10-p8.1-canonical-policy-governance.md): deterministic canonical policy design and evolution guardrails.
+- [`project/11-p10-decision-intel-policy-sim.md`](project/11-p10-decision-intel-policy-sim.md): policy simulation planning notes.
 
 ## Reference Material
-- `reference/data-dictionary.md`: schema/data dictionary reference from legacy system for context.
+- [`reference/index.md`](reference/index.md): API and reference overview.
+- [`reference/data-dictionary.md`](reference/data-dictionary.md): schema/data dictionary reference from legacy system for context.
 
 ## Legacy Archive
 - `../archive/legacy/README.md`: archive index and policy.
@@ -30,8 +33,8 @@ This folder contains the canonical documentation set for the media-manager rewri
 - `../archive/legacy/docs/media-manager-dev-*.md`: historical development artifacts.
 
 ## Authority Rules
-- If project docs conflict, use `project/07-unified-architecture-spec.md` for technical behavior.
+- If project docs conflict, use [`project/07-unified-architecture-spec.md`](project/07-unified-architecture-spec.md) for technical behavior.
 - Agent behavior and state transitions are strictly governed by:
-  - `AGENTS.md`
-  - `STATE_MACHINE.md`
-  - `ARCHITECTURE_GUARDRAILS.md`
+  - `AGENTS.md` (repository root)
+  - [`STATE_MACHINE.md`](STATE_MACHINE.md)
+  - [`ARCHITECTURE_GUARDRAILS.md`](ARCHITECTURE_GUARDRAILS.md)
