@@ -141,6 +141,65 @@ class DuplicateGroupItem:
         }
 
 
+@dataclass(frozen=True)
+class CanonicalGalleryItem:
+    """Canonical gallery card item returned to Operator Console."""
+
+    id: str
+    filename: str
+    file_type: str
+    media_url: str
+
+    def to_dict(self) -> dict[str, str]:
+        """Return a JSON-serializable mapping."""
+        return {
+            "id": self.id,
+            "filename": self.filename,
+            "file_type": self.file_type,
+            "media_url": self.media_url,
+        }
+
+
+@dataclass(frozen=True)
+class CanonicalGalleryPage:
+    """Paginated canonical gallery response payload."""
+
+    total_count: int
+    page: int
+    total_pages: int
+    items: tuple[CanonicalGalleryItem, ...]
+
+    def to_dict(self) -> dict[str, int | list[dict[str, str]]]:
+        """Return a JSON-serializable mapping."""
+        return {
+            "total_count": self.total_count,
+            "page": self.page,
+            "total_pages": self.total_pages,
+            "items": [item.to_dict() for item in self.items],
+        }
+
+
+@dataclass(frozen=True)
+class CanonicalGalleryDetail:
+    """Detailed canonical media payload for full-page gallery preview."""
+
+    id: str
+    filename: str
+    file_type: str
+    media_url: str
+    absolute_path: str
+
+    def to_dict(self) -> dict[str, str]:
+        """Return a JSON-serializable mapping."""
+        return {
+            "id": self.id,
+            "filename": self.filename,
+            "file_type": self.file_type,
+            "media_url": self.media_url,
+            "absolute_path": self.absolute_path,
+        }
+
+
 class OperatorConsoleReadService:
     """Read-only service for Operator Console API endpoints."""
 
@@ -304,6 +363,82 @@ class OperatorConsoleReadService:
             )
         return output
 
+    def get_canonical_gallery(self, page: int = 1, limit: int = 30) -> CanonicalGalleryPage:
+        """Return deterministic paginated canonical gallery media items."""
+        normalized_page = max(1, int(page))
+        normalized_limit = min(100, max(1, int(limit)))
+
+        with self._session_factory() as session:
+            latest_assignments = (
+                select(
+                    CanonicalAssignment.content_id.label("content_id"),
+                    CanonicalAssignment.canonical_instance_id.label("canonical_instance_id"),
+                    CanonicalAssignment.assigned_at.label("assigned_at"),
+                    CanonicalAssignment.assignment_id.label("assignment_id"),
+                    func.row_number()
+                    .over(
+                        partition_by=CanonicalAssignment.content_id,
+                        order_by=(
+                            CanonicalAssignment.assigned_at.desc(),
+                            CanonicalAssignment.assignment_id.desc(),
+                        ),
+                    )
+                    .label("rn"),
+                )
+                .subquery()
+            )
+
+            rows = session.execute(
+                select(
+                    latest_assignments.c.canonical_instance_id,
+                    FileInstance.absolute_path,
+                )
+                .join(
+                    FileInstance,
+                    FileInstance.file_instance_id == latest_assignments.c.canonical_instance_id,
+                )
+                .where(
+                    latest_assignments.c.rn == 1,
+                    FileInstance.status == FileInstanceStatus.ACTIVE.value,
+                )
+                .order_by(
+                    latest_assignments.c.assigned_at.desc(),
+                    latest_assignments.c.assignment_id.desc(),
+                )
+            ).all()
+
+        all_items: list[CanonicalGalleryItem] = []
+        for file_instance_id, absolute_path in rows:
+            path = Path(absolute_path)
+            file_type = self._path_to_gallery_file_type(path)
+            if file_type is None:
+                continue
+            instance_id = str(file_instance_id)
+            all_items.append(
+                CanonicalGalleryItem(
+                    id=instance_id,
+                    filename=path.name,
+                    file_type=file_type,
+                    media_url=f"/media/{instance_id}",
+                )
+            )
+
+        total_count = len(all_items)
+        total_pages = (total_count + normalized_limit - 1) // normalized_limit if total_count > 0 else 0
+        if total_pages > 0 and normalized_page <= total_pages:
+            start = (normalized_page - 1) * normalized_limit
+            end = start + normalized_limit
+            page_items = tuple(all_items[start:end])
+        else:
+            page_items = ()
+
+        return CanonicalGalleryPage(
+            total_count=total_count,
+            page=normalized_page,
+            total_pages=total_pages,
+            items=page_items,
+        )
+
     def resolve_thumbnail_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:
         """Resolve an active image file path and media type for thumbnail streaming."""
         with self._session_factory() as session:
@@ -329,6 +464,82 @@ class OperatorConsoleReadService:
         mime, _ = mimetypes.guess_type(path.name)
         return path, (mime or "image/jpeg")
 
+    def resolve_media_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:
+        """Resolve an active canonical media path and MIME type for secure streaming."""
+        with self._session_factory() as session:
+            instance = session.scalar(
+                select(FileInstance).where(
+                    FileInstance.file_instance_id == file_instance_id,
+                    FileInstance.status == FileInstanceStatus.ACTIVE.value,
+                )
+            )
+            if instance is None:
+                return None
+
+        path = self._resolve_existing_instance_path(instance.absolute_path)
+        if path is None:
+            return None
+        if self._path_to_gallery_file_type(path) is None:
+            return None
+        try:
+            with path.open("rb"):
+                pass
+        except OSError:
+            return None
+        mime, _ = mimetypes.guess_type(path.name)
+        return path, (mime or "application/octet-stream")
+
+    def get_canonical_gallery_detail(self, file_instance_id: UUID) -> CanonicalGalleryDetail | None:
+        """Return canonical media detail when `file_instance_id` is an active canonical row."""
+        with self._session_factory() as session:
+            latest_assignments = (
+                select(
+                    CanonicalAssignment.content_id.label("content_id"),
+                    CanonicalAssignment.canonical_instance_id.label("canonical_instance_id"),
+                    func.row_number()
+                    .over(
+                        partition_by=CanonicalAssignment.content_id,
+                        order_by=(
+                            CanonicalAssignment.assigned_at.desc(),
+                            CanonicalAssignment.assignment_id.desc(),
+                        ),
+                    )
+                    .label("rn"),
+                )
+                .subquery()
+            )
+            row = session.execute(
+                select(
+                    FileInstance.file_instance_id,
+                    FileInstance.absolute_path,
+                )
+                .join(
+                    latest_assignments,
+                    FileInstance.file_instance_id == latest_assignments.c.canonical_instance_id,
+                )
+                .where(
+                    latest_assignments.c.rn == 1,
+                    FileInstance.status == FileInstanceStatus.ACTIVE.value,
+                    FileInstance.file_instance_id == file_instance_id,
+                )
+            ).first()
+            if row is None:
+                return None
+            canonical_instance_id, absolute_path = row
+
+        path = Path(absolute_path)
+        file_type = self._path_to_gallery_file_type(path)
+        if file_type is None:
+            return None
+
+        return CanonicalGalleryDetail(
+            id=str(canonical_instance_id),
+            filename=path.name,
+            file_type=file_type,
+            media_url=f"/media/{canonical_instance_id}",
+            absolute_path=absolute_path,
+        )
+
     def _resolve_existing_instance_path(self, raw_path: str) -> Path | None:
         """Resolve a durable file path with optional Windows->WSL fallback."""
         direct_path = Path(raw_path)
@@ -348,6 +559,15 @@ class OperatorConsoleReadService:
         drive = matched.group(1).lower()
         tail = matched.group(2).replace("\\", "/")
         return Path("/mnt") / drive / tail
+
+    def _path_to_gallery_file_type(self, path: Path) -> str | None:
+        """Return canonical gallery file type for supported media extensions."""
+        media_type = infer_media_type_from_extension(path)
+        if media_type == "IMG":
+            return "image"
+        if media_type == "VID":
+            return "video"
+        return None
 
     def _count_total_files(self, session: Session) -> int:
         value = session.scalar(

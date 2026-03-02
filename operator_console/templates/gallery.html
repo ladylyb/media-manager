@@ -1,0 +1,351 @@
+{% extends "base.html" %}
+
+{% block title %}Canonical Gallery{% endblock %}
+
+{% block content %}
+<section class="mx-auto max-w-7xl px-6 py-8">
+  <header class="mb-8 space-y-2">
+    <h2 class="text-3xl font-semibold tracking-tight text-slate-900">Canonical Gallery</h2>
+    <p class="text-sm text-slate-600">Browse canonical media currently stored in the database.</p>
+  </header>
+
+  <section aria-live="polite" aria-busy="false" class="space-y-6" id="gallery-root">
+    <div class="hidden items-center justify-center py-16" id="gallery-loading">
+      <div class="inline-flex items-center gap-3 text-sm text-slate-500">
+        <span class="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600"></span>
+        Loading canonical media...
+      </div>
+    </div>
+
+    <div class="hidden py-16 text-center text-sm text-gray-500" id="gallery-empty">
+      No canonical media available.
+    </div>
+
+    <div class="hidden py-6 text-center text-sm text-rose-600" id="gallery-error"></div>
+
+    <div class="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3" id="gallery-grid"></div>
+
+    <nav class="flex items-center justify-center gap-4" aria-label="Pagination controls">
+      <button id="gallery-prev" type="button" class="rounded-md bg-gray-200 px-4 py-2 text-sm font-medium text-slate-800 hover:bg-gray-300 disabled:cursor-not-allowed disabled:opacity-50">
+        Previous
+      </button>
+      <p class="text-sm text-slate-600" id="gallery-page-indicator">Page 1 of 0</p>
+      <button id="gallery-next" type="button" class="rounded-md bg-gray-200 px-4 py-2 text-sm font-medium text-slate-800 hover:bg-gray-300 disabled:cursor-not-allowed disabled:opacity-50">
+        Next
+      </button>
+    </nav>
+  </section>
+</section>
+
+<div id="gallery-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-label="Media preview">
+  <div class="relative w-full max-w-6xl">
+    <button id="gallery-modal-close" type="button" class="absolute right-2 top-2 rounded-md bg-white/90 px-3 py-1 text-sm font-medium text-slate-900 hover:bg-white">
+      Close
+    </button>
+    <div id="gallery-modal-content" class="overflow-hidden rounded-xl bg-black"></div>
+  </div>
+</div>
+
+<script>
+  let currentPage = 1;
+  let totalPages = 0;
+  let isLoading = false;
+  let pageSource = "load";
+  const pageLimit = 30;
+
+  function byId(id) {
+    return document.getElementById(id);
+  }
+
+  function setHidden(id, hidden) {
+    const node = byId(id);
+    if (!node) {
+      return;
+    }
+    node.classList.toggle("hidden", hidden);
+    if (!hidden && id === "gallery-loading") {
+      const root = byId("gallery-root");
+      if (root) {
+        root.setAttribute("aria-busy", "true");
+      }
+    }
+    if (hidden && id === "gallery-loading") {
+      const root = byId("gallery-root");
+      if (root) {
+        root.setAttribute("aria-busy", "false");
+      }
+    }
+  }
+
+  function clearGrid() {
+    const grid = byId("gallery-grid");
+    if (!grid) {
+      return;
+    }
+    while (grid.firstChild) {
+      grid.removeChild(grid.firstChild);
+    }
+  }
+
+  function setLoading(loading) {
+    isLoading = loading;
+    setHidden("gallery-loading", !loading);
+    if (loading) {
+      setHidden("gallery-empty", true);
+      setHidden("gallery-error", true);
+      clearGrid();
+    }
+    updatePagination();
+  }
+
+  function renderEmpty() {
+    clearGrid();
+    setHidden("gallery-error", true);
+    setHidden("gallery-empty", false);
+  }
+
+  function renderError(message) {
+    clearGrid();
+    const node = byId("gallery-error");
+    if (node) {
+      node.textContent = message;
+    }
+    setHidden("gallery-empty", true);
+    setHidden("gallery-error", false);
+  }
+
+  function mediaElement(item) {
+    if (item.file_type === "video") {
+      const video = document.createElement("video");
+      video.className = "h-64 w-full rounded-t-xl object-cover";
+      video.controls = true;
+      video.preload = "metadata";
+
+      const source = document.createElement("source");
+      source.src = item.media_url;
+      video.appendChild(source);
+      return video;
+    }
+
+    const img = document.createElement("img");
+    img.src = item.media_url;
+    img.alt = item.filename;
+    img.loading = "lazy";
+    img.className = "h-64 w-full rounded-t-xl object-cover";
+    return img;
+  }
+
+  function openModal(item) {
+    const modal = byId("gallery-modal");
+    const content = byId("gallery-modal-content");
+    if (!modal || !content) {
+      return;
+    }
+
+    while (content.firstChild) {
+      content.removeChild(content.firstChild);
+    }
+
+    if (item.file_type === "video") {
+      const video = document.createElement("video");
+      video.controls = true;
+      video.autoplay = true;
+      video.className = "max-h-[85vh] w-full bg-black object-contain";
+      const source = document.createElement("source");
+      source.src = item.media_url;
+      video.appendChild(source);
+      content.appendChild(video);
+    } else {
+      const img = document.createElement("img");
+      img.src = item.media_url;
+      img.alt = item.filename;
+      img.className = "max-h-[85vh] w-full bg-black object-contain";
+      content.appendChild(img);
+    }
+
+    modal.classList.remove("hidden");
+    modal.classList.add("flex");
+  }
+
+  function closeModal() {
+    const modal = byId("gallery-modal");
+    const content = byId("gallery-modal-content");
+    if (!modal || !content) {
+      return;
+    }
+    modal.classList.add("hidden");
+    modal.classList.remove("flex");
+    while (content.firstChild) {
+      content.removeChild(content.firstChild);
+    }
+  }
+
+  function syncPageInUrl(page, replace = false) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("page", String(page));
+    if (replace) {
+      window.history.replaceState({ page }, "", url.toString());
+    } else {
+      window.history.pushState({ page }, "", url.toString());
+    }
+  }
+
+  function renderItems(items) {
+    const grid = byId("gallery-grid");
+    if (!grid) {
+      return;
+    }
+
+    clearGrid();
+    setHidden("gallery-empty", true);
+    setHidden("gallery-error", true);
+
+    for (const item of items) {
+      const card = document.createElement("article");
+      card.className = "overflow-hidden rounded-xl bg-white shadow-md transition duration-200 hover:scale-[1.01] hover:shadow-lg";
+
+      card.appendChild(mediaElement(item));
+
+      const body = document.createElement("div");
+      body.className = "flex items-center justify-between gap-3 px-4 py-3";
+
+      const name = document.createElement("p");
+      name.className = "truncate text-sm font-medium text-slate-800";
+      name.textContent = item.filename;
+      body.appendChild(name);
+
+      const badge = document.createElement("span");
+      badge.className = "rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800";
+      badge.textContent = "Canonical";
+      body.appendChild(badge);
+
+      const actions = document.createElement("div");
+      actions.className = "flex items-center justify-between gap-3 px-4 pb-4";
+
+      const previewButton = document.createElement("button");
+      previewButton.type = "button";
+      previewButton.className = "rounded-md bg-slate-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700";
+      previewButton.textContent = "Quick Preview";
+      previewButton.addEventListener("click", () => {
+        openModal(item);
+      });
+      actions.appendChild(previewButton);
+
+      const detailLink = document.createElement("a");
+      detailLink.className = "text-xs font-medium text-slate-700 underline-offset-2 hover:underline";
+      detailLink.textContent = "Open Detail";
+      detailLink.href = `/gallery/${item.id}?page=${currentPage}`;
+      actions.appendChild(detailLink);
+
+      card.appendChild(body);
+      card.appendChild(actions);
+      grid.appendChild(card);
+    }
+  }
+
+  function updatePagination() {
+    const prev = byId("gallery-prev");
+    const next = byId("gallery-next");
+    const indicator = byId("gallery-page-indicator");
+
+    if (indicator) {
+      indicator.textContent = `Page ${currentPage} of ${totalPages}`;
+    }
+
+    if (prev) {
+      prev.disabled = isLoading || currentPage <= 1 || totalPages === 0;
+    }
+    if (next) {
+      next.disabled = isLoading || totalPages === 0 || currentPage >= totalPages;
+    }
+  }
+
+  async function loadPage(page) {
+    currentPage = Math.max(1, page);
+    setLoading(true);
+
+    try {
+      const response = await fetch(`/api/canonical?page=${currentPage}&limit=${pageLimit}`, {
+        headers: { Accept: "application/json" },
+      });
+
+      if (!response.ok) {
+        throw new Error(`canonical status ${response.status}`);
+      }
+
+      const payload = await response.json();
+      totalPages = typeof payload.total_pages === "number" ? payload.total_pages : 0;
+      currentPage = typeof payload.page === "number" ? payload.page : currentPage;
+
+      if (!Array.isArray(payload.items) || payload.items.length === 0) {
+        renderEmpty();
+      } else {
+        renderItems(payload.items);
+      }
+
+      syncPageInUrl(currentPage, pageSource === "load");
+    } catch (_error) {
+      totalPages = 0;
+      renderError("Unable to load canonical gallery.");
+    } finally {
+      setLoading(false);
+      updatePagination();
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    const prev = byId("gallery-prev");
+    const next = byId("gallery-next");
+
+    if (prev) {
+      prev.addEventListener("click", () => {
+        if (!isLoading && currentPage > 1) {
+          pageSource = "nav";
+          loadPage(currentPage - 1);
+        }
+      });
+    }
+
+    if (next) {
+      next.addEventListener("click", () => {
+        if (!isLoading && currentPage < totalPages) {
+          pageSource = "nav";
+          loadPage(currentPage + 1);
+        }
+      });
+    }
+
+    const modal = byId("gallery-modal");
+    const close = byId("gallery-modal-close");
+    if (close) {
+      close.addEventListener("click", closeModal);
+    }
+    if (modal) {
+      modal.addEventListener("click", (event) => {
+        if (event.target === modal) {
+          closeModal();
+        }
+      });
+    }
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        closeModal();
+      }
+    });
+
+    window.addEventListener("popstate", () => {
+      const params = new URLSearchParams(window.location.search);
+      const parsed = Number.parseInt(params.get("page") || "1", 10);
+      const page = Number.isFinite(parsed) && parsed >= 1 ? parsed : 1;
+      pageSource = "history";
+      loadPage(page);
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    const parsed = Number.parseInt(params.get("page") || "1", 10);
+    const initialPage = Number.isFinite(parsed) && parsed >= 1 ? parsed : 1;
+    pageSource = "load";
+    loadPage(initialPage);
+  });
+</script>
+{% endblock %}
