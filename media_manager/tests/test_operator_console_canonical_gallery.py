@@ -7,6 +7,8 @@ from uuid import UUID
 import pytest
 
 from media_manager.app.persistence.models import CanonicalAssignment, FileContent, FileInstance, FileInstanceStatus
+from media_manager.app.persistence.models import TagSource
+from media_manager.app.persistence.tagging import upsert_canonical_tag
 from media_manager.app.persistence.operator_console import OperatorConsoleReadService
 
 
@@ -124,6 +126,7 @@ def test_get_canonical_gallery_orders_latest_assignments_and_maps_media_types(se
 
     assert page.total_count == 2
     assert page.page == 1
+    assert page.limit == 30
     assert page.total_pages == 1
     assert [item.id for item in page.items] == [str(a_img), str(b_vid)]
     assert [item.file_type for item in page.items] == ["image", "video"]
@@ -241,6 +244,7 @@ def test_get_canonical_gallery_pagination_and_out_of_range(session_factory) -> N
     page3 = service.get_canonical_gallery(page=9, limit=2)
 
     assert page1.total_count == 3
+    assert page1.limit == 2
     assert page1.total_pages == 2
     assert len(page1.items) == 2
     assert len(page2.items) == 1
@@ -256,6 +260,133 @@ def test_get_canonical_gallery_sanitizes_page_and_limit_bounds(session_factory) 
     assert page.page == 1
     assert page.total_pages == 0
     assert page.items == ()
+
+
+def test_get_canonical_gallery_supports_tag_filter_and_discovery_fields(session_factory) -> None:
+    service = OperatorConsoleReadService(session_factory)
+    base = datetime(2026, 3, 2, 13, 30, tzinfo=UTC)
+
+    content_a = UUID("62000000-0000-0000-0000-000000000001")
+    content_b = UUID("62000000-0000-0000-0000-000000000002")
+    a_id = UUID("63000000-0000-0000-0000-000000000001")
+    b_id = UUID("63000000-0000-0000-0000-000000000002")
+
+    with session_factory.begin() as session:
+        _add_content(session, content_a, "hash-ta", base)
+        _add_content(session, content_b, "hash-tb", base + timedelta(seconds=1))
+        session.flush()
+        _add_instance(
+            session,
+            file_instance_id=a_id,
+            content_id=content_a,
+            absolute_path="/gallery/filter-a.jpg",
+            first_seen_at=base,
+        )
+        _add_instance(
+            session,
+            file_instance_id=b_id,
+            content_id=content_b,
+            absolute_path="/gallery/filter-b.jpg",
+            first_seen_at=base + timedelta(seconds=1),
+        )
+        _add_assignment(
+            session,
+            assignment_id=UUID("64000000-0000-0000-0000-000000000001"),
+            content_id=content_a,
+            canonical_instance_id=a_id,
+            assigned_at=base,
+        )
+        _add_assignment(
+            session,
+            assignment_id=UUID("64000000-0000-0000-0000-000000000002"),
+            content_id=content_b,
+            canonical_instance_id=b_id,
+            assigned_at=base + timedelta(seconds=1),
+        )
+        session.flush()
+        upsert_canonical_tag(
+            session,
+            canonical_id=content_a,
+            tag_name="city",
+            source=TagSource.AI,
+            confidence_score=0.8,
+            enrichment_version=1,
+        )
+        upsert_canonical_tag(
+            session,
+            canonical_id=content_a,
+            tag_name="travel",
+            source=TagSource.AI,
+            confidence_score=0.9,
+            enrichment_version=1,
+        )
+        upsert_canonical_tag(
+            session,
+            canonical_id=content_b,
+            tag_name="city",
+            source=TagSource.MANUAL,
+            confidence_score=1.0,
+            enrichment_version=1,
+        )
+
+    page = service.get_canonical_gallery(tags=("city", "travel"), sort_by="confidence_score", sort_order="desc")
+    assert page.total_count == 1
+    assert page.items[0].id == str(a_id)
+    assert page.items[0].matched_tags == ("city", "travel")
+    assert page.items[0].top_confidence_score == 0.9
+    assert page.items[0].sort_tag_name == "city"
+
+
+def test_get_canonical_gallery_supports_source_filter(session_factory) -> None:
+    service = OperatorConsoleReadService(session_factory)
+    base = datetime(2026, 3, 2, 13, 40, tzinfo=UTC)
+
+    content_a = UUID("65000000-0000-0000-0000-000000000001")
+    content_b = UUID("65000000-0000-0000-0000-000000000002")
+    a_id = UUID("66000000-0000-0000-0000-000000000001")
+    b_id = UUID("66000000-0000-0000-0000-000000000002")
+
+    with session_factory.begin() as session:
+        _add_content(session, content_a, "hash-sa", base)
+        _add_content(session, content_b, "hash-sb", base + timedelta(seconds=1))
+        session.flush()
+        _add_instance(session, file_instance_id=a_id, content_id=content_a, absolute_path="/gallery/sa.jpg", first_seen_at=base)
+        _add_instance(session, file_instance_id=b_id, content_id=content_b, absolute_path="/gallery/sb.jpg", first_seen_at=base)
+        _add_assignment(
+            session,
+            assignment_id=UUID("67000000-0000-0000-0000-000000000001"),
+            content_id=content_a,
+            canonical_instance_id=a_id,
+            assigned_at=base,
+        )
+        _add_assignment(
+            session,
+            assignment_id=UUID("67000000-0000-0000-0000-000000000002"),
+            content_id=content_b,
+            canonical_instance_id=b_id,
+            assigned_at=base + timedelta(seconds=1),
+        )
+        session.flush()
+        upsert_canonical_tag(
+            session,
+            canonical_id=content_a,
+            tag_name="x",
+            source=TagSource.AI,
+            confidence_score=0.7,
+            enrichment_version=1,
+        )
+        upsert_canonical_tag(
+            session,
+            canonical_id=content_b,
+            tag_name="y",
+            source=TagSource.MANUAL,
+            confidence_score=1.0,
+            enrichment_version=1,
+        )
+
+    page = service.get_canonical_gallery(source=TagSource.MANUAL)
+    assert page.total_count == 1
+    assert page.items[0].id == str(b_id)
 
 
 def test_resolve_media_source_returns_media_for_active_image_and_video(session_factory, tmp_path: Path) -> None:

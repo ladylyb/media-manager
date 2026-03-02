@@ -6,7 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -173,10 +173,51 @@ def create_app() -> FastAPI:
     def canonical_gallery(
         page: int = 1,
         limit: int = 30,
+        tags: str | None = Query(default=None),
+        sort_by: str = Query(default="created_at"),
+        sort_order: str | None = Query(default=None),
+        source: str | None = Query(default=None),
+        min_confidence: float | None = Query(default=None),
         service: OperatorConsoleReadService = Depends(get_operator_console_service),
-    ) -> dict[str, int | list[dict[str, str]]]:
+    ) -> dict[str, object]:
         """Return paginated canonical media entries for the gallery UI."""
-        return service.get_canonical_gallery(page=page, limit=limit).to_dict()
+        normalized_sort_by = sort_by.strip().lower()
+        if normalized_sort_by not in {"created_at", "tag_name", "confidence_score"}:
+            raise HTTPException(status_code=400, detail="sort_by must be created_at, tag_name, or confidence_score.")
+
+        if sort_order is None:
+            normalized_sort_order = "asc" if normalized_sort_by == "tag_name" else "desc"
+        else:
+            normalized_sort_order = sort_order.strip().lower()
+            if normalized_sort_order not in {"asc", "desc"}:
+                raise HTTPException(status_code=400, detail="sort_order must be asc or desc.")
+
+        source_value: TagSource | None = None
+        if source is not None:
+            try:
+                source_value = TagSource(source.strip().lower())
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail="source must be ai, manual, import, or system.") from exc
+
+        if min_confidence is not None and not 0.0 <= float(min_confidence) <= 1.0:
+            raise HTTPException(status_code=400, detail="min_confidence must be within [0.0, 1.0].")
+
+        tag_items: tuple[str, ...] = ()
+        if tags is not None:
+            tag_items = tuple(part.strip() for part in tags.split(",") if part.strip())
+
+        try:
+            return service.get_canonical_gallery(
+                page=page,
+                limit=limit,
+                tags=tag_items,
+                sort_by=normalized_sort_by,
+                sort_order=normalized_sort_order,
+                source=source_value,
+                min_confidence=min_confidence,
+            ).to_dict()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/duplicates")
     def duplicates(

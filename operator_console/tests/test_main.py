@@ -101,12 +101,24 @@ class _FakeService:
             )
         ]
 
-    def get_canonical_gallery(self, page: int = 1, limit: int = 30) -> _FakePayload:
+    def get_canonical_gallery(
+        self,
+        page: int = 1,
+        limit: int = 30,
+        *,
+        tags: tuple[str, ...] = (),
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+        source=None,
+        min_confidence: float | None = None,
+    ) -> _FakePayload:
+        _ = tags, sort_by, sort_order, source, min_confidence
         if page > 10:
             return _FakePayload(
                 {
                     "total_count": 2,
                     "page": page,
+                    "limit": 30,
                     "total_pages": 1,
                     "items": [],
                 }
@@ -115,6 +127,7 @@ class _FakeService:
             {
                 "total_count": 2,
                 "page": page,
+                "limit": 30,
                 "total_pages": 1,
                 "items": [
                     {
@@ -122,12 +135,18 @@ class _FakeService:
                         "filename": "canon-a.jpg",
                         "file_type": "image",
                         "media_url": "/media/33333333-0000-0000-0000-000000000001",
+                        "matched_tags": ["city", "travel"],
+                        "top_confidence_score": 0.92,
+                        "sort_tag_name": "city",
                     },
                     {
                         "id": "33333333-0000-0000-0000-000000000002",
                         "filename": "canon-b.mov",
                         "file_type": "video",
                         "media_url": "/media/33333333-0000-0000-0000-000000000002",
+                        "matched_tags": [],
+                        "top_confidence_score": None,
+                        "sort_tag_name": None,
                     },
                 ],
             }
@@ -403,6 +422,7 @@ def test_api_canonical_returns_paginated_shape() -> None:
     assert response.json() == {
         "total_count": 2,
         "page": 1,
+        "limit": 30,
         "total_pages": 1,
         "items": [
             {
@@ -410,12 +430,18 @@ def test_api_canonical_returns_paginated_shape() -> None:
                 "filename": "canon-a.jpg",
                 "file_type": "image",
                 "media_url": "/media/33333333-0000-0000-0000-000000000001",
+                "matched_tags": ["city", "travel"],
+                "top_confidence_score": 0.92,
+                "sort_tag_name": "city",
             },
             {
                 "id": "33333333-0000-0000-0000-000000000002",
                 "filename": "canon-b.mov",
                 "file_type": "video",
                 "media_url": "/media/33333333-0000-0000-0000-000000000002",
+                "matched_tags": [],
+                "top_confidence_score": None,
+                "sort_tag_name": None,
             },
         ],
     }
@@ -434,6 +460,50 @@ def test_api_canonical_out_of_range_page_returns_empty_items() -> None:
     payload = response.json()
     assert payload["page"] == 99
     assert payload["items"] == []
+
+
+def test_api_canonical_accepts_discovery_query_params() -> None:
+    """GET /api/canonical should accept filtering and sorting query params."""
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get(
+            "/api/canonical?page=1&limit=30&tags=city,travel&sort_by=tag_name&sort_order=asc&source=ai&min_confidence=0.5"
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["page"] == 1
+    assert payload["items"][0]["matched_tags"] == ["city", "travel"]
+
+
+def test_api_canonical_rejects_invalid_sort_by() -> None:
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/api/canonical?sort_by=unsupported")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert "sort_by" in response.json()["detail"]
+
+
+def test_api_canonical_rejects_invalid_source_and_confidence() -> None:
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        bad_source = client.get("/api/canonical?source=bad")
+        bad_conf = client.get("/api/canonical?min_confidence=3.0")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert bad_source.status_code == 400
+    assert "source" in bad_source.json()["detail"]
+    assert bad_conf.status_code == 400
+    assert "min_confidence" in bad_conf.json()["detail"]
 
 
 def test_media_endpoint_streams_file() -> None:
