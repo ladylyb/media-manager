@@ -44,6 +44,9 @@ nav:
       - Overview: operator-guide/index.md
       - Resume and Recovery: operator-guide/resume-and-recovery.md
       - Troubleshooting: operator-guide/troubleshooting.md
+      - Observability: operator-guide/observability.md
+      - Drift Diagnosis: operator-guide/drift-diagnosis.md
+      - Incident Response: operator-guide/incident-response.md
   - Reference:
       - Overview: reference/index.md
       - Data Dictionary: reference/data-dictionary.md
