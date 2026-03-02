@@ -24,10 +24,11 @@ from media_manager.app.persistence.ingest import IngestService
 from media_manager.app.persistence.legacy_import import LegacyImportService
 from media_manager.app.persistence.materialized_reads import (
     benchmark_planner_lookup,
+    fetch_canonical_metadata,
     refresh_materialized_view,
 )
 from media_manager.app.persistence.models import PlannedAction
-from media_manager.app.observability import start_metrics_http_server_if_enabled
+from media_manager.app.observability import generate_metrics_text, start_metrics_http_server_if_enabled
 from media_manager.app.persistence.planner import PlanningService
 from media_manager.app.persistence.runs import RunService
 
@@ -223,6 +224,118 @@ def _render_planner_benchmark_output(summary) -> None:
     print(f"StdDev: {summary.stddev_ms:.3f} ms")
     print(f"Improvement: {summary.improvement_pct:.2f}%")
     print("----------------------------------------")
+
+
+def _extract_metric_lines_for_run_id(run_id: str) -> list[str]:
+    metric_names = (
+        "canonical_read_cache_hits_total",
+        "canonical_read_cache_misses_total",
+        "canonical_read_cache_hit_ratio_percent",
+    )
+    payload = generate_metrics_text().decode("utf-8", errors="ignore")
+    lines: list[str] = []
+    for line in payload.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        if not any(line.startswith(metric_name) for metric_name in metric_names):
+            continue
+        if f'run_id="{run_id}"' not in line:
+            continue
+        lines.append(line)
+    return sorted(lines)
+
+
+def _render_observability_quick_check_output(
+    *,
+    run_id: str,
+    sample_size: int,
+    base_rows: int,
+    mv_rows: int,
+    metric_lines: list[str],
+    complete: bool,
+) -> None:
+    print("----------------------------------------")
+    print("Observability Quick Check")
+    print(f"  Run ID: {run_id}")
+    print(f"  Sample size: {sample_size}")
+    print(f"  Base rows read: {base_rows}")
+    print(f"  MV rows read: {mv_rows}")
+    print(f"  Metrics complete: {complete}")
+    print("----------------------------------------")
+    print("Matching metric lines:")
+    for line in metric_lines:
+        print(f"  {line}")
+    print("----------------------------------------")
+
+
+def _observability_quick_check_command(*, run_id: str | None, sample_size: int) -> int:
+    normalized_sample_size = max(int(sample_size), 1)
+    normalized_run_id = str(run_id).strip() if run_id is not None else ""
+    if not normalized_run_id:
+        normalized_run_id = f"obs-quickcheck-{uuid.uuid4()}"
+
+    engine = create_db_engine()
+    session_factory = create_session_factory(engine)
+    try:
+        with session_factory() as session:
+            base_rows = fetch_canonical_metadata(
+                session,
+                use_mv=False,
+                sample_size=normalized_sample_size,
+                use_cache=True,
+                metrics_run_id=normalized_run_id,
+            )
+            # Trigger one hit per source so all cache metric families are visible.
+            fetch_canonical_metadata(
+                session,
+                use_mv=False,
+                sample_size=normalized_sample_size,
+                use_cache=True,
+                metrics_run_id=normalized_run_id,
+            )
+            fetch_canonical_metadata(
+                session,
+                use_mv=True,
+                sample_size=normalized_sample_size,
+                use_cache=True,
+                metrics_run_id=normalized_run_id,
+            )
+            mv_rows = fetch_canonical_metadata(
+                session,
+                use_mv=True,
+                sample_size=normalized_sample_size,
+                use_cache=True,
+                metrics_run_id=normalized_run_id,
+            )
+    except Exception as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        engine.dispose()
+
+    metric_lines = _extract_metric_lines_for_run_id(normalized_run_id)
+    expected_tokens = tuple(
+        f'{metric_name}{{run_id="{normalized_run_id}",source="{source}"'
+        for metric_name in (
+            "canonical_read_cache_hits_total",
+            "canonical_read_cache_misses_total",
+            "canonical_read_cache_hit_ratio_percent",
+        )
+        for source in ("base", "mv")
+    )
+    complete = all(any(token in line for line in metric_lines) for token in expected_tokens)
+    _render_observability_quick_check_output(
+        run_id=normalized_run_id,
+        sample_size=normalized_sample_size,
+        base_rows=len(base_rows),
+        mv_rows=len(mv_rows),
+        metric_lines=metric_lines,
+        complete=complete,
+    )
+    if not complete:
+        print("Missing expected canonical cache metric lines for this run_id.", file=sys.stderr)
+        return 1
+    return 0
 
 
 def _legacy_import_command(
@@ -628,6 +741,20 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Enable optional in-memory canonical read cache for MV lookup.",
     )
+    observability_quick_check_parser = subparsers.add_parser(
+        "observability-quick-check",
+        help="Run one base+MV canonical metadata read and print matching Prometheus lines.",
+    )
+    observability_quick_check_parser.add_argument(
+        "--run-id",
+        help="Optional explicit run_id label for filtering emitted metric lines.",
+    )
+    observability_quick_check_parser.add_argument(
+        "--sample-size",
+        type=int,
+        default=1000,
+        help="Maximum canonical metadata rows to read per source.",
+    )
 
     args = parser.parse_args(argv)
     if args.command == "plan":
@@ -697,6 +824,11 @@ def main(argv: list[str] | None = None) -> int:
             repeats=args.repeats,
             use_cache=args.use_cache,
             seed=args.seed,
+        )
+    if args.command == "observability-quick-check":
+        return _observability_quick_check_command(
+            run_id=args.run_id,
+            sample_size=args.sample_size,
         )
 
     parser.print_help()
