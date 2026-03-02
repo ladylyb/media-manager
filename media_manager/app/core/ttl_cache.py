@@ -20,6 +20,13 @@ class TTLCacheStats:
     misses: int
     size: int
 
+    @property
+    def hit_ratio(self) -> float:
+        total = self.hits + self.misses
+        if total <= 0:
+            return 0.0
+        return self.hits / total
+
 
 class TTLCache(Generic[K, V]):
     def __init__(

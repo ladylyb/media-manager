@@ -24,6 +24,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from media_manager.app.core.ttl_cache import TTLCache
+from media_manager.app.observability import record_canonical_read_cache_disabled, record_canonical_read_cache_metrics
 
 
 @dataclass(frozen=True)
@@ -178,15 +179,26 @@ def fetch_canonical_metadata(
     use_mv: bool,
     sample_size: int,
     use_cache: bool | None = None,
+    metrics_run_id: str | None = None,
 ) -> list[CanonicalMetadataRow]:
     cache_enabled = _env_cache_enabled() if use_cache is None else bool(use_cache)
+    source_label = "mv" if use_mv else "base"
     cache_key = f"source={'mv' if use_mv else 'base'}|sample_size={sample_size}"
 
     # optimization-only path: read cache never affects decision semantics.
     if cache_enabled:
         cached = _READ_CACHE.get(cache_key)
+        cache_stats = _READ_CACHE.stats()
+        record_canonical_read_cache_metrics(
+            run_id=metrics_run_id,
+            source=source_label,
+            cache_hits=cache_stats.hits,
+            cache_misses=cache_stats.misses,
+        )
         if cached is not None:
             return cached
+    else:
+        record_canonical_read_cache_disabled(run_id=metrics_run_id, source=source_label)
 
     rows = _query_rows(session, use_mv=use_mv, sample_size=sample_size)
     if cache_enabled:

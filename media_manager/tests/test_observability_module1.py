@@ -15,6 +15,8 @@ import media_manager.app.persistence.planner as planner_module
 from media_manager.app.observability import (
     mount_metrics_endpoint,
     read_counter_value,
+    record_canonical_read_cache_disabled,
+    record_canonical_read_cache_metrics,
     record_apply_metrics,
     record_ingest_metrics,
     record_planner_metrics,
@@ -50,6 +52,7 @@ def test_metrics_endpoint_exists_and_exposes_prometheus_payload() -> None:
     record_ingest_metrics(run_id="endpoint-test", files_scanned=1, new_contents=1)
     record_planner_metrics(run_id="endpoint-test", actions_generated=1)
     record_apply_metrics(run_id="endpoint-test", actions_executed=1)
+    record_canonical_read_cache_metrics(run_id="endpoint-test", source="mv", cache_hits=1, cache_misses=1)
 
     client = testclient.TestClient(app)
     response = client.get("/metrics")
@@ -59,6 +62,9 @@ def test_metrics_endpoint_exists_and_exposes_prometheus_payload() -> None:
     assert "ingest_new_contents_total" in text
     assert "planner_actions_generated_total" in text
     assert "apply_actions_executed_total" in text
+    assert "canonical_read_cache_hits_total" in text
+    assert "canonical_read_cache_misses_total" in text
+    assert "canonical_read_cache_hit_ratio_percent" in text
     assert (
         "process_cpu_seconds_total" in text
         or "python_gc_objects_collected_total" in text
@@ -125,6 +131,60 @@ def test_counter_helpers_increment_expected_values() -> None:
     assert after_new - before_new == 2
     assert after_plan - before_plan == 5
     assert after_apply - before_apply == 4
+
+
+def test_canonical_read_cache_metric_helpers_update_expected_values() -> None:
+    labels = {"run_id": "helper-cache-run", "source": "mv"}
+    before_hits = read_counter_value("canonical_read_cache_hits_total", labels)
+    before_misses = read_counter_value("canonical_read_cache_misses_total", labels)
+
+    record_canonical_read_cache_metrics(run_id="helper-cache-run", source="mv", cache_hits=1, cache_misses=1)
+    record_canonical_read_cache_metrics(run_id="helper-cache-run", source="mv", cache_hits=2, cache_misses=1)
+
+    after_hits = read_counter_value("canonical_read_cache_hits_total", labels)
+    after_misses = read_counter_value("canonical_read_cache_misses_total", labels)
+    ratio_percent = read_counter_value("canonical_read_cache_hit_ratio_percent", labels)
+
+    assert after_hits - before_hits == 2
+    assert after_misses - before_misses == 1
+    assert ratio_percent == pytest.approx(66.6666666666, abs=0.001)
+
+    record_canonical_read_cache_disabled(run_id="helper-cache-run", source="mv")
+    disabled_ratio = read_counter_value("canonical_read_cache_hit_ratio_percent", labels)
+    assert disabled_ratio == 0.0
+
+
+def test_canonical_read_cache_metric_helper_normalizes_none_and_non_string_run_id() -> None:
+    none_labels = {"run_id": "none", "source": "base"}
+    numeric_labels = {"run_id": "123", "source": "base"}
+
+    before_none = read_counter_value("canonical_read_cache_hit_ratio_percent", none_labels)
+    before_numeric = read_counter_value("canonical_read_cache_hit_ratio_percent", numeric_labels)
+
+    record_canonical_read_cache_metrics(run_id=None, source="base", cache_hits=0, cache_misses=1)
+    record_canonical_read_cache_metrics(run_id=123, source="base", cache_hits=1, cache_misses=1)  # type: ignore[arg-type]
+
+    after_none = read_counter_value("canonical_read_cache_hit_ratio_percent", none_labels)
+    after_numeric = read_counter_value("canonical_read_cache_hit_ratio_percent", numeric_labels)
+
+    assert after_none != before_none or after_none == 0.0
+    assert after_numeric == 50.0
+
+
+def test_canonical_read_cache_metric_helper_ignores_out_of_order_snapshots_for_counter_deltas() -> None:
+    labels = {"run_id": "out-of-order-run", "source": "mv"}
+    before_hits = read_counter_value("canonical_read_cache_hits_total", labels)
+    before_misses = read_counter_value("canonical_read_cache_misses_total", labels)
+
+    record_canonical_read_cache_metrics(run_id="out-of-order-run", source="mv", cache_hits=10, cache_misses=5)
+    record_canonical_read_cache_metrics(run_id="out-of-order-run", source="mv", cache_hits=7, cache_misses=3)
+    record_canonical_read_cache_metrics(run_id="out-of-order-run", source="mv", cache_hits=11, cache_misses=6)
+
+    after_hits = read_counter_value("canonical_read_cache_hits_total", labels)
+    after_misses = read_counter_value("canonical_read_cache_misses_total", labels)
+
+    assert after_hits - before_hits == 11
+    assert after_misses - before_misses == 6
 
 
 def test_counters_increment_correctly_under_concurrent_updates() -> None:
