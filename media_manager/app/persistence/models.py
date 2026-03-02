@@ -20,7 +20,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -640,6 +640,7 @@ class TagEnrichmentRun(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, unique=True, default=uuid.uuid4)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     scope: Mapped[str] = mapped_column(Text, nullable=False)
@@ -681,6 +682,7 @@ class TagEnrichmentRun(Base):
 
 Index("idx_tag_enrichment_runs_started_at", TagEnrichmentRun.started_at)
 Index("idx_tag_enrichment_runs_status", TagEnrichmentRun.status)
+Index("idx_tag_enrichment_runs_run_id", TagEnrichmentRun.run_id)
 
 
 class TagEnrichmentItem(Base):
@@ -719,6 +721,8 @@ class TagEnrichmentItem(Base):
         server_default=text("0"),
     )
     average_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    previous_tags: Mapped[list[dict[str, object]] | None] = mapped_column(JSONB, nullable=True)
+    previous_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     previous_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     new_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)

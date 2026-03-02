@@ -141,6 +141,13 @@ def test_rerun_idempotent_keeps_versions_when_unchanged(session_factory) -> None
         assert len(tags) >= 2
         versions = {row.enrichment_version for row in tags}
         assert versions == {1}
+        first_item = session.scalar(
+            select(TagEnrichmentItem)
+            .where(TagEnrichmentItem.run_id == first.run_id, TagEnrichmentItem.canonical_id == content_id)
+        )
+        assert first_item is not None
+        assert first_item.previous_tags == []
+        assert first_item.previous_confidence is None
         latest_item = session.scalar(
             select(TagEnrichmentItem)
             .where(TagEnrichmentItem.run_id == second.run_id)
@@ -148,6 +155,9 @@ def test_rerun_idempotent_keeps_versions_when_unchanged(session_factory) -> None
         )
         assert latest_item is not None
         assert latest_item.result == "UNCHANGED"
+        assert latest_item.previous_tags is not None
+        assert [payload["tag"] for payload in latest_item.previous_tags] == ["alice", "travel"]
+        assert latest_item.previous_confidence == 0.75
 
 
 def test_changed_output_bumps_version_once(session_factory) -> None:
@@ -222,6 +232,7 @@ def test_run_summary_fields_persisted(session_factory) -> None:
     with session_factory() as session:
         row = session.get(TagEnrichmentRun, summary.run_id)
         assert row is not None
+        assert row.run_id == summary.run_id
         assert row.number_of_items_processed == 1
         assert row.status == "COMPLETED"
 
@@ -230,6 +241,10 @@ def test_item_failure_records_durable_failure_fact(session_factory, monkeypatch:
     content_id = uuid.uuid4()
     _seed_canonical_item(session_factory, content_id=content_id, path_suffix="fail", sha_char="9")
     _upsert_metadata(session_factory, content_id, "OWNER", "Owner")
+    run_tag_enrichment(
+        session_factory,
+        TagEnrichmentCommand(scope=EnrichmentScope.SINGLE, canonical_id=content_id, source=TagSource.SYSTEM),
+    )
 
     def _raise(_session, _canonical_id):  # type: ignore[no-untyped-def]
         raise RuntimeError("boom")
@@ -241,9 +256,16 @@ def test_item_failure_records_durable_failure_fact(session_factory, monkeypatch:
     )
     assert summary.status == "COMPLETED_WITH_ERRORS"
     with session_factory() as session:
-        item = session.scalar(select(TagEnrichmentItem).where(TagEnrichmentItem.run_id == summary.run_id))
+        item = session.scalar(
+            select(TagEnrichmentItem)
+            .where(TagEnrichmentItem.run_id == summary.run_id)
+            .order_by(TagEnrichmentItem.sequence_no.asc())
+        )
         assert item is not None
         assert item.result == "FAILED"
+        assert item.previous_tags is not None
+        assert [payload["tag"] for payload in item.previous_tags] == ["owner"]
+        assert item.previous_confidence == 0.75
         assert "boom" in (item.error_message or "")
 
 
