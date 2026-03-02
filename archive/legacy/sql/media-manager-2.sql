@@ -1,34 +1,33 @@
-BEGIN TRANSACTION;
+-- PostgreSQL migration: add and backfill duplicate_group_id for exact_hash rows.
 
-ALTER TABLE file_actions RENAME TO file_actions_old;
+BEGIN;
 
-CREATE TABLE file_actions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    file_id INTEGER NOT NULL,
+ALTER TABLE duplicate_candidates
+ADD COLUMN IF NOT EXISTS duplicate_group_id BIGINT;
 
-    action TEXT CHECK (
-        action IN ('keep','move','delete','ignore','organize', 'rename')
-    ) NOT NULL,
-
-    target_path TEXT,
-    decided_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    notes TEXT,
-
-    FOREIGN KEY (file_id) REFERENCES files(id)
-);
-
-INSERT INTO file_actions (
-    id, file_id, action, target_path, decided_at, notes
+WITH ranked AS (
+    SELECT
+        id,
+        ROW_NUMBER() OVER (
+            PARTITION BY file_id_1
+            ORDER BY confidence_score DESC, id ASC
+        ) AS grp
+    FROM duplicate_candidates
+    WHERE match_type = 'exact_hash'
 )
-SELECT
-    id, file_id, action, target_path, decided_at, notes
-FROM file_actions_old;
-
-DROP TABLE file_actions_old;
+UPDATE duplicate_candidates dc
+SET duplicate_group_id = ranked.grp
+FROM ranked
+WHERE dc.id = ranked.id
+  AND dc.match_type = 'exact_hash';
 
 COMMIT;
 
-
--- DROP TABLE file_actions;
-
-SELECT COUNT(1) FROM file_actions;
+SELECT
+    duplicate_group_id,
+    COUNT(*) AS pair_count,
+    string_agg(file_id_1::text || '-' || file_id_2::text, ',' ORDER BY id) AS member_pairs
+FROM duplicate_candidates
+WHERE duplicate_group_id IS NOT NULL
+GROUP BY duplicate_group_id
+ORDER BY pair_count DESC;

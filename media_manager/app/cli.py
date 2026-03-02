@@ -15,6 +15,7 @@ from media_manager.app.persistence.apply import ApplyService
 from media_manager.app.persistence.base import create_db_engine, create_session_factory
 from media_manager.app.persistence.canonicalization import RecomputeMode, recompute_canonical_assignments
 from media_manager.app.persistence.ingest import IngestService
+from media_manager.app.persistence.legacy_import import LegacyImportService
 from media_manager.app.persistence.models import PlannedAction
 from media_manager.app.persistence.planner import PlanningService
 from media_manager.app.persistence.runs import RunService
@@ -136,6 +137,62 @@ def _render_canonical_recompute_output(summary) -> None:
         for content_id in summary.failed_content_ids:
             print(f"    {content_id}")
     print("----------------------------------------")
+
+
+def _render_legacy_import_output(summary) -> None:
+    print("----------------------------------------")
+    print("Legacy Import Summary")
+    print(f"  Import run ID: {summary.import_run_id}")
+    print(f"  State: {summary.state}")
+    if summary.raw_counts:
+        print("  Raw row counts:")
+        for table_name in sorted(summary.raw_counts):
+            print(f"    {table_name}: {summary.raw_counts[table_name]}")
+    print(f"  Verification failures: {len(summary.verification_failures)}")
+    print("----------------------------------------")
+
+
+def _legacy_import_command(
+    *,
+    sqlite_path: str,
+    pg_url: str | None,
+    raw_schema: str,
+    normalized_schema: str,
+    import_run_id: str | None,
+    source_db_name: str | None,
+) -> int:
+    path = Path(sqlite_path)
+    if not path.exists():
+        print(f"SQLite path does not exist: {path}", file=sys.stderr)
+        return 2
+
+    parsed_run_id: uuid.UUID | None = None
+    if import_run_id:
+        try:
+            parsed_run_id = uuid.UUID(import_run_id)
+        except ValueError:
+            print(f"Invalid import_run_id: {import_run_id}", file=sys.stderr)
+            return 2
+
+    engine = create_db_engine(pg_url)
+    service = LegacyImportService(engine, raw_schema=raw_schema, normalized_schema=normalized_schema)
+    try:
+        summary = service.import_sqlite(
+            path,
+            import_run_id=parsed_run_id,
+            source_db_name=source_db_name,
+        )
+    except MediaManagerError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        engine.dispose()
+
+    _render_legacy_import_output(summary)
+    return 0
 
 
 def _plan_command(path_arg: str, *, strict_metadata: bool = False) -> int:
@@ -334,6 +391,20 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Validate baseline write contract without persisting.",
     )
+    legacy_import_parser = subparsers.add_parser(
+        "legacy-import",
+        help="One-off import of legacy SQLite DB into legacy_raw and legacy_3nf schemas.",
+    )
+    legacy_import_parser.add_argument("--sqlite-path", required=True, help="Path to legacy SQLite database file.")
+    legacy_import_parser.add_argument("--pg-url", help="Optional PostgreSQL URL override. Defaults to DATABASE_URL.")
+    legacy_import_parser.add_argument("--raw-schema", default="legacy_raw", help="Raw mirror schema name.")
+    legacy_import_parser.add_argument(
+        "--normalized-schema",
+        default="legacy_3nf",
+        help="Normalized legacy schema name.",
+    )
+    legacy_import_parser.add_argument("--import-run-id", help="Optional stable import run UUID for resume/idempotency.")
+    legacy_import_parser.add_argument("--source-db-name", help="Optional source database label.")
 
     args = parser.parse_args(argv)
     if args.command == "plan":
@@ -373,6 +444,15 @@ def main(argv: list[str] | None = None) -> int:
             policy=args.policy,
             dry_run=args.dry_run,
             artifact=args.artifact,
+        )
+    if args.command == "legacy-import":
+        return _legacy_import_command(
+            sqlite_path=args.sqlite_path,
+            pg_url=args.pg_url,
+            raw_schema=args.raw_schema,
+            normalized_schema=args.normalized_schema,
+            import_run_id=args.import_run_id,
+            source_db_name=args.source_db_name,
         )
 
     parser.print_help()

@@ -60,6 +60,39 @@ def clean_tables(db_engine: Engine) -> None:
                 "RESTART IDENTITY CASCADE"
             )
         )
+        conn.execute(
+            text(
+                "TRUNCATE TABLE "
+                "legacy_3nf.canonical_candidate, "
+                "legacy_3nf.deletion_audit_candidate_instance, "
+                "legacy_3nf.deletion_audit_candidate, "
+                "legacy_3nf.deletion_audit_run, "
+                "legacy_3nf.duplicate_evidence, "
+                "legacy_3nf.action_event, "
+                "legacy_3nf.media_attributes, "
+                "legacy_3nf.file_instance, "
+                "legacy_3nf.content_identity, "
+                "legacy_3nf.scan_batch, "
+                "legacy_3nf.import_failure_events, "
+                "legacy_3nf.import_runs "
+                "RESTART IDENTITY CASCADE"
+            )
+        )
+        conn.execute(
+            text(
+                "TRUNCATE TABLE "
+                "legacy_raw._tmp_deletion_audit_import, "
+                "legacy_raw.deletion_audit_candidate_files, "
+                "legacy_raw.deletion_audit_candidates, "
+                "legacy_raw.deletion_audit_runs, "
+                "legacy_raw.duplicate_candidates, "
+                "legacy_raw._file_actions_old, "
+                "legacy_raw.file_actions, "
+                "legacy_raw.files, "
+                "legacy_raw.scans "
+                "RESTART IDENTITY CASCADE"
+            )
+        )
 
 
 @pytest.fixture
