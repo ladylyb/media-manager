@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from media_manager.app.core.filenames import infer_media_type_from_extension
@@ -26,6 +26,7 @@ from media_manager.app.persistence.models import (
     FileInstanceStatus,
     PlannedAction,
     Run,
+    Tag,
     TagSource,
 )
 
@@ -421,6 +422,25 @@ class OperatorConsoleReadService:
             total_pages=page_rows.total_pages,
             items=items,
         )
+
+    def get_tag_suggestions(self, q: str | None = None, limit: int = 10) -> tuple[str, ...]:
+        """Return deterministic normalized tag suggestions for discover autocomplete."""
+        bounded_limit = min(50, max(1, int(limit)))
+        normalized_query = (q or "").strip().lower()
+        with self._session_factory() as session:
+            stmt = select(Tag.normalized_name)
+            if normalized_query:
+                contains = f"%{normalized_query}%"
+                prefix = f"{normalized_query}%"
+                normalized_name = func.lower(Tag.normalized_name)
+                stmt = stmt.where(normalized_name.like(contains)).order_by(
+                    case((normalized_name.like(prefix), 0), else_=1),
+                    Tag.normalized_name.asc(),
+                )
+            else:
+                stmt = stmt.order_by(Tag.normalized_name.asc())
+            stmt = stmt.limit(bounded_limit)
+            return tuple(session.scalars(stmt).all())
 
     def resolve_thumbnail_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:
         """Resolve an active image file path and media type for thumbnail streaming."""

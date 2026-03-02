@@ -22,6 +22,10 @@ from operator_console.main import (
 class _FakeService:
     """Simple fake read service for endpoint dependency overrides."""
 
+    def __init__(self) -> None:
+        self.last_gallery_call: dict[str, Any] | None = None
+        self.last_tag_suggestions_call: dict[str, Any] | None = None
+
     def get_dashboard_summary(self) -> "_FakePayload":
         return _FakePayload(
             {
@@ -112,6 +116,15 @@ class _FakeService:
         source=None,
         min_confidence: float | None = None,
     ) -> _FakePayload:
+        self.last_gallery_call = {
+            "page": page,
+            "limit": limit,
+            "tags": tags,
+            "sort_by": sort_by,
+            "sort_order": sort_order,
+            "source": source,
+            "min_confidence": min_confidence,
+        }
         _ = tags, sort_by, sort_order, source, min_confidence
         if page > 10:
             return _FakePayload(
@@ -151,6 +164,11 @@ class _FakeService:
                 ],
             }
         )
+
+    def get_tag_suggestions(self, q: str | None = None, limit: int = 10) -> tuple[str, ...]:
+        self.last_tag_suggestions_call = {"q": q, "limit": limit}
+        base = ("city", "city night", "travel", "wildlife")
+        return tuple(base[: max(1, min(50, int(limit)))])
 
     def resolve_thumbnail_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:
         if str(file_instance_id) == "aaaaaaaa-0000-0000-0000-000000000001":
@@ -379,6 +397,61 @@ def test_gallery_page_renders_template() -> None:
     assert "Next" in response.text
 
 
+def test_discover_page_renders_template_with_ssr_content() -> None:
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/discover")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert "Discover" in response.text
+    assert "discover-grid" in response.text
+    assert "discover-tag-input" in response.text
+    assert "discover-sort-by" in response.text
+    assert "Top 0.9200" in response.text
+
+
+def test_discover_page_uses_tag_name_default_sort_order_asc() -> None:
+    fake = _FakeService()
+    app.dependency_overrides[get_operator_console_service] = lambda: fake
+    client = TestClient(app)
+    try:
+        response = client.get("/discover?sort_by=tag_name")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert fake.last_gallery_call is not None
+    assert fake.last_gallery_call["sort_by"] == "tag_name"
+    assert fake.last_gallery_call["sort_order"] == "asc"
+
+
+def test_discover_page_rejects_invalid_sort_order() -> None:
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/discover?sort_order=sideways")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert "sort_order" in response.json()["detail"]
+
+
+def test_discover_page_rejects_invalid_sort_by() -> None:
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/discover?sort_by=broken")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert "sort_by" in response.json()["detail"]
+
+
 def test_runs_endpoint_returns_json() -> None:
     """GET /api/runs should return run history rows as JSON."""
     app.dependency_overrides[get_operator_console_service] = _FakeService
@@ -479,6 +552,20 @@ def test_api_canonical_accepts_discovery_query_params() -> None:
     assert payload["items"][0]["matched_tags"] == ["city", "travel"]
 
 
+def test_api_canonical_applies_default_sort_order_for_tag_name() -> None:
+    fake = _FakeService()
+    app.dependency_overrides[get_operator_console_service] = lambda: fake
+    client = TestClient(app)
+    try:
+        response = client.get("/api/canonical?sort_by=tag_name")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert fake.last_gallery_call is not None
+    assert fake.last_gallery_call["sort_order"] == "asc"
+
+
 def test_api_canonical_rejects_invalid_sort_by() -> None:
     app.dependency_overrides[get_operator_console_service] = _FakeService
     client = TestClient(app)
@@ -504,6 +591,20 @@ def test_api_canonical_rejects_invalid_source_and_confidence() -> None:
     assert "source" in bad_source.json()["detail"]
     assert bad_conf.status_code == 400
     assert "min_confidence" in bad_conf.json()["detail"]
+
+
+def test_api_canonical_tags_returns_suggestions() -> None:
+    fake = _FakeService()
+    app.dependency_overrides[get_operator_console_service] = lambda: fake
+    client = TestClient(app)
+    try:
+        response = client.get("/api/canonical/tags?q=ci&limit=2")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {"items": ["city", "city night"]}
+    assert fake.last_tag_suggestions_call == {"q": "ci", "limit": 2}
 
 
 def test_media_endpoint_streams_file() -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from uuid import UUID
@@ -92,6 +93,63 @@ class TagEnrichmentPayload(BaseModel):
     source: str = TagSource.SYSTEM.value
 
 
+@dataclass(frozen=True)
+class _DiscoveryQueryArgs:
+    page: int
+    limit: int
+    tags: tuple[str, ...]
+    sort_by: str
+    sort_order: str
+    source: TagSource | None
+    min_confidence: float | None
+
+
+def _parse_discovery_query_args(
+    *,
+    page: int,
+    limit: int,
+    tags: str | None,
+    sort_by: str,
+    sort_order: str | None,
+    source: str | None,
+    min_confidence: float | None,
+) -> _DiscoveryQueryArgs:
+    normalized_sort_by = sort_by.strip().lower()
+    if normalized_sort_by not in {"created_at", "tag_name", "confidence_score"}:
+        raise HTTPException(status_code=400, detail="sort_by must be created_at, tag_name, or confidence_score.")
+
+    if sort_order is None:
+        normalized_sort_order = "asc" if normalized_sort_by == "tag_name" else "desc"
+    else:
+        normalized_sort_order = sort_order.strip().lower()
+        if normalized_sort_order not in {"asc", "desc"}:
+            raise HTTPException(status_code=400, detail="sort_order must be asc or desc.")
+
+    source_value: TagSource | None = None
+    if source is not None:
+        try:
+            source_value = TagSource(source.strip().lower())
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="source must be ai, manual, import, or system.") from exc
+
+    if min_confidence is not None and not 0.0 <= float(min_confidence) <= 1.0:
+        raise HTTPException(status_code=400, detail="min_confidence must be within [0.0, 1.0].")
+
+    tag_items: tuple[str, ...] = ()
+    if tags is not None:
+        tag_items = tuple(part.strip() for part in tags.split(",") if part.strip())
+
+    return _DiscoveryQueryArgs(
+        page=max(1, int(page)),
+        limit=min(100, max(1, int(limit))),
+        tags=tag_items,
+        sort_by=normalized_sort_by,
+        sort_order=normalized_sort_order,
+        source=source_value,
+        min_confidence=min_confidence,
+    )
+
+
 def create_app() -> FastAPI:
     """Create and configure the Operator Console FastAPI application."""
     package_root = Path(__file__).parent
@@ -127,6 +185,44 @@ def create_app() -> FastAPI:
     def gallery_page(request: Request) -> HTMLResponse:
         """Render the Operator Console canonical gallery page."""
         return templates.TemplateResponse(request, "gallery.html", {})
+
+    @app.get("/discover", response_class=HTMLResponse)
+    def discover_page(
+        request: Request,
+        page: int = 1,
+        limit: int = 30,
+        tags: str | None = Query(default=None),
+        sort_by: str = Query(default="created_at"),
+        sort_order: str | None = Query(default=None),
+        service: OperatorConsoleReadService = Depends(get_operator_console_service),
+    ) -> HTMLResponse:
+        """Render read-only discovery explorer with initial SSR payload."""
+        parsed = _parse_discovery_query_args(
+            page=page,
+            limit=limit,
+            tags=tags,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            source=None,
+            min_confidence=None,
+        )
+        payload = service.get_canonical_gallery(
+            page=parsed.page,
+            limit=parsed.limit,
+            tags=parsed.tags,
+            sort_by=parsed.sort_by,
+            sort_order=parsed.sort_order,
+        ).to_dict()
+        return templates.TemplateResponse(
+            request,
+            "discover.html",
+            {
+                "initial_payload": payload,
+                "initial_tags_csv": ",".join(parsed.tags),
+                "initial_sort_by": parsed.sort_by,
+                "initial_sort_order": parsed.sort_order,
+            },
+        )
 
     @app.get("/gallery/{file_id}", response_class=HTMLResponse)
     def gallery_detail_page(
@@ -181,43 +277,37 @@ def create_app() -> FastAPI:
         service: OperatorConsoleReadService = Depends(get_operator_console_service),
     ) -> dict[str, object]:
         """Return paginated canonical media entries for the gallery UI."""
-        normalized_sort_by = sort_by.strip().lower()
-        if normalized_sort_by not in {"created_at", "tag_name", "confidence_score"}:
-            raise HTTPException(status_code=400, detail="sort_by must be created_at, tag_name, or confidence_score.")
-
-        if sort_order is None:
-            normalized_sort_order = "asc" if normalized_sort_by == "tag_name" else "desc"
-        else:
-            normalized_sort_order = sort_order.strip().lower()
-            if normalized_sort_order not in {"asc", "desc"}:
-                raise HTTPException(status_code=400, detail="sort_order must be asc or desc.")
-
-        source_value: TagSource | None = None
-        if source is not None:
-            try:
-                source_value = TagSource(source.strip().lower())
-            except Exception as exc:
-                raise HTTPException(status_code=400, detail="source must be ai, manual, import, or system.") from exc
-
-        if min_confidence is not None and not 0.0 <= float(min_confidence) <= 1.0:
-            raise HTTPException(status_code=400, detail="min_confidence must be within [0.0, 1.0].")
-
-        tag_items: tuple[str, ...] = ()
-        if tags is not None:
-            tag_items = tuple(part.strip() for part in tags.split(",") if part.strip())
+        parsed = _parse_discovery_query_args(
+            page=page,
+            limit=limit,
+            tags=tags,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            source=source,
+            min_confidence=min_confidence,
+        )
 
         try:
             return service.get_canonical_gallery(
-                page=page,
-                limit=limit,
-                tags=tag_items,
-                sort_by=normalized_sort_by,
-                sort_order=normalized_sort_order,
-                source=source_value,
-                min_confidence=min_confidence,
+                page=parsed.page,
+                limit=parsed.limit,
+                tags=parsed.tags,
+                sort_by=parsed.sort_by,
+                sort_order=parsed.sort_order,
+                source=parsed.source,
+                min_confidence=parsed.min_confidence,
             ).to_dict()
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/canonical/tags")
+    def canonical_tag_suggestions(
+        q: str | None = Query(default=None),
+        limit: int = Query(default=10),
+        service: OperatorConsoleReadService = Depends(get_operator_console_service),
+    ) -> dict[str, list[str]]:
+        """Return deterministic normalized tag suggestions for discover autocomplete."""
+        return {"items": list(service.get_tag_suggestions(q=q, limit=limit))}
 
     @app.get("/api/duplicates")
     def duplicates(
