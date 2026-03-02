@@ -33,3 +33,11 @@ Use this runbook when observed filesystem state diverges from expected run outco
 - the same dataset drifts repeatedly across reruns
 - counters indicate errors with no clear environmental cause
 - canonical assignment outcomes change unexpectedly without policy change
+
+## Decision Table
+
+| Observation | Likely Class | Operator Action |
+| --- | --- | --- |
+| Expected moves missing after apply | Interrupted apply or hidden error | Resume with same run, inspect errors |
+| Unexpected moved files | Out-of-band filesystem mutation | Pause applies, scope blast radius |
+| Duplicate behavior shifts unexpectedly | Input/profile/policy mismatch | Verify policy and input set consistency |

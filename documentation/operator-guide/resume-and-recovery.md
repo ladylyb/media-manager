@@ -20,3 +20,11 @@ media-manager apply <RUN_ID>
 - Resume from durable boundaries only.
 - Avoid ad-hoc manual file operations during recovery.
 - Treat repeated failures as incidents requiring explicit diagnosis.
+
+## Decision Table
+
+| Symptom | Immediate Action | Next Step |
+| --- | --- | --- |
+| Apply interrupted once | Re-run `apply` for same `run_id` | Compare summary counters with prior run |
+| Apply errors persist | Capture stderr + run context | Follow incident response |
+| Filesystem state appears inconsistent | Pause further applies on same dataset | Run drift diagnosis |
