@@ -17,6 +17,7 @@ from media_manager.app.core.errors import (
     PolicySettingsValidationError,
     PolicySettingsVersionConflictError,
 )
+from media_manager.app.observability import mount_metrics_endpoint
 from media_manager.app.persistence.base import create_db_engine, create_session_factory
 from media_manager.app.persistence.operator_console import OperatorConsoleReadService
 from media_manager.app.persistence.operator_run_trigger import (
@@ -76,6 +77,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Media Manager Operator Console")
     templates = Jinja2Templates(directory=str(templates_dir))
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    mount_metrics_endpoint(app)
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request) -> HTMLResponse:

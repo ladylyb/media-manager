@@ -19,6 +19,7 @@ from media_manager.app.core.filenames import generate_canonical_filename, infer_
 from media_manager.app.core.logging_config import get_logger
 from media_manager.app.core.metadata_cache import MetadataCache
 from media_manager.app.core.state_machine import RunState, validate_transition
+from media_manager.app.observability import record_planner_metrics
 from media_manager.app.persistence.base import transactional_session
 from media_manager.app.persistence.decision_intelligence import build_decision_traces, write_decision_trace_artifact
 from media_manager.app.persistence.ingest import ingest_paths_in_session
@@ -237,6 +238,14 @@ class PlanningService:
                         "summary": summary.to_dict(),
                     },
                 )
+                generated_actions = summary.move_actions + summary.noop_actions + summary.duplicate_actions
+                try:
+                    record_planner_metrics(run_id=str(run.id), actions_generated=generated_actions)
+                except Exception:
+                    logger.exception(
+                        "Observability metric emission failed",
+                        extra={"run_id": str(run.id), "phase": "plan", "action_type": "METRICS"},
+                    )
                 return summary
         except Exception as exc:
             logger.exception("Plan failed", extra={"run_id": str(run_id), "phase": "plan", "action_type": ""})

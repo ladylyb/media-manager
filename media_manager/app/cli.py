@@ -27,6 +27,7 @@ from media_manager.app.persistence.materialized_reads import (
     refresh_materialized_view,
 )
 from media_manager.app.persistence.models import PlannedAction
+from media_manager.app.observability import start_metrics_http_server_if_enabled
 from media_manager.app.persistence.planner import PlanningService
 from media_manager.app.persistence.runs import RunService
 
@@ -486,6 +487,13 @@ def _canonical_recompute_command(
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Optional, non-blocking metrics endpoint for CLI-driven deployments.
+    try:
+        start_metrics_http_server_if_enabled()
+    except Exception:
+        # Observability must not block CLI command execution.
+        pass
+
     parser = argparse.ArgumentParser(prog="media-manager")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
