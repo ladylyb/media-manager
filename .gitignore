@@ -67,3 +67,4 @@ media-manager.db-wal
 
 # Benchmark artifacts
 artifacts/perf/
+artifacts/

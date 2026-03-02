@@ -14,6 +14,12 @@ from media_manager.app.core.errors import MediaManagerError
 from media_manager.app.persistence.apply import ApplyService
 from media_manager.app.persistence.base import create_db_engine, create_session_factory
 from media_manager.app.persistence.canonicalization import RecomputeMode, recompute_canonical_assignments
+from media_manager.app.persistence.decision_intelligence import (
+    explain_file_from_latest_trace,
+    load_latest_decision_trace,
+    simulate_policy_delta,
+    write_simulation_delta_artifact,
+)
 from media_manager.app.persistence.ingest import IngestService
 from media_manager.app.persistence.legacy_import import LegacyImportService
 from media_manager.app.persistence.models import PlannedAction
@@ -139,6 +145,47 @@ def _render_canonical_recompute_output(summary) -> None:
     print("----------------------------------------")
 
 
+def _render_policy_simulation_output(delta, artifact_path: Path) -> None:
+    print("----------------------------------------")
+    print("Policy Simulation Summary")
+    print(f"  Run ID: {delta.run_id}")
+    print(f"  Policy: {delta.policy_name} ({delta.policy_version})")
+    print(f"  Canonical Changes: {delta.canonical_changes_count}")
+    print(f"  Merges: {delta.merges_count}")
+    print(f"  Demotions: {delta.demotions_count}")
+    print(f"  Impacted Content IDs: {len(delta.impacted_content_ids)}")
+    print(f"  Artifact: {artifact_path}")
+    print("----------------------------------------")
+
+
+def _render_file_explanation(payload: dict[str, object]) -> None:
+    print("----------------------------------------")
+    print("File Decision Explanation")
+    print(f"  Run ID: {payload.get('run_id')}")
+    print(f"  Content ID: {payload.get('content_id')}")
+    print(f"  File ID: {payload.get('file_id')}")
+    print(f"  Is Canonical: {payload.get('is_canonical')}")
+    print(f"  Canonical Instance: {payload.get('canonical_instance_id')}")
+    print(f"  Decision Reason: {payload.get('decision_reason')}")
+    print(f"  Tie Breaker: {payload.get('tie_breaker_used')}")
+    print("  Rules:")
+    for rule in payload.get("applied_policy_rules", []):
+        print(f"    - {rule}")
+    print("  Candidates:")
+    canonical_id = str(payload.get("canonical_instance_id"))
+    file_id = str(payload.get("file_id"))
+    for candidate in payload.get("candidate_instance_ids", []):
+        marker = ""
+        if str(candidate) == canonical_id:
+            marker = " (canonical)"
+        if str(candidate) == file_id and marker:
+            marker += " [queried]"
+        elif str(candidate) == file_id:
+            marker = " [queried]"
+        print(f"    - {candidate}{marker}")
+    print("----------------------------------------")
+
+
 def _render_legacy_import_output(summary) -> None:
     print("----------------------------------------")
     print("Legacy Import Summary")
@@ -195,7 +242,27 @@ def _legacy_import_command(
     return 0
 
 
-def _plan_command(path_arg: str, *, strict_metadata: bool = False) -> int:
+def _explain_file_command(file_id: str) -> int:
+    latest = load_latest_decision_trace()
+    if latest is None:
+        print("No decision trace artifact available.", file=sys.stderr)
+        return 1
+    payload = explain_file_from_latest_trace(file_id=file_id)
+    if payload is None:
+        print(f"File not found in latest decision trace: {file_id}", file=sys.stderr)
+        return 1
+    _render_file_explanation(payload)
+    return 0
+
+
+def _plan_command(
+    path_arg: str,
+    *,
+    strict_metadata: bool = False,
+    simulate_policy: bool = False,
+    policy_name: str | None = None,
+    preferred_roots: list[str] | None = None,
+) -> int:
     path = Path(path_arg)
     if not path.exists():
         print(f"Path does not exist: {path}", file=sys.stderr)
@@ -203,6 +270,30 @@ def _plan_command(path_arg: str, *, strict_metadata: bool = False) -> int:
 
     engine = create_db_engine()
     session_factory = create_session_factory(engine)
+    if simulate_policy:
+        selected_policy = policy_name or "FIRST_SEEN"
+        try:
+            policy = build_canonical_policy(selected_policy)
+        except MediaManagerError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        context = CanonicalContext(preferred_roots=tuple(Path(root) for root in (preferred_roots or [])))
+        try:
+            delta = simulate_policy_delta(
+                session_factory,
+                policy=policy,
+                context=context,
+            )
+        except MediaManagerError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        except Exception as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        artifact_path = write_simulation_delta_artifact(delta)
+        _render_policy_simulation_output(delta, artifact_path)
+        return 0
+
     run_service = RunService(session_factory)
     ingest_service = IngestService(session_factory)
     planner = PlanningService(session_factory)
@@ -329,6 +420,21 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Raise on missing required metadata codes during planning.",
     )
+    plan_parser.add_argument(
+        "--simulate-policy",
+        action="store_true",
+        help="Run policy simulation only (no planner/apply mutation).",
+    )
+    plan_parser.add_argument(
+        "--policy",
+        help="Canonical policy name for simulation mode (e.g. FIRST_SEEN, PREFER_ROOT, SHORTEST_PATH).",
+    )
+    plan_parser.add_argument(
+        "--preferred-root",
+        action="append",
+        default=[],
+        help="Preferred root path for PREFER_ROOT simulation policy. Can be provided multiple times.",
+    )
     ingest_parser = subparsers.add_parser("ingest", help="Ingest files into logical content/instance tables.")
     ingest_parser.add_argument("path", help="File or directory path to ingest.")
     apply_parser = subparsers.add_parser("apply", help="Apply an existing planned run.")
@@ -405,10 +511,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     legacy_import_parser.add_argument("--import-run-id", help="Optional stable import run UUID for resume/idempotency.")
     legacy_import_parser.add_argument("--source-db-name", help="Optional source database label.")
+    explain_file_parser = subparsers.add_parser(
+        "explain-file",
+        help="Explain canonical decision for a file instance from latest decision trace artifact.",
+    )
+    explain_file_parser.add_argument("file_id", help="File instance UUID.")
 
     args = parser.parse_args(argv)
     if args.command == "plan":
-        return _plan_command(args.path, strict_metadata=args.strict_metadata)
+        return _plan_command(
+            args.path,
+            strict_metadata=args.strict_metadata,
+            simulate_policy=args.simulate_policy,
+            policy_name=args.policy,
+            preferred_roots=args.preferred_root,
+        )
     if args.command == "ingest":
         return _ingest_command(args.path)
     if args.command == "apply":
@@ -454,6 +571,8 @@ def main(argv: list[str] | None = None) -> int:
             import_run_id=args.import_run_id,
             source_db_name=args.source_db_name,
         )
+    if args.command == "explain-file":
+        return _explain_file_command(args.file_id)
 
     parser.print_help()
     return 2
