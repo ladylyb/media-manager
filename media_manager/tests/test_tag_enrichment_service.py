@@ -16,6 +16,7 @@ from media_manager.app.persistence.models import (
     MetadataCode,
     TagEnrichmentItem,
     TagEnrichmentRun,
+    Tag,
     TagSource,
 )
 from media_manager.app.persistence.tag_enrichment import (
@@ -272,3 +273,96 @@ def test_source_isolation_system_does_not_mutate_ai_rows(session_factory) -> Non
         ).all()
         assert len(ai_rows) == 1
         assert ai_rows[0].enrichment_version == 3
+
+
+def test_changed_output_updates_only_changed_rows_and_keeps_unchanged_versions(session_factory) -> None:
+    content_id = uuid.uuid4()
+    _seed_canonical_item(session_factory, content_id=content_id, path_suffix="partial-change", sha_char="7")
+    _upsert_metadata(session_factory, content_id, "OWNER", "Alice")
+    _upsert_metadata(session_factory, content_id, "CONTEXT", "Travel")
+
+    run_tag_enrichment(
+        session_factory,
+        TagEnrichmentCommand(scope=EnrichmentScope.SINGLE, canonical_id=content_id, source=TagSource.SYSTEM),
+    )
+    with session_factory() as session:
+        before_rows = session.execute(
+            select(Tag.normalized_name, CanonicalTag.enrichment_version, CanonicalTag.updated_at)
+            .join(CanonicalTag, CanonicalTag.tag_id == Tag.id)
+            .where(
+                CanonicalTag.canonical_id == content_id,
+                CanonicalTag.source == TagSource.SYSTEM.value,
+            )
+        ).all()
+    before_map = {name: (version, updated_at) for name, version, updated_at in before_rows}
+
+    _upsert_metadata(session_factory, content_id, "OWNER", "Bob")
+    run_tag_enrichment(
+        session_factory,
+        TagEnrichmentCommand(scope=EnrichmentScope.SINGLE, canonical_id=content_id, source=TagSource.SYSTEM),
+    )
+    with session_factory() as session:
+        after_rows = session.execute(
+            select(
+                Tag.normalized_name,
+                CanonicalTag.confidence_score,
+                CanonicalTag.enrichment_version,
+                CanonicalTag.updated_at,
+            )
+            .join(CanonicalTag, CanonicalTag.tag_id == Tag.id)
+            .where(
+                CanonicalTag.canonical_id == content_id,
+                CanonicalTag.source == TagSource.SYSTEM.value,
+            )
+        ).all()
+
+    after_map = {name: (confidence, version, updated_at) for name, confidence, version, updated_at in after_rows}
+    assert "alice" not in after_map
+    assert "bob" in after_map
+    assert after_map["bob"][1] == 2
+    assert "travel" in after_map
+    assert after_map["travel"][1] == before_map["travel"][0]
+    assert after_map["travel"][2] == before_map["travel"][1]
+
+
+def test_enrichment_normalizes_unicode_and_punctuation_deterministically(
+    session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content_id = uuid.uuid4()
+    _seed_canonical_item(session_factory, content_id=content_id, path_suffix="normalize", sha_char="6")
+    monkeypatch.setenv("MEDIA_MANAGER_TAG_NORMALIZATION_REMOVE_PUNCTUATION", "true")
+    _upsert_metadata(session_factory, content_id, "TAGS", "City-life!!, Ｆｏｏ　Ｂａｒ, city life")
+
+    run_tag_enrichment(
+        session_factory,
+        TagEnrichmentCommand(scope=EnrichmentScope.SINGLE, canonical_id=content_id, source=TagSource.SYSTEM),
+    )
+    with session_factory() as session:
+        first = session.execute(
+            select(Tag.normalized_name, CanonicalTag.confidence_score)
+            .join(CanonicalTag, CanonicalTag.tag_id == Tag.id)
+            .where(
+                CanonicalTag.canonical_id == content_id,
+                CanonicalTag.source == TagSource.SYSTEM.value,
+            )
+            .order_by(Tag.normalized_name.asc())
+        ).all()
+
+    run_tag_enrichment(
+        session_factory,
+        TagEnrichmentCommand(scope=EnrichmentScope.SINGLE, canonical_id=content_id, source=TagSource.SYSTEM),
+    )
+    with session_factory() as session:
+        second = session.execute(
+            select(Tag.normalized_name, CanonicalTag.confidence_score)
+            .join(CanonicalTag, CanonicalTag.tag_id == Tag.id)
+            .where(
+                CanonicalTag.canonical_id == content_id,
+                CanonicalTag.source == TagSource.SYSTEM.value,
+            )
+            .order_by(Tag.normalized_name.asc())
+        ).all()
+
+    assert [name for name, _ in first] == ["city life", "citylife", "foo bar"]
+    assert first == second

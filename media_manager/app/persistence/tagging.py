@@ -3,20 +3,17 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
-import re
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from media_manager.app.persistence.models import CanonicalTag, Tag, TagSource
+from media_manager.app.persistence.tag_normalization import normalize_tag_name
 
 
-def normalize_tag_name(name: str) -> str:
-    normalized = re.sub(r"\s+", " ", name.strip().lower())
-    if not normalized:
-        raise ValueError("Tag name must not be empty after normalization.")
-    return normalized
+def _round_confidence(value: float) -> float:
+    return round(float(value), 4)
 
 
 def get_or_create_tag(session: Session, name: str) -> Tag:
@@ -47,6 +44,7 @@ def upsert_canonical_tag(
     enrichment_version: int,
 ) -> CanonicalTag:
     source_value = TagSource(source).value if isinstance(source, str) else source.value
+    rounded_confidence = _round_confidence(confidence_score)
     tag = get_or_create_tag(session, tag_name)
     stmt = (
         insert(CanonicalTag)
@@ -54,13 +52,13 @@ def upsert_canonical_tag(
             canonical_id=canonical_id,
             tag_id=tag.id,
             source=source_value,
-            confidence_score=confidence_score,
+            confidence_score=rounded_confidence,
             enrichment_version=enrichment_version,
         )
         .on_conflict_do_update(
             index_elements=[CanonicalTag.canonical_id, CanonicalTag.tag_id, CanonicalTag.source],
             set_={
-                "confidence_score": confidence_score,
+                "confidence_score": rounded_confidence,
                 "enrichment_version": enrichment_version,
                 "updated_at": func.now(),
             },
@@ -90,6 +88,62 @@ class CanonicalTagUpsert:
     source: TagSource | str
     confidence_score: float
     enrichment_version: int
+
+
+def query_canonical_tags(
+    *,
+    min_confidence: float | None = None,
+    max_confidence: float | None = None,
+    sort_confidence: str = "asc",
+    normalized_tag_names: Iterable[str] | None = None,
+    source: TagSource | str | None = None,
+    canonical_id: uuid.UUID | None = None,
+) -> Select[tuple[CanonicalTag]]:
+    """Build deterministic canonical-tag query filters.
+
+    `normalized_tag_names` uses ANY semantics. When provided as an empty iterable,
+    no tag-name filter is applied.
+    """
+    stmt = select(CanonicalTag).join(Tag, Tag.id == CanonicalTag.tag_id)
+
+    if min_confidence is not None:
+        stmt = stmt.where(CanonicalTag.confidence_score >= _round_confidence(min_confidence))
+    if max_confidence is not None:
+        stmt = stmt.where(CanonicalTag.confidence_score <= _round_confidence(max_confidence))
+
+    if normalized_tag_names is not None:
+        normalized_values = sorted(
+            {
+                normalize_tag_name(value)
+                for value in normalized_tag_names
+            }
+        )
+        if normalized_values:
+            stmt = stmt.where(Tag.normalized_name.in_(normalized_values))
+
+    if source is not None:
+        source_value = TagSource(source).value if isinstance(source, str) else source.value
+        stmt = stmt.where(CanonicalTag.source == source_value)
+
+    if canonical_id is not None:
+        stmt = stmt.where(CanonicalTag.canonical_id == canonical_id)
+
+    sort = sort_confidence.strip().lower()
+    if sort not in {"asc", "desc"}:
+        raise ValueError("sort_confidence must be 'asc' or 'desc'.")
+    if sort == "asc":
+        stmt = stmt.order_by(
+            CanonicalTag.confidence_score.asc(),
+            Tag.normalized_name.asc(),
+            CanonicalTag.canonical_id.asc(),
+        )
+    else:
+        stmt = stmt.order_by(
+            CanonicalTag.confidence_score.desc(),
+            Tag.normalized_name.asc(),
+            CanonicalTag.canonical_id.asc(),
+        )
+    return stmt
 
 
 def upsert_canonical_tags(session: Session, rows: Iterable[CanonicalTagUpsert]) -> list[CanonicalTag]:

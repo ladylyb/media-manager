@@ -26,7 +26,8 @@ from media_manager.app.persistence.models import (
     TagEnrichmentStatus,
     TagSource,
 )
-from media_manager.app.persistence.tagging import normalize_tag_name, upsert_canonical_tag
+from media_manager.app.persistence.tag_normalization import normalize_tag_name
+from media_manager.app.persistence.tagging import upsert_canonical_tag
 
 logger = get_logger(__name__)
 
@@ -325,14 +326,15 @@ def _process_canonical_item(
             next_version = max((int(ver) for _tag_id, _conf, ver, _name in existing if ver is not None), default=0) + 1
             new_version = next_version
             for normalized_name, confidence in desired:
-                upsert_canonical_tag(
-                    session,
-                    canonical_id=canonical_id,
-                    tag_name=normalized_name,
-                    source=source,
-                    confidence_score=confidence,
-                    enrichment_version=next_version,
-                )
+                if normalized_name not in existing_map or existing_map[normalized_name] != confidence:
+                    upsert_canonical_tag(
+                        session,
+                        canonical_id=canonical_id,
+                        tag_name=normalized_name,
+                        source=source,
+                        confidence_score=confidence,
+                        enrichment_version=next_version,
+                    )
             stale_tag_ids = [tag_id for tag_id, _conf, _ver, name in existing if name not in desired_map]
             if stale_tag_ids:
                 session.execute(
