@@ -15,6 +15,7 @@ from media_manager.app.canonical.factory import build_canonical_policy, resolve_
 from media_manager.app.core.hashing import sha256_file
 from media_manager.app.core.logging_config import get_logger
 import media_manager.app.core.metadata_extractor as metadata_extractor
+from media_manager.app.observability import record_ingest_metrics
 from media_manager.app.persistence.base import transactional_session
 from media_manager.app.persistence.canonicalization import append_assignment, get_active_assignment
 from media_manager.app.persistence.models import FileContent, FileInstance, FileInstanceStatus, MediaMetadata
@@ -147,7 +148,13 @@ class IngestService:
 
     def ingest_paths(self, files: list[Path]) -> IngestSummary:
         with transactional_session(self._session_factory) as session:
-            return ingest_paths_in_session(session, files)
+            summary = ingest_paths_in_session(session, files)
+        # Ingest is not currently run-bound, so run_id is explicitly stable as "none".
+        try:
+            record_ingest_metrics(run_id="none", files_scanned=summary.files_scanned, new_contents=summary.new_contents)
+        except Exception:
+            logger.exception("Observability metric emission failed", extra={"phase": "ingest", "action": "METRICS"})
+        return summary
 
     @staticmethod
     def collect_files(root: Path) -> list[Path]:

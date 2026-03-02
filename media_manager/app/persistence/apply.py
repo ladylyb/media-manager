@@ -21,6 +21,7 @@ from media_manager.app.core.errors import (
 )
 from media_manager.app.core.logging_config import get_logger
 from media_manager.app.core.state_machine import RunState, validate_transition
+from media_manager.app.observability import record_apply_metrics
 from media_manager.app.persistence.base import transactional_session
 from media_manager.app.persistence.models import (
     ApplyAuditItem,
@@ -228,6 +229,13 @@ class ApplyService:
                     "summary": summary.to_dict(),
                 },
             )
+            try:
+                record_apply_metrics(run_id=str(run_id), actions_executed=summary.applied_count + summary.skipped_count)
+            except Exception:
+                logger.exception(
+                    "Observability metric emission failed",
+                    extra={"run_id": str(run_id), "phase": "apply", "action_type": "METRICS"},
+                )
             return summary
         except Exception as exc:
             logger.exception(
