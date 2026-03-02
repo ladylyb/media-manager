@@ -36,11 +36,13 @@ nav:
       - State Machine: STATE_MACHINE.md
       - Local Instructions: LOCAL_INSTRUCTIONS.md
   - Architecture:
+      - Overview: architecture/index.md
       - Invariants: architecture/invariants.md
       - Run Lifecycle: architecture/run-lifecycle.md
   - Guides:
       - Documentation Workflow: guides/documentation-workflow.md
   - API Reference:
+      - Overview: reference/index.md
       - CLI: reference/api-cli.md
       - Core:
           - Core Overview: reference/api-core.md
@@ -56,6 +58,7 @@ nav:
   - Performance:
       - Phase 6 Performance Guide: performance/phase6-performance-guide.md
   - Project:
+      - Overview: project/index.md
       - Charter: project/00-charter.md
       - Roadmap: project/01-roadmap.md
       - Milestones: project/02-milestones.md

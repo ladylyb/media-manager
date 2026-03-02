@@ -12,6 +12,8 @@ This site is the canonical documentation entrypoint for the deterministic media 
 ## Quick Links
 
 - [Documentation Index](README.md)
+- [Architecture Overview](architecture/index.md)
+- [Project Planning Docs](project/index.md)
 - [Run Lifecycle](architecture/run-lifecycle.md)
 - [Invariant Summary](architecture/invariants.md)
-- [API Reference](reference/api-cli.md)
+- [API Reference Overview](reference/index.md)
