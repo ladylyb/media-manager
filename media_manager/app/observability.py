@@ -16,24 +16,33 @@ from media_manager.app.core.logging_config import get_logger
 logger = get_logger(__name__)
 
 try:
-    from prometheus_client import Counter, REGISTRY, generate_latest, make_asgi_app, start_http_server
+    from prometheus_client import Counter, Histogram, REGISTRY, generate_latest, make_asgi_app, start_http_server
 except Exception:  # pragma: no cover - fallback path when dependency is unavailable.
     Counter = None  # type: ignore[assignment]
+    Histogram = None  # type: ignore[assignment]
     REGISTRY = None  # type: ignore[assignment]
     generate_latest = None  # type: ignore[assignment]
     make_asgi_app = None  # type: ignore[assignment]
     start_http_server = None  # type: ignore[assignment]
 
 _server_lock = threading.Lock()
+_registry_lock = threading.Lock()
 _server_started = False
 
 
-def _can_mount_metrics() -> bool:
-    return Counter is not None and make_asgi_app is not None
+def _is_histogram_supported() -> bool:
+    return Histogram is not None
 
 
-def _can_start_http_server() -> bool:
-    return Counter is not None and start_http_server is not None
+def _is_server_supported() -> bool:
+    return start_http_server is not None
+
+
+def _get_registered_collector(name: str):
+    if REGISTRY is None:
+        return None
+    names_to_collectors = getattr(REGISTRY, "_names_to_collectors", {})
+    return names_to_collectors.get(name)
 
 
 def _get_or_create_counter(name: str, documentation: str, labelnames: tuple[str, ...]):
@@ -46,15 +55,36 @@ def _get_or_create_counter(name: str, documentation: str, labelnames: tuple[str,
         return None
 
     try:
-        existing = None
-        if REGISTRY is not None:
-            names_to_collectors = getattr(REGISTRY, "_names_to_collectors", {})
-            existing = names_to_collectors.get(name)
-        if existing is not None:
-            return existing
-        return Counter(name, documentation, labelnames)
+        with _registry_lock:
+            existing = _get_registered_collector(name)
+            if existing is not None:
+                return existing
+            return Counter(name, documentation, labelnames)
     except Exception:
         logger.exception("Failed to initialize counter", extra={"phase": "observability", "action": "METRICS_INIT"})
+        return None
+
+
+def _get_or_create_histogram(
+    name: str,
+    documentation: str,
+    labelnames: tuple[str, ...],
+    *,
+    buckets: tuple[float, ...] | None = None,
+):
+    if Histogram is None:
+        return None
+
+    try:
+        with _registry_lock:
+            existing = _get_registered_collector(name)
+            if existing is not None:
+                return existing
+            if buckets is None:
+                return Histogram(name, documentation, labelnames)
+            return Histogram(name, documentation, labelnames, buckets=buckets)
+    except Exception:
+        logger.exception("Failed to initialize histogram", extra={"phase": "observability", "action": "METRICS_INIT"})
         return None
 
 
@@ -79,11 +109,34 @@ if Counter is not None:
         "Total actions executed by apply.",
         ("run_id", "phase"),
     )
+    _PLANNER_STAGE_DURATION_SECONDS = _get_or_create_histogram(
+        "planner_stage_duration_seconds",
+        "Duration of planner stages in seconds",
+        ("run_id", "stage"),
+        buckets=(
+            0.0001,
+            0.0005,
+            0.001,
+            0.0025,
+            0.005,
+            0.01,
+            0.025,
+            0.05,
+            0.1,
+            0.25,
+            0.5,
+            1.0,
+            2.5,
+            5.0,
+            10.0,
+        ),
+    )
 else:
     _INGEST_FILES_SCANNED_TOTAL = None
     _INGEST_NEW_CONTENTS_TOTAL = None
     _PLANNER_ACTIONS_GENERATED_TOTAL = None
     _APPLY_ACTIONS_EXECUTED_TOTAL = None
+    _PLANNER_STAGE_DURATION_SECONDS = None
 
 
 def record_ingest_metrics(run_id: str, files_scanned: int, new_contents: int) -> None:
@@ -117,13 +170,34 @@ def record_apply_metrics(run_id: str, actions_executed: int) -> None:
         logger.exception("Failed to record apply metrics")
 
 
+def record_planner_stage_duration(run_id: str | None, stage: str, duration_s: float) -> None:
+    """Record planner stage duration in seconds using run+stage labels.
+
+    Labels:
+    - run_id: durable planner run identifier
+    - stage: planner stage name (load_candidates/metadata_lookup/action_generation/persist_actions)
+
+    This helper is intentionally fail-open so planner execution is never impacted
+    by metrics registry/runtime errors.
+    """
+    if _PLANNER_STAGE_DURATION_SECONDS is None:
+        return
+    try:
+        normalized_run_id = str(run_id).strip() if run_id is not None else ""
+        if not normalized_run_id:
+            normalized_run_id = "none"
+        _PLANNER_STAGE_DURATION_SECONDS.labels(run_id=normalized_run_id, stage=stage).observe(max(duration_s, 0.0))
+    except Exception:
+        logger.exception("Failed to record planner stage duration")
+
+
 def mount_metrics_endpoint(app: object, path: str = "/metrics") -> bool:
     """Mount Prometheus ASGI endpoint and return True when mounted.
 
     The `app` object is expected to expose a Starlette/FastAPI-compatible `mount`
     method. Any failure is logged and converted to a False return.
     """
-    if not _can_mount_metrics():
+    if not _is_histogram_supported() or make_asgi_app is None:
         return False
     try:
         mount = getattr(app, "mount")
@@ -142,7 +216,7 @@ def start_metrics_http_server_if_enabled() -> bool:
     - MEDIA_MANAGER_METRICS_PORT: optional integer port (default: 9000).
     """
     global _server_started
-    if not _can_start_http_server():
+    if not _is_server_supported():
         return False
 
     enabled_raw = os.getenv("MEDIA_MANAGER_METRICS_ENABLED", "0").strip().lower()
