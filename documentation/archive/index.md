@@ -2,6 +2,6 @@
 
 Legacy and historical documentation is retained for context but removed from the primary learning path.
 
-- `../archive/legacy/README.md`
-- `../archive/legacy/docs/README.md`
-- `../archive/legacy/docs/failure-notes.md`
+- [Archived Project History](project-history.md)
+- [Legacy Implementation Archive](legacy-implementation.md)
+- [Archive Retention Policy](retention-policy.md)

@@ -18,7 +18,6 @@ This folder contains the structured documentation system for media-manager.
 ## Planning and Historical Context
 
 - [Roadmap](roadmap/index.md)
-- [Project History](project/index.md)
 - [Archive](archive/index.md)
 
 ## Authority Rules
