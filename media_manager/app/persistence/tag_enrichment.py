@@ -4,7 +4,6 @@ import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from enum import StrEnum
 from statistics import mean
 from time import perf_counter
 
@@ -32,14 +31,13 @@ from media_manager.app.persistence.tagging import normalize_tag_name, upsert_can
 logger = get_logger(__name__)
 
 
-class EnrichmentScope(StrEnum):
-    ALL = "ALL"
-    SINGLE = "SINGLE"
+# Backward-compatible alias used by existing CLI/API imports.
+EnrichmentScope = TagEnrichmentScope
 
 
 @dataclass(frozen=True)
 class TagEnrichmentCommand:
-    scope: EnrichmentScope
+    scope: TagEnrichmentScope
     canonical_id: uuid.UUID | None = None
     batch_size: int = 100
     source: TagSource = TagSource.SYSTEM
@@ -85,14 +83,13 @@ def run_tag_enrichment(
 ) -> TagEnrichmentSummary:
     if command.batch_size <= 0:
         raise ValueError("batch_size must be > 0")
-    if command.scope == EnrichmentScope.SINGLE and command.canonical_id is None:
+    if command.scope == TagEnrichmentScope.SINGLE and command.canonical_id is None:
         raise ValueError("canonical_id is required for SINGLE scope")
-    if command.scope == EnrichmentScope.ALL and command.canonical_id is not None:
+    if command.scope == TagEnrichmentScope.ALL and command.canonical_id is not None:
         raise ValueError("canonical_id must be omitted for ALL scope")
 
     target_ids = _resolve_target_canonical_ids(session_factory, command)
-    run_id = _create_run(session_factory, command)
-    started_at = _utcnow()
+    run_id, started_at = _create_run(session_factory, command)
     processed_count = 0
     failed_items = 0
     emitted_confidences: list[float] = []
@@ -231,7 +228,7 @@ def _resolve_target_canonical_ids(
 ) -> list[uuid.UUID]:
     with transactional_session(session_factory) as session:
         all_ids = list(session.scalars(_latest_canonical_content_ids_query()).all())
-    if command.scope == EnrichmentScope.ALL:
+    if command.scope == TagEnrichmentScope.ALL:
         return all_ids
     assert command.canonical_id is not None
     if command.canonical_id not in set(all_ids):
@@ -242,7 +239,7 @@ def _resolve_target_canonical_ids(
 def _create_run(
     session_factory: sessionmaker[Session],
     command: TagEnrichmentCommand,
-) -> uuid.UUID:
+) -> tuple[uuid.UUID, datetime]:
     with transactional_session(session_factory) as session:
         row = TagEnrichmentRun(
             scope=TagEnrichmentScope(command.scope.value).value,
@@ -258,7 +255,7 @@ def _create_run(
         )
         session.add(row)
         session.flush()
-        return row.id
+        return row.id, row.started_at
 
 
 def _finalize_run(

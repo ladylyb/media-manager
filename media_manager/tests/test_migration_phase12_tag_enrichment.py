@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
 import pytest
 from sqlalchemy import inspect, text
@@ -60,6 +61,44 @@ def test_phase12_tag_enrichment_unique_constraints_exist(db_engine) -> None:
     item_uniques = {item["name"] for item in inspector.get_unique_constraints("tag_enrichment_items")}
     assert "uq_tag_enrichment_items_run_sequence" in item_uniques
     assert "uq_tag_enrichment_items_run_canonical" in item_uniques
+
+
+def test_phase12_tag_enrichment_foreign_keys_target_expected_tables(db_engine) -> None:
+    inspector = inspect(db_engine)
+    run_fks = inspector.get_foreign_keys("tag_enrichment_runs")
+    item_fks = inspector.get_foreign_keys("tag_enrichment_items")
+
+    assert any(
+        fk.get("referred_table") == "file_contents"
+        and fk.get("constrained_columns") == ["target_canonical_id"]
+        and fk.get("referred_columns") == ["content_id"]
+        for fk in run_fks
+    )
+    assert any(
+        fk.get("referred_table") == "tag_enrichment_runs"
+        and fk.get("constrained_columns") == ["run_id"]
+        and fk.get("referred_columns") == ["id"]
+        for fk in item_fks
+    )
+    assert any(
+        fk.get("referred_table") == "file_contents"
+        and fk.get("constrained_columns") == ["canonical_id"]
+        and fk.get("referred_columns") == ["content_id"]
+        for fk in item_fks
+    )
+
+
+def test_phase12_tag_enrichment_migration_downgrade_order_is_fk_safe() -> None:
+    migration_file = (
+        Path(__file__).resolve().parents[2]
+        / "migrations"
+        / "versions"
+        / "0012_phase12_tag_enrichment_runs.py"
+    )
+    content = migration_file.read_text(encoding="utf-8")
+    drop_items_index = content.index('op.drop_table("tag_enrichment_items")')
+    drop_runs_index = content.index('op.drop_table("tag_enrichment_runs")')
+    assert drop_items_index < drop_runs_index
 
 
 def test_phase12_tag_enrichment_scope_status_result_checks_enforced(db_engine) -> None:
