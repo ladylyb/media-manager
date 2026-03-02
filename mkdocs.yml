@@ -1,0 +1,62 @@
+site_name: Media Manager Documentation
+site_description: Deterministic media management engine documentation
+repo_url: https://github.com/ladylyb/media-manager
+edit_uri: edit/develop/
+docs_dir: documentation
+strict: true
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: false
+            show_root_heading: true
+            docstring_style: google
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+
+nav:
+  - Home: home.md
+  - Documentation Index: README.md
+  - Governance:
+      - Agent Checklist: AGENT_CHECKLIST.md
+      - Architecture Guardrails: ARCHITECTURE_GUARDRAILS.md
+      - State Machine: STATE_MACHINE.md
+      - Local Instructions: LOCAL_INSTRUCTIONS.md
+  - Architecture:
+      - Invariants: architecture/invariants.md
+      - Run Lifecycle: architecture/run-lifecycle.md
+  - Guides:
+      - Documentation Workflow: guides/documentation-workflow.md
+  - API Reference:
+      - CLI: reference/api-cli.md
+      - Persistence Planner: reference/api-persistence-planner.md
+      - Persistence Apply: reference/api-persistence-apply.md
+      - Data Dictionary: reference/data-dictionary.md
+  - Performance:
+      - Phase 6 Performance Guide: performance/phase6-performance-guide.md
+  - Project:
+      - Charter: project/00-charter.md
+      - Roadmap: project/01-roadmap.md
+      - Milestones: project/02-milestones.md
+      - Test Strategy: project/03-test-strategy.md
+      - Risk Register: project/04-risk-register.md
+      - Release Plan: project/05-release-plan.md
+      - Operational Guardrails: project/06-operational-guardrails.md
+      - Unified Architecture Spec: project/07-unified-architecture-spec.md
+      - Media Renaming Strategy: project/08-media-renaming-strategy.md
+      - Redefined Roadmap Phases 7-12: project/09-redefined-roadmap-phases-7-12.md
+      - Canonical Policy Governance: project/10-p8.1-canonical-policy-governance.md
+      - Decision Intel Policy Sim: project/11-p10-decision-intel-policy-sim.md
