@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -25,6 +25,12 @@ from media_manager.app.persistence.operator_run_trigger import (
     RunTriggerCommand,
 )
 from media_manager.app.persistence.policy_settings import PolicySettingsService, UpdatePolicySettingsCommand
+from media_manager.app.persistence.models import TagSource
+from media_manager.app.persistence.tag_enrichment import (
+    EnrichmentScope,
+    TagEnrichmentCommand,
+    run_tag_enrichment,
+)
 
 
 @lru_cache(maxsize=1)
@@ -51,6 +57,13 @@ def get_operator_run_trigger_service() -> OperatorRunTriggerService:
     return OperatorRunTriggerService(session_factory)
 
 
+@lru_cache(maxsize=1)
+def get_tag_enrichment_session_factory():
+    """Build and cache session factory for manual tag enrichment trigger API."""
+    engine = create_db_engine()
+    return create_session_factory(engine)
+
+
 class PolicyUpdatePayload(BaseModel):
     """Structured update payload for operator policy settings."""
 
@@ -66,6 +79,17 @@ class RunTriggerPayload(BaseModel):
     folder_path: str
     policy_name: str
     dry_run: bool = False
+
+
+class TagEnrichmentPayload(BaseModel):
+    """Structured payload for operator-triggered tag enrichment."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    run_all: bool = Field(default=False, alias="all")
+    canonical_id: str | None = None
+    batch_size: int = 100
+    source: str = TagSource.SYSTEM.value
 
 
 def create_app() -> FastAPI:
@@ -230,6 +254,42 @@ def create_app() -> FastAPI:
             result = service.trigger_run(command)
             return result.to_dict()
         except (ValueError, MediaManagerError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/api/tag-enrichment")
+    def post_tag_enrichment(
+        payload: TagEnrichmentPayload,
+        session_factory=Depends(get_tag_enrichment_session_factory),
+    ) -> dict[str, object]:
+        """Trigger deterministic tag enrichment for canonical content ids."""
+        if payload.run_all == (payload.canonical_id is not None):
+            raise HTTPException(status_code=400, detail="Specify exactly one of all=true or canonical_id.")
+        if payload.batch_size <= 0:
+            raise HTTPException(status_code=400, detail="batch_size must be > 0.")
+        try:
+            source = TagSource(payload.source)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid source: {payload.source}") from exc
+        canonical_uuid: UUID | None = None
+        if payload.canonical_id is not None:
+            try:
+                canonical_uuid = UUID(payload.canonical_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="canonical_id must be a valid UUID.") from exc
+        command = TagEnrichmentCommand(
+            scope=EnrichmentScope.ALL if payload.run_all else EnrichmentScope.SINGLE,
+            canonical_id=canonical_uuid,
+            batch_size=int(payload.batch_size),
+            source=source,
+        )
+        try:
+            summary = run_tag_enrichment(session_factory, command)
+            return summary.to_dict()
+        except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except HTTPException:
             raise

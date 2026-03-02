@@ -55,6 +55,7 @@ def clean_tables(db_engine: Engine) -> None:
                 "TRUNCATE TABLE media_metadata, metadata_codes, planned_actions, "
                 "apply_audit_items, apply_audit_runs, "
                 "canonical_recompute_items, canonical_recompute_runs, canonical_assignments, "
+                "tag_enrichment_items, tag_enrichment_runs, "
                 "canonical_tags, tags, "
                 "operator_policy_settings, "
                 "file_instances, file_contents, failure_events, files, content_objects, runs "
