@@ -75,3 +75,25 @@ class PolicySettingsValidationError(MediaManagerError):
 
 class PolicySettingsVersionConflictError(MediaManagerError):
     """Raised when a policy update is based on a stale version."""
+
+
+class CanonicalUnreadableError(MediaManagerError):
+    """Raised when canonical instance cannot be read in current runtime."""
+
+    def __init__(
+        self,
+        *,
+        content_id: str,
+        canonical_instance_id: str | None,
+        canonical_path: str | None,
+        reason: str,
+        runtime_context: str | None = None,
+    ) -> None:
+        canonical_id = canonical_instance_id or "-"
+        path = canonical_path or "-"
+        context = runtime_context or "-"
+        super().__init__(
+            "Canonical unreadable "
+            f"(content_id={content_id}, canonical_instance_id={canonical_id}, "
+            f"canonical_path={path}, reason={reason}, runtime_context={context})"
+        )

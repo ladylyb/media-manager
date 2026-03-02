@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -14,6 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from media_manager.app.core.errors import (
     ApplyIntegrityException,
     ApplyStateError,
+    CanonicalUnreadableError,
     CollisionResolutionError,
     RunNotFoundError,
 )
@@ -25,13 +27,16 @@ from media_manager.app.persistence.models import (
     ApplyAuditRun,
     FailureEvent,
     FailurePhase,
+    CanonicalAssignment,
     FileInstance,
+    FileInstanceStatus,
     PlannedAction,
     Run,
     RunStateDB,
 )
 
 logger = get_logger(__name__)
+_WINDOWS_DRIVE_PATH_RE = re.compile(r"^([A-Za-z]):[\\/](.*)$")
 
 CollisionMode = Literal["rename", "skip", "fail"]
 
@@ -66,6 +71,48 @@ class ActionOutcome:
     collision_resolved: bool
     file_instance_id: uuid.UUID
     planned_action_id: uuid.UUID
+
+
+@dataclass(frozen=True)
+class CanonicalGuardContext:
+    """Structured guard context used when canonical instance is unreadable."""
+
+    content_id: uuid.UUID | None
+    canonical_instance_id: uuid.UUID | None
+    canonical_path: str | None
+    reason: str
+
+
+def is_canonical_readable(path: Path) -> bool:
+    """Return True when canonical file can be opened/read in current runtime."""
+    try:
+        with path.open("rb") as handle:
+            handle.read(1)
+        return True
+    except (OSError, IOError):
+        return False
+
+
+def _map_windows_path_to_wsl(raw_path: str) -> Path | None:
+    """Map `C:\\foo\\bar` style paths to `/mnt/c/foo/bar` for WSL runtimes."""
+    matched = _WINDOWS_DRIVE_PATH_RE.match(raw_path)
+    if matched is None:
+        return None
+    drive = matched.group(1).lower()
+    tail = matched.group(2).replace("\\", "/")
+    return Path("/mnt") / drive / tail
+
+
+def _resolve_runtime_path(raw_path: str) -> Path | None:
+    """Resolve a runtime-readable path using direct and Windows->WSL fallback."""
+    direct_path = Path(raw_path)
+    if direct_path.exists() and direct_path.is_file():
+        return direct_path
+
+    mapped = _map_windows_path_to_wsl(raw_path)
+    if mapped is not None and mapped.exists() and mapped.is_file():
+        return mapped
+    return None
 
 
 class ApplyService:
@@ -336,6 +383,48 @@ class ApplyService:
                 planned_action_id=action.id,
             )
 
+        guard_context = self._canonical_guard_context_for_action(action)
+        if guard_context is not None:
+            error = CanonicalUnreadableError(
+                content_id=str(guard_context.content_id) if guard_context.content_id is not None else "-",
+                canonical_instance_id=(
+                    str(guard_context.canonical_instance_id)
+                    if guard_context.canonical_instance_id is not None
+                    else None
+                ),
+                canonical_path=guard_context.canonical_path,
+                reason=guard_context.reason,
+                runtime_context="apply_guard",
+            )
+            self._record_canonical_unreadable_event(run_id, str(error))
+            logger.warning(
+                "Canonical unreadable for duplicate mutation",
+                extra={
+                    "run_id": str(run_id),
+                    "phase": "apply",
+                    "planned_action_id": str(action.id),
+                    "file_instance_id": str(action.file_id),
+                    "content_id": str(guard_context.content_id) if guard_context.content_id is not None else "-",
+                    "canonical_instance_id": (
+                        str(guard_context.canonical_instance_id)
+                        if guard_context.canonical_instance_id is not None
+                        else "-"
+                    ),
+                    "canonical_path": guard_context.canonical_path or "-",
+                    "reason": guard_context.reason,
+                },
+            )
+            return ActionOutcome(
+                result="SKIPPED",
+                source_path=str(source_resolved),
+                target_path=str(destination_resolved),
+                error_message=str(error),
+                collision_detected=False,
+                collision_resolved=False,
+                file_instance_id=action.file_id,
+                planned_action_id=action.id,
+            )
+
         destination.parent.mkdir(parents=True, exist_ok=True)
         collision_detected = destination.exists()
         collision_resolved = False
@@ -567,6 +656,110 @@ class ApplyService:
                     error_message=message,
                 )
             )
+
+    def _record_canonical_unreadable_event(self, run_id: uuid.UUID, message: str) -> None:
+        """Append a durable drift/failure fact for unreadable canonical guards."""
+        with transactional_session(self._session_factory) as session:
+            run = session.scalar(select(Run).where(Run.id == run_id).with_for_update())
+            if run is None:
+                return
+            existing = session.scalar(
+                select(FailureEvent.id).where(
+                    FailureEvent.run_id == run_id,
+                    FailureEvent.phase == FailurePhase.APPLY,
+                    FailureEvent.error_code == "CANONICAL_UNREADABLE",
+                    FailureEvent.error_message == message,
+                )
+            )
+            if existing is not None:
+                return
+            session.add(
+                FailureEvent(
+                    run_id=run_id,
+                    phase=FailurePhase.APPLY,
+                    error_code="CANONICAL_UNREADABLE",
+                    error_message=message,
+                )
+            )
+
+    def _canonical_guard_context_for_action(self, action: PlannedAction) -> CanonicalGuardContext | None:
+        """Return unreadable canonical context when duplicate-destructive action must be skipped."""
+        with transactional_session(self._session_factory) as session:
+            file_row = session.get(FileInstance, action.file_id)
+            if file_row is None:
+                return None
+            content_id = file_row.content_id
+
+            active_duplicate_count = int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(FileInstance)
+                    .where(
+                        FileInstance.content_id == content_id,
+                        FileInstance.status == FileInstanceStatus.ACTIVE.value,
+                    )
+                )
+                or 0
+            )
+            duplicate_action = action.action_type in {"COLLISION_RESOLVED", "MARK_DUPLICATE"}
+            if not duplicate_action and active_duplicate_count <= 1:
+                return None
+
+            assignment = session.execute(
+                select(
+                    CanonicalAssignment.canonical_instance_id,
+                    CanonicalAssignment.assigned_at,
+                    CanonicalAssignment.assignment_id,
+                )
+                .where(CanonicalAssignment.content_id == content_id)
+                .order_by(CanonicalAssignment.assigned_at.desc(), CanonicalAssignment.assignment_id.desc())
+                .limit(1)
+            ).first()
+            if assignment is None:
+                return CanonicalGuardContext(
+                    content_id=content_id,
+                    canonical_instance_id=None,
+                    canonical_path=None,
+                    reason="canonical_assignment_missing",
+                )
+
+            canonical_instance_id = assignment[0]
+            canonical_instance = session.get(FileInstance, canonical_instance_id)
+            if canonical_instance is None:
+                return CanonicalGuardContext(
+                    content_id=content_id,
+                    canonical_instance_id=canonical_instance_id,
+                    canonical_path=None,
+                    reason="canonical_instance_missing",
+                )
+            if canonical_instance.status != FileInstanceStatus.ACTIVE.value:
+                return CanonicalGuardContext(
+                    content_id=content_id,
+                    canonical_instance_id=canonical_instance_id,
+                    canonical_path=canonical_instance.absolute_path,
+                    reason="canonical_instance_inactive",
+                )
+
+            runtime_path = _resolve_runtime_path(canonical_instance.absolute_path)
+            if runtime_path is None:
+                return CanonicalGuardContext(
+                    content_id=content_id,
+                    canonical_instance_id=canonical_instance_id,
+                    canonical_path=canonical_instance.absolute_path,
+                    reason="unresolvable_path",
+                )
+            try:
+                readable = is_canonical_readable(runtime_path)
+            except (OSError, IOError):
+                readable = False
+            if not readable:
+                return CanonicalGuardContext(
+                    content_id=content_id,
+                    canonical_instance_id=canonical_instance_id,
+                    canonical_path=str(runtime_path),
+                    reason="unreadable",
+                )
+            return None
 
 
 def _utcnow() -> datetime:
