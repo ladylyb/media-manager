@@ -36,9 +36,14 @@ nav:
       - First Run: getting-started/first-run.md
   - Guides:
       - Overview: guides/index.md
+      - Ingest Workflow: guides/ingest-workflow.md
+      - Plan Workflow: guides/plan-workflow.md
+      - Apply Workflow: guides/apply-workflow.md
       - Documentation Workflow: guides/documentation-workflow.md
   - Operator Guide:
       - Overview: operator-guide/index.md
+      - Resume and Recovery: operator-guide/resume-and-recovery.md
+      - Troubleshooting: operator-guide/troubleshooting.md
   - Reference:
       - Overview: reference/index.md
       - Data Dictionary: reference/data-dictionary.md
