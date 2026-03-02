@@ -8,9 +8,10 @@ This section tracks future documentation work and sequencing.
 - PR-B: workflow-first user documentation (quickstart and first-run)
 - PR-C: operator runbooks and troubleshooting
 - PR-D: archive cleanup and legacy isolation
+- PR-E: ADR curation and long-term governance
 
 ## Upcoming Work
 
-- PR-E: ADR curation and long-term governance
+- Next: content hardening and progressive examples for operator playbooks
 
 Historical project phase material remains under `documentation/project/` during transition.
