@@ -22,6 +22,10 @@ from media_manager.app.persistence.decision_intelligence import (
 )
 from media_manager.app.persistence.ingest import IngestService
 from media_manager.app.persistence.legacy_import import LegacyImportService
+from media_manager.app.persistence.materialized_reads import (
+    benchmark_planner_lookup,
+    refresh_materialized_view,
+)
 from media_manager.app.persistence.models import PlannedAction
 from media_manager.app.persistence.planner import PlanningService
 from media_manager.app.persistence.runs import RunService
@@ -199,6 +203,27 @@ def _render_legacy_import_output(summary) -> None:
     print("----------------------------------------")
 
 
+def _render_mv_refresh_output(summary) -> None:
+    print("----------------------------------------")
+    print("Materialized View Refresh Summary")
+    print("  View: mv_canonical_metadata")
+    print(f"  Mode: {'CONCURRENTLY' if summary.concurrently else 'STANDARD'}")
+    print(f"  Scheduled flag: {summary.scheduled}")
+    if summary.schedule_label:
+        print(f"  Schedule label: {summary.schedule_label}")
+    print("----------------------------------------")
+
+
+def _render_planner_benchmark_output(summary) -> None:
+    print("----------------------------------------")
+    print("Planner Benchmark")
+    print(f"Base mean: {summary.base_mean_ms:.3f} ms")
+    print(f"MV mean: {summary.mv_mean_ms:.3f} ms")
+    print(f"StdDev: {summary.stddev_ms:.3f} ms")
+    print(f"Improvement: {summary.improvement_pct:.2f}%")
+    print("----------------------------------------")
+
+
 def _legacy_import_command(
     *,
     sqlite_path: str,
@@ -239,6 +264,57 @@ def _legacy_import_command(
         engine.dispose()
 
     _render_legacy_import_output(summary)
+    return 0
+
+
+def _refresh_mv_command(
+    *,
+    concurrently: bool,
+    scheduled: bool,
+    schedule_label: str | None,
+) -> int:
+    engine = create_db_engine()
+    try:
+        # Advisory-only scheduling mode in this phase:
+        # no background scheduler/trigger is created here.
+        summary = refresh_materialized_view(
+            engine,
+            concurrently=concurrently,
+            scheduled=scheduled,
+            schedule_label=schedule_label,
+        )
+    except Exception as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        engine.dispose()
+    _render_mv_refresh_output(summary)
+    return 0
+
+
+def _planner_benchmark_command(
+    *,
+    sample_size: int,
+    repeats: int,
+    use_cache: bool,
+    seed: int,
+) -> int:
+    engine = create_db_engine()
+    session_factory = create_session_factory(engine)
+    try:
+        summary = benchmark_planner_lookup(
+            session_factory,
+            sample_size=sample_size,
+            repeats=repeats,
+            use_cache=use_cache,
+            seed=seed,
+        )
+    except Exception as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        engine.dispose()
+    _render_planner_benchmark_output(summary)
     return 0
 
 
@@ -516,6 +592,34 @@ def main(argv: list[str] | None = None) -> int:
         help="Explain canonical decision for a file instance from latest decision trace artifact.",
     )
     explain_file_parser.add_argument("file_id", help="File instance UUID.")
+    refresh_mv_parser = subparsers.add_parser(
+        "refresh-mv",
+        help="Refresh optional mv_canonical_metadata materialized view.",
+    )
+    refresh_mv_parser.add_argument(
+        "--concurrently",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use REFRESH MATERIALIZED VIEW CONCURRENTLY (default: true).",
+    )
+    refresh_mv_parser.add_argument(
+        "--scheduled",
+        action="store_true",
+        help="Advisory schedule mode only (still performs one refresh in this phase).",
+    )
+    refresh_mv_parser.add_argument("--schedule-label", help="Optional schedule strategy label for logs/output.")
+    planner_benchmark_parser = subparsers.add_parser(
+        "planner-benchmark",
+        help="Compare canonical metadata lookup cost between base tables and MV.",
+    )
+    planner_benchmark_parser.add_argument("--sample-size", type=int, default=1000, help="Max canonical rows to query.")
+    planner_benchmark_parser.add_argument("--repeats", type=int, default=5, help="Benchmark repeat count.")
+    planner_benchmark_parser.add_argument("--seed", type=int, default=42, help="Deterministic benchmark seed.")
+    planner_benchmark_parser.add_argument(
+        "--use-cache",
+        action="store_true",
+        help="Enable optional in-memory canonical read cache for MV lookup.",
+    )
 
     args = parser.parse_args(argv)
     if args.command == "plan":
@@ -573,6 +677,19 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "explain-file":
         return _explain_file_command(args.file_id)
+    if args.command == "refresh-mv":
+        return _refresh_mv_command(
+            concurrently=args.concurrently,
+            scheduled=args.scheduled,
+            schedule_label=args.schedule_label,
+        )
+    if args.command == "planner-benchmark":
+        return _planner_benchmark_command(
+            sample_size=args.sample_size,
+            repeats=args.repeats,
+            use_cache=args.use_cache,
+            seed=args.seed,
+        )
 
     parser.print_help()
     return 2
