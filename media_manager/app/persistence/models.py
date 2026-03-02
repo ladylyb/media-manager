@@ -7,13 +7,16 @@ from datetime import datetime, timezone
 from enum import StrEnum
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Index,
     Integer,
     String,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -70,6 +73,13 @@ class CanonicalRecomputeItemResult(StrEnum):
     CHANGED = "CHANGED"
     APPLIED = "APPLIED"
     FAILED = "FAILED"
+
+
+class TagSource(StrEnum):
+    AI = "ai"
+    MANUAL = "manual"
+    IMPORT = "import"
+    SYSTEM = "system"
 
 
 class Run(Base):
@@ -226,6 +236,11 @@ class FileContent(Base):
     )
     canonical_assignments: Mapped[list[CanonicalAssignment]] = relationship(
         back_populates="content",
+        cascade="save-update, merge",
+        passive_deletes=True,
+    )
+    canonical_tags: Mapped[list[CanonicalTag]] = relationship(
+        back_populates="canonical",
         cascade="save-update, merge",
         passive_deletes=True,
     )
@@ -504,6 +519,65 @@ class MediaMetadata(Base):
 Index("idx_media_metadata_content_id", MediaMetadata.content_id)
 Index("idx_media_metadata_code_id", MediaMetadata.code_id)
 Index("uq_media_metadata_content_code", MediaMetadata.content_id, MediaMetadata.code_id, unique=True)
+
+
+class Tag(Base):
+    __tablename__ = "tags"
+    __table_args__ = (
+        UniqueConstraint("normalized_name", name="uq_tags_normalized_name"),
+        CheckConstraint("length(trim(name)) > 0", name="ck_tags_name_nonempty"),
+        CheckConstraint("length(trim(normalized_name)) > 0", name="ck_tags_normalized_name_nonempty"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_name: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    canonical_links: Mapped[list[CanonicalTag]] = relationship(
+        back_populates="tag",
+        cascade="save-update, merge",
+        passive_deletes=True,
+    )
+
+
+class CanonicalTag(Base):
+    __tablename__ = "canonical_tags"
+    __table_args__ = (
+        UniqueConstraint("canonical_id", "tag_id", "source", name="uq_canonical_tags_canonical_tag_source"),
+        CheckConstraint(
+            "source IN ('ai','manual','import','system')",
+            name="ck_canonical_tags_source",
+        ),
+        CheckConstraint(
+            "confidence_score >= 0.0 AND confidence_score <= 1.0",
+            name="ck_canonical_tags_confidence_range",
+        ),
+        CheckConstraint("enrichment_version > 0", name="ck_canonical_tags_enrichment_version_positive"),
+    )
+
+    canonical_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("file_contents.content_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    tag_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tags.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    source: Mapped[str] = mapped_column(Text, primary_key=True)
+    confidence_score: Mapped[float] = mapped_column(Float, nullable=False)
+    enrichment_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    canonical: Mapped[FileContent] = relationship(back_populates="canonical_tags")
+    tag: Mapped[Tag] = relationship(back_populates="canonical_links")
+
+
+Index("idx_canonical_tags_canonical_id", CanonicalTag.canonical_id)
+Index("idx_canonical_tags_tag_id", CanonicalTag.tag_id)
 
 
 class OperatorPolicySetting(Base):
