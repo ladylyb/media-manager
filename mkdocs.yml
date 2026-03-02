@@ -29,45 +29,42 @@ markdown_extensions:
 
 nav:
   - Home: home.md
-  - Documentation Index: README.md
-  - Governance:
-      - Agent Checklist: AGENT_CHECKLIST.md
-      - Architecture Guardrails: ARCHITECTURE_GUARDRAILS.md
-      - State Machine: STATE_MACHINE.md
-      - Local Instructions: LOCAL_INSTRUCTIONS.md
+  - Getting Started:
+      - Overview: getting-started/index.md
+      - Installation: getting-started/install.md
+      - Quickstart: getting-started/quickstart.md
+      - First Run: getting-started/first-run.md
+  - Guides:
+      - Overview: guides/index.md
+      - Documentation Workflow: guides/documentation-workflow.md
+  - Operator Guide:
+      - Overview: operator-guide/index.md
+  - Reference:
+      - Overview: reference/index.md
+      - Data Dictionary: reference/data-dictionary.md
+  - API:
+      - Overview: api/index.md
+      - CLI: api/api-cli.md
+      - Core:
+          - Core Overview: api/api-core.md
+          - Metadata: api/api-core-metadata.md
+          - Paths and Naming: api/api-core-paths.md
+      - Persistence Planner: api/api-persistence-planner.md
+      - Persistence Apply: api/api-persistence-apply.md
+      - Persistence Services: api/api-persistence-services.md
+      - Runs and Failures: api/api-persistence-runs-failures.md
+      - Canonical Policy: api/api-canonical.md
+      - Performance: api/api-performance.md
   - Architecture:
       - Overview: architecture/index.md
       - Invariants: architecture/invariants.md
       - Run Lifecycle: architecture/run-lifecycle.md
-  - Guides:
-      - Documentation Workflow: guides/documentation-workflow.md
-  - API Reference:
-      - Overview: reference/index.md
-      - CLI: reference/api-cli.md
-      - Core:
-          - Core Overview: reference/api-core.md
-          - Metadata: reference/api-core-metadata.md
-          - Paths and Naming: reference/api-core-paths.md
-      - Persistence Planner: reference/api-persistence-planner.md
-      - Persistence Apply: reference/api-persistence-apply.md
-      - Persistence Services: reference/api-persistence-services.md
-      - Runs and Failures: reference/api-persistence-runs-failures.md
-      - Canonical Policy: reference/api-canonical.md
-      - Performance: reference/api-performance.md
-      - Data Dictionary: reference/data-dictionary.md
-  - Performance:
-      - Phase 6 Performance Guide: performance/phase6-performance-guide.md
-  - Project:
-      - Overview: project/index.md
-      - Charter: project/00-charter.md
-      - Roadmap: project/01-roadmap.md
-      - Milestones: project/02-milestones.md
-      - Test Strategy: project/03-test-strategy.md
-      - Risk Register: project/04-risk-register.md
-      - Release Plan: project/05-release-plan.md
-      - Operational Guardrails: project/06-operational-guardrails.md
-      - Unified Architecture Spec: project/07-unified-architecture-spec.md
-      - Media Renaming Strategy: project/08-media-renaming-strategy.md
-      - Redefined Roadmap Phases 7-12: project/09-redefined-roadmap-phases-7-12.md
-      - Canonical Policy Governance: project/10-p8.1-canonical-policy-governance.md
-      - Decision Intel Policy Sim: project/11-p10-decision-intel-policy-sim.md
+      - State Machine: STATE_MACHINE.md
+      - Architecture Guardrails: ARCHITECTURE_GUARDRAILS.md
+  - Contributing:
+      - Overview: contributing/index.md
+  - Roadmap:
+      - Documentation Roadmap: roadmap/index.md
+      - Project History Overview: project/index.md
+  - Archive:
+      - Archive Overview: archive/index.md
