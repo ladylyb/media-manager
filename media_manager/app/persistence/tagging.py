@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
 from collections.abc import Iterable
+from dataclasses import dataclass
+import re
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
@@ -12,7 +13,7 @@ from media_manager.app.persistence.models import CanonicalTag, Tag, TagSource
 
 
 def normalize_tag_name(name: str) -> str:
-    normalized = name.strip().lower()
+    normalized = re.sub(r"\s+", " ", name.strip().lower())
     if not normalized:
         raise ValueError("Tag name must not be empty after normalization.")
     return normalized

@@ -4,6 +4,7 @@ import uuid
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from media_manager.app.persistence.models import CanonicalTag, FileContent, Tag, TagSource
 from media_manager.app.persistence.tagging import (
@@ -17,6 +18,10 @@ from media_manager.app.persistence.tagging import (
 
 def test_normalize_tag_name_trims_and_lowercases() -> None:
     assert normalize_tag_name("  SUMMER Trip  ") == "summer trip"
+
+
+def test_normalize_tag_name_collapses_internal_spaces() -> None:
+    assert normalize_tag_name("Summer    Road   Trip") == "summer road trip"
 
 
 def test_normalize_tag_name_rejects_empty() -> None:
@@ -115,7 +120,7 @@ def test_upsert_canonical_tag_rejects_out_of_range_confidence(session_factory) -
         session.commit()
 
     with session_factory() as session:
-        with pytest.raises(Exception):
+        with pytest.raises(IntegrityError):
             upsert_canonical_tag(
                 session,
                 canonical_id=canonical_id,

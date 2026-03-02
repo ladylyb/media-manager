@@ -4,6 +4,7 @@ import uuid
 
 import pytest
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import IntegrityError
 
 
 def test_phase12_tag_tables_exist(db_engine) -> None:
@@ -58,7 +59,7 @@ def test_phase12_confidence_constraint_enforced(db_engine) -> None:
             text("INSERT INTO tags (id, name, normalized_name) VALUES (:id, :name, :normalized_name)"),
             {"id": tag_id, "name": "Nature", "normalized_name": "nature"},
         )
-        with pytest.raises(Exception):
+        with pytest.raises(IntegrityError):
             conn.execute(
                 text(
                     """
@@ -72,6 +73,37 @@ def test_phase12_confidence_constraint_enforced(db_engine) -> None:
                     "tag_id": tag_id,
                     "source": "ai",
                     "confidence_score": 1.5,
+                    "enrichment_version": 1,
+                },
+            )
+
+
+def test_phase12_source_constraint_enforced(db_engine) -> None:
+    canonical_id = uuid.uuid4()
+    tag_id = uuid.uuid4()
+    with db_engine.begin() as conn:
+        conn.execute(
+            text("INSERT INTO file_contents (content_id, sha256_hash) VALUES (:content_id, :sha256_hash)"),
+            {"content_id": canonical_id, "sha256_hash": f"{canonical_id.hex:0<64}"},
+        )
+        conn.execute(
+            text("INSERT INTO tags (id, name, normalized_name) VALUES (:id, :name, :normalized_name)"),
+            {"id": tag_id, "name": "Nature", "normalized_name": "nature"},
+        )
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO canonical_tags (
+                        canonical_id, tag_id, source, confidence_score, enrichment_version
+                    ) VALUES (:canonical_id, :tag_id, :source, :confidence_score, :enrichment_version)
+                    """
+                ),
+                {
+                    "canonical_id": canonical_id,
+                    "tag_id": tag_id,
+                    "source": "human",
+                    "confidence_score": 0.5,
                     "enrichment_version": 1,
                 },
             )
