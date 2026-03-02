@@ -26,3 +26,10 @@ mkdocs build --strict
 - Keep API docs under `documentation/reference/` using `mkdocstrings` directives.
 - Keep roadmap and phase material under `documentation/project/`.
 - Ensure `mkdocs build --strict` passes before opening a PR.
+
+## API Docstring Conventions
+
+- Use triple-double-quoted docstrings on modules, public classes, and public functions.
+- Start docstrings with a one-line summary, then add details only when needed.
+- Prefer explicit parameter and return type hints so rendered API signatures are clear.
+- Keep runtime behavior details accurate; if behavior changes, update docstrings in the same PR.

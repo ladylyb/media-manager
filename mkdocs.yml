@@ -42,8 +42,16 @@ nav:
       - Documentation Workflow: guides/documentation-workflow.md
   - API Reference:
       - CLI: reference/api-cli.md
+      - Core:
+          - Core Overview: reference/api-core.md
+          - Metadata: reference/api-core-metadata.md
+          - Paths and Naming: reference/api-core-paths.md
       - Persistence Planner: reference/api-persistence-planner.md
       - Persistence Apply: reference/api-persistence-apply.md
+      - Persistence Services: reference/api-persistence-services.md
+      - Runs and Failures: reference/api-persistence-runs-failures.md
+      - Canonical Policy: reference/api-canonical.md
+      - Performance: reference/api-performance.md
       - Data Dictionary: reference/data-dictionary.md
   - Performance:
       - Phase 6 Performance Guide: performance/phase6-performance-guide.md
