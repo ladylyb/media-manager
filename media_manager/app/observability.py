@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import threading
+from collections.abc import Iterable
 from collections.abc import Mapping
 
 from media_manager.app.core.logging_config import get_logger
@@ -39,6 +40,11 @@ def _is_histogram_supported() -> bool:
 
 def _is_server_supported() -> bool:
     return start_http_server is not None
+
+
+def _is_metrics_recording_enabled() -> bool:
+    enabled_raw = os.getenv("MEDIA_MANAGER_METRICS_ENABLED", "0").strip().lower()
+    return enabled_raw in {"1", "true", "yes", "on"}
 
 
 def _get_registered_collector(name: str):
@@ -164,6 +170,72 @@ if Counter is not None:
         "Canonical metadata TTL cache hit ratio expressed as percentage.",
         ("run_id", "source"),
     )
+    _FILES_SCANNED_TOTAL = _get_or_create_counter(
+        "files_scanned_total",
+        "Total files scanned across ingest runs.",
+        ("run_id", "dataset_id", "policy_name"),
+    )
+    _NEW_CONTENTS_TOTAL = _get_or_create_counter(
+        "new_contents_total",
+        "Total new logical content rows created by ingest.",
+        ("run_id", "dataset_id", "policy_name"),
+    )
+    _NEW_INSTANCES_TOTAL = _get_or_create_counter(
+        "new_instances_total",
+        "Total new file instances created by ingest.",
+        ("run_id", "dataset_id", "policy_name"),
+    )
+    _DUPLICATES_DETECTED_TOTAL = _get_or_create_counter(
+        "duplicates_detected_total",
+        "Total duplicate file contents detected during ingest.",
+        ("run_id", "dataset_id", "policy_name"),
+    )
+    _HASH_TIME_TOTAL_MS = _get_or_create_histogram(
+        "hash_time_total_ms",
+        "Per-file SHA-256 hash latency in milliseconds.",
+        ("run_id", "dataset_id", "policy_name"),
+        buckets=(
+            0.1,
+            0.25,
+            0.5,
+            1.0,
+            2.5,
+            5.0,
+            10.0,
+            25.0,
+            50.0,
+            100.0,
+            250.0,
+            500.0,
+            1000.0,
+            2500.0,
+            5000.0,
+            10000.0,
+        ),
+    )
+    _DB_WRITE_TIME_TOTAL_MS = _get_or_create_histogram(
+        "db_write_time_total_ms",
+        "Per-file DB persistence-path latency in milliseconds.",
+        ("run_id", "dataset_id", "policy_name"),
+        buckets=(
+            0.1,
+            0.25,
+            0.5,
+            1.0,
+            2.5,
+            5.0,
+            10.0,
+            25.0,
+            50.0,
+            100.0,
+            250.0,
+            500.0,
+            1000.0,
+            2500.0,
+            5000.0,
+            10000.0,
+        ),
+    )
 else:
     _INGEST_FILES_SCANNED_TOTAL = None
     _INGEST_NEW_CONTENTS_TOTAL = None
@@ -173,6 +245,12 @@ else:
     _CANONICAL_READ_CACHE_HITS_TOTAL = None
     _CANONICAL_READ_CACHE_MISSES_TOTAL = None
     _CANONICAL_READ_CACHE_HIT_RATIO_PERCENT = None
+    _FILES_SCANNED_TOTAL = None
+    _NEW_CONTENTS_TOTAL = None
+    _NEW_INSTANCES_TOTAL = None
+    _DUPLICATES_DETECTED_TOTAL = None
+    _HASH_TIME_TOTAL_MS = None
+    _DB_WRITE_TIME_TOTAL_MS = None
 
 
 def _normalize_run_id(run_id: str | None) -> str:
@@ -180,6 +258,20 @@ def _normalize_run_id(run_id: str | None) -> str:
     if not normalized_run_id:
         return "none"
     return normalized_run_id
+
+
+def _normalize_dataset_id(dataset_id: str | None) -> str:
+    normalized_dataset_id = str(dataset_id).strip().lower() if dataset_id is not None else ""
+    if not normalized_dataset_id:
+        return "unknown"
+    return normalized_dataset_id
+
+
+def _normalize_policy_name(policy_name: str | None) -> str:
+    normalized_policy_name = str(policy_name).strip().lower() if policy_name is not None else ""
+    if not normalized_policy_name:
+        return "default"
+    return normalized_policy_name
 
 
 def record_ingest_metrics(run_id: str, files_scanned: int, new_contents: int) -> None:
@@ -191,6 +283,58 @@ def record_ingest_metrics(run_id: str, files_scanned: int, new_contents: int) ->
         _INGEST_NEW_CONTENTS_TOTAL.labels(run_id=run_id, phase="ingest").inc(max(new_contents, 0))
     except Exception:
         logger.exception("Failed to record ingest metrics")
+
+
+def record_ingest_structured_metrics(
+    *,
+    run_id: str | None,
+    dataset_id: str | None,
+    policy_name: str | None,
+    files_scanned: int,
+    new_contents: int,
+    new_instances: int,
+    duplicates_detected: int,
+    hash_latencies_ms: Iterable[float],
+    db_write_latencies_ms: Iterable[float],
+) -> None:
+    """Record structured ingest counters and latency histograms.
+
+    This helper is fail-open and env-gated:
+    - When MEDIA_MANAGER_METRICS_ENABLED is disabled, all updates are skipped.
+    - Any collector/runtime error is swallowed after logging.
+    """
+    if not _is_metrics_recording_enabled():
+        return
+    if (
+        _FILES_SCANNED_TOTAL is None
+        or _NEW_CONTENTS_TOTAL is None
+        or _NEW_INSTANCES_TOTAL is None
+        or _DUPLICATES_DETECTED_TOTAL is None
+        or _HASH_TIME_TOTAL_MS is None
+        or _DB_WRITE_TIME_TOTAL_MS is None
+    ):
+        return
+
+    try:
+        labels = {
+            "run_id": _normalize_run_id(run_id),
+            "dataset_id": _normalize_dataset_id(dataset_id),
+            "policy_name": _normalize_policy_name(policy_name),
+        }
+        _FILES_SCANNED_TOTAL.labels(**labels).inc(max(int(files_scanned), 0))
+        _NEW_CONTENTS_TOTAL.labels(**labels).inc(max(int(new_contents), 0))
+        _NEW_INSTANCES_TOTAL.labels(**labels).inc(max(int(new_instances), 0))
+        _DUPLICATES_DETECTED_TOTAL.labels(**labels).inc(max(int(duplicates_detected), 0))
+
+        hash_metric = _HASH_TIME_TOTAL_MS.labels(**labels)
+        for sample_ms in hash_latencies_ms:
+            hash_metric.observe(max(float(sample_ms), 0.0))
+
+        db_write_metric = _DB_WRITE_TIME_TOTAL_MS.labels(**labels)
+        for sample_ms in db_write_latencies_ms:
+            db_write_metric.observe(max(float(sample_ms), 0.0))
+    except Exception:
+        logger.exception("Failed to record structured ingest metrics")
 
 
 def record_planner_metrics(run_id: str, actions_generated: int) -> None:
