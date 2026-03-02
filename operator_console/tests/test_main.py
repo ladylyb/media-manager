@@ -79,12 +79,14 @@ class _FakeService:
                         {
                             "file_instance_id": "aaaaaaaa-0000-0000-0000-000000000001",
                             "absolute_path": "/dataset/a.jpg",
+                            "media_type": "IMG",
                             "is_image": True,
                             "thumbnail_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000001",
                         },
                         {
                             "file_instance_id": "aaaaaaaa-0000-0000-0000-000000000002",
                             "absolute_path": "/dataset/b.jpg",
+                            "media_type": "IMG",
                             "is_image": True,
                             "thumbnail_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000002",
                         },
@@ -350,12 +352,14 @@ def test_duplicates_endpoint_returns_json() -> None:
                     {
                         "file_instance_id": "aaaaaaaa-0000-0000-0000-000000000001",
                         "absolute_path": "/dataset/a.jpg",
+                        "media_type": "IMG",
                         "is_image": True,
                         "thumbnail_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000001",
                     },
                     {
                         "file_instance_id": "aaaaaaaa-0000-0000-0000-000000000002",
                         "absolute_path": "/dataset/b.jpg",
+                        "media_type": "IMG",
                         "is_image": True,
                         "thumbnail_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000002",
                     },

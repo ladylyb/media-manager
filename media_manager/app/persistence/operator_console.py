@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import mimetypes
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,7 @@ from media_manager.app.persistence.models import (
 )
 
 PERF_RUN_DIR = Path("artifacts/perf/runs")
+_WINDOWS_DRIVE_PATH_RE = re.compile(r"^([A-Za-z]):[\\/](.*)$")
 
 
 @dataclass(frozen=True)
@@ -101,6 +103,7 @@ class DuplicateFileItem:
 
     file_instance_id: str
     absolute_path: str
+    media_type: str
     is_image: bool
     thumbnail_url: str | None
 
@@ -109,6 +112,7 @@ class DuplicateFileItem:
         return {
             "file_instance_id": self.file_instance_id,
             "absolute_path": self.absolute_path,
+            "media_type": self.media_type,
             "is_image": self.is_image,
             "thumbnail_url": self.thumbnail_url,
         }
@@ -272,10 +276,12 @@ class OperatorConsoleReadService:
         by_group_by_instance: dict[UUID, dict[str, DuplicateFileItem]] = {}
         for content_id, file_instance_id, absolute_path in instance_rows:
             instance_id_str = str(file_instance_id)
-            is_image = infer_media_type_from_extension(Path(absolute_path)) == "IMG"
+            media_type = infer_media_type_from_extension(Path(absolute_path)) or "OTHER"
+            is_image = media_type == "IMG"
             file_item = DuplicateFileItem(
                 file_instance_id=instance_id_str,
                 absolute_path=absolute_path,
+                media_type=media_type,
                 is_image=is_image,
                 thumbnail_url=f"/api/thumbnail/{instance_id_str}" if is_image else None,
             )
@@ -310,10 +316,10 @@ class OperatorConsoleReadService:
             if instance is None:
                 return None
 
-        path = Path(instance.absolute_path)
-        if infer_media_type_from_extension(path) != "IMG":
+        path = self._resolve_existing_instance_path(instance.absolute_path)
+        if path is None:
             return None
-        if not path.exists() or not path.is_file():
+        if infer_media_type_from_extension(path) != "IMG":
             return None
         try:
             with path.open("rb"):
@@ -322,6 +328,26 @@ class OperatorConsoleReadService:
             return None
         mime, _ = mimetypes.guess_type(path.name)
         return path, (mime or "image/jpeg")
+
+    def _resolve_existing_instance_path(self, raw_path: str) -> Path | None:
+        """Resolve a durable file path with optional Windows->WSL fallback."""
+        direct_path = Path(raw_path)
+        if direct_path.exists() and direct_path.is_file():
+            return direct_path
+
+        mapped = self._map_windows_path_to_wsl(raw_path)
+        if mapped is not None and mapped.exists() and mapped.is_file():
+            return mapped
+        return None
+
+    def _map_windows_path_to_wsl(self, raw_path: str) -> Path | None:
+        """Map `C:\\foo\\bar` style paths to `/mnt/c/foo/bar` for WSL hosts."""
+        matched = _WINDOWS_DRIVE_PATH_RE.match(raw_path)
+        if matched is None:
+            return None
+        drive = matched.group(1).lower()
+        tail = matched.group(2).replace("\\", "/")
+        return Path("/mnt") / drive / tail
 
     def _count_total_files(self, session: Session) -> int:
         value = session.scalar(

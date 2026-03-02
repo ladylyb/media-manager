@@ -4,6 +4,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
 
+import pytest
+
 from media_manager.app.persistence.models import CanonicalAssignment, FileContent, FileInstance, FileInstanceStatus
 from media_manager.app.persistence.operator_console import OperatorConsoleReadService
 
@@ -126,6 +128,8 @@ def test_get_duplicate_groups_orders_groups_and_files_deterministically(session_
     assert groups[0].canonical_file is not None
     assert groups[0].canonical_file.file_instance_id == str(a1)
     assert groups[1].canonical_file is None
+    assert groups[0].files[0].media_type == "IMG"
+    assert groups[0].files[2].media_type == "VID"
     assert groups[0].files[0].thumbnail_url == f"/api/thumbnail/{a1}"
     assert groups[0].files[2].thumbnail_url is None
 
@@ -278,3 +282,64 @@ def test_resolve_thumbnail_source_returns_none_for_non_image_or_missing(session_
     assert service.resolve_thumbnail_source(missing_image_id) is None
     assert service.resolve_thumbnail_source(UUID("ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb")) is None
 
+
+def test_resolve_thumbnail_source_supports_windows_path_wsl_fallback(
+    session_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = OperatorConsoleReadService(session_factory)
+    now = datetime(2026, 3, 1, 16, 0, tzinfo=UTC)
+    content_id = UUID("12121212-3434-5656-7878-909090909090")
+    file_instance_id = UUID("21212121-4343-6565-8787-101010101010")
+    windows_style_path = r"C:\Users\micro\Documents\Better Up\Media-Manager-Test\PIC\ladylyb - Personal Chapters — 2021-09-13_105647.JPG"
+    mapped_path = tmp_path / "mnt" / "c" / "Users" / "micro" / "Documents" / "Better Up" / "Media-Manager-Test" / "PIC" / "ladylyb - Personal Chapters — 2021-09-13_105647.JPG"
+    mapped_path.parent.mkdir(parents=True, exist_ok=True)
+    mapped_path.write_bytes(b"jpeg-data")
+
+    with session_factory.begin() as session:
+        _add_content(session, content_id, "hash-win", now)
+        session.flush()
+        _add_instance(
+            session,
+            file_instance_id=file_instance_id,
+            content_id=content_id,
+            absolute_path=windows_style_path,
+            first_seen_at=now,
+        )
+
+    original_exists = Path.exists
+    original_is_file = Path.is_file
+    original_open = Path.open
+
+    def fake_exists(path_obj: Path) -> bool:
+        path_str = str(path_obj)
+        if path_str.startswith("/mnt/c/"):
+            translated = tmp_path / path_str.lstrip("/")
+            return translated.exists()
+        return original_exists(path_obj)
+
+    def fake_is_file(path_obj: Path) -> bool:
+        path_str = str(path_obj)
+        if path_str.startswith("/mnt/c/"):
+            translated = tmp_path / path_str.lstrip("/")
+            return translated.is_file()
+        return original_is_file(path_obj)
+
+    def fake_open(path_obj: Path, mode: str = "r", *args, **kwargs):
+        path_str = str(path_obj)
+        if path_str.startswith("/mnt/c/"):
+            translated = tmp_path / path_str.lstrip("/")
+            return translated.open(mode, *args, **kwargs)
+        return original_open(path_obj, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+    monkeypatch.setattr(Path, "is_file", fake_is_file)
+    monkeypatch.setattr(Path, "open", fake_open)
+
+    resolved = service.resolve_thumbnail_source(file_instance_id)
+
+    assert resolved is not None
+    resolved_path, media_type = resolved
+    assert str(resolved_path).startswith("/mnt/c/")
+    assert media_type.startswith("image/")
