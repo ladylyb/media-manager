@@ -16,9 +16,10 @@ from media_manager.app.core.logging_config import get_logger
 logger = get_logger(__name__)
 
 try:
-    from prometheus_client import Counter, Histogram, REGISTRY, generate_latest, make_asgi_app, start_http_server
+    from prometheus_client import Counter, Gauge, Histogram, REGISTRY, generate_latest, make_asgi_app, start_http_server
 except Exception:  # pragma: no cover - fallback path when dependency is unavailable.
     Counter = None  # type: ignore[assignment]
+    Gauge = None  # type: ignore[assignment]
     Histogram = None  # type: ignore[assignment]
     REGISTRY = None  # type: ignore[assignment]
     generate_latest = None  # type: ignore[assignment]
@@ -27,7 +28,9 @@ except Exception:  # pragma: no cover - fallback path when dependency is unavail
 
 _server_lock = threading.Lock()
 _registry_lock = threading.Lock()
+_canonical_cache_metrics_lock = threading.Lock()
 _server_started = False
+_canonical_cache_previous_totals: dict[tuple[str, str], tuple[int, int]] = {}
 
 
 def _is_histogram_supported() -> bool:
@@ -88,6 +91,21 @@ def _get_or_create_histogram(
         return None
 
 
+def _get_or_create_gauge(name: str, documentation: str, labelnames: tuple[str, ...]):
+    if Gauge is None:
+        return None
+
+    try:
+        with _registry_lock:
+            existing = _get_registered_collector(name)
+            if existing is not None:
+                return existing
+            return Gauge(name, documentation, labelnames)
+    except Exception:
+        logger.exception("Failed to initialize gauge", extra={"phase": "observability", "action": "METRICS_INIT"})
+        return None
+
+
 if Counter is not None:
     _INGEST_FILES_SCANNED_TOTAL = _get_or_create_counter(
         "ingest_files_scanned_total",
@@ -131,12 +149,37 @@ if Counter is not None:
             10.0,
         ),
     )
+    _CANONICAL_READ_CACHE_HITS_TOTAL = _get_or_create_counter(
+        "canonical_read_cache_hits_total",
+        "Total canonical metadata TTL cache hits by read source.",
+        ("run_id", "source"),
+    )
+    _CANONICAL_READ_CACHE_MISSES_TOTAL = _get_or_create_counter(
+        "canonical_read_cache_misses_total",
+        "Total canonical metadata TTL cache misses by read source.",
+        ("run_id", "source"),
+    )
+    _CANONICAL_READ_CACHE_HIT_RATIO_PERCENT = _get_or_create_gauge(
+        "canonical_read_cache_hit_ratio_percent",
+        "Canonical metadata TTL cache hit ratio expressed as percentage.",
+        ("run_id", "source"),
+    )
 else:
     _INGEST_FILES_SCANNED_TOTAL = None
     _INGEST_NEW_CONTENTS_TOTAL = None
     _PLANNER_ACTIONS_GENERATED_TOTAL = None
     _APPLY_ACTIONS_EXECUTED_TOTAL = None
     _PLANNER_STAGE_DURATION_SECONDS = None
+    _CANONICAL_READ_CACHE_HITS_TOTAL = None
+    _CANONICAL_READ_CACHE_MISSES_TOTAL = None
+    _CANONICAL_READ_CACHE_HIT_RATIO_PERCENT = None
+
+
+def _normalize_run_id(run_id: str | None) -> str:
+    normalized_run_id = str(run_id).strip() if run_id is not None else ""
+    if not normalized_run_id:
+        return "none"
+    return normalized_run_id
 
 
 def record_ingest_metrics(run_id: str, files_scanned: int, new_contents: int) -> None:
@@ -183,12 +226,74 @@ def record_planner_stage_duration(run_id: str | None, stage: str, duration_s: fl
     if _PLANNER_STAGE_DURATION_SECONDS is None:
         return
     try:
-        normalized_run_id = str(run_id).strip() if run_id is not None else ""
-        if not normalized_run_id:
-            normalized_run_id = "none"
+        normalized_run_id = _normalize_run_id(run_id)
         _PLANNER_STAGE_DURATION_SECONDS.labels(run_id=normalized_run_id, stage=stage).observe(max(duration_s, 0.0))
     except Exception:
         logger.exception("Failed to record planner stage duration")
+
+
+def record_canonical_read_cache_metrics(
+    run_id: str | None,
+    source: str,
+    cache_hits: int,
+    cache_misses: int,
+) -> None:
+    """Record canonical metadata read cache counters and ratio gauge.
+
+    The cache exposes cumulative in-memory totals. This helper converts them into
+    monotonic counter increments by tracking per-label previous totals.
+    """
+    if (
+        _CANONICAL_READ_CACHE_HITS_TOTAL is None
+        or _CANONICAL_READ_CACHE_MISSES_TOTAL is None
+        or _CANONICAL_READ_CACHE_HIT_RATIO_PERCENT is None
+    ):
+        return
+
+    try:
+        normalized_run_id = _normalize_run_id(run_id)
+        normalized_source = source.strip().lower() or "unknown"
+        clamped_hits = max(int(cache_hits), 0)
+        clamped_misses = max(int(cache_misses), 0)
+        label_key = (normalized_run_id, normalized_source)
+
+        with _canonical_cache_metrics_lock:
+            previous_hits, previous_misses = _canonical_cache_previous_totals.get(label_key, (0, 0))
+            delta_hits = max(clamped_hits - previous_hits, 0)
+            delta_misses = max(clamped_misses - previous_misses, 0)
+            # Preserve monotonic reference totals to avoid overcounting when
+            # concurrent calls submit out-of-order cumulative snapshots.
+            _canonical_cache_previous_totals[label_key] = (
+                max(previous_hits, clamped_hits),
+                max(previous_misses, clamped_misses),
+            )
+
+        if delta_hits > 0:
+            _CANONICAL_READ_CACHE_HITS_TOTAL.labels(run_id=normalized_run_id, source=normalized_source).inc(delta_hits)
+        if delta_misses > 0:
+            _CANONICAL_READ_CACHE_MISSES_TOTAL.labels(run_id=normalized_run_id, source=normalized_source).inc(
+                delta_misses
+            )
+
+        total = clamped_hits + clamped_misses
+        ratio_percent = 0.0 if total <= 0 else (100.0 * (clamped_hits / total))
+        _CANONICAL_READ_CACHE_HIT_RATIO_PERCENT.labels(run_id=normalized_run_id, source=normalized_source).set(
+            ratio_percent
+        )
+    except Exception:
+        logger.exception("Failed to record canonical read cache metrics")
+
+
+def record_canonical_read_cache_disabled(run_id: str | None, source: str) -> None:
+    """Set canonical metadata read cache ratio gauge to 0 for disabled path."""
+    if _CANONICAL_READ_CACHE_HIT_RATIO_PERCENT is None:
+        return
+    try:
+        normalized_run_id = _normalize_run_id(run_id)
+        normalized_source = source.strip().lower() or "unknown"
+        _CANONICAL_READ_CACHE_HIT_RATIO_PERCENT.labels(run_id=normalized_run_id, source=normalized_source).set(0.0)
+    except Exception:
+        logger.exception("Failed to record canonical read cache disabled metric")
 
 
 def mount_metrics_endpoint(app: object, path: str = "/metrics") -> bool:

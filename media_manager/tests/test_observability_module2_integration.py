@@ -6,6 +6,7 @@ import pytest
 
 import media_manager.app.observability as observability
 from media_manager.app.persistence.ingest import IngestService
+from media_manager.app.persistence.materialized_reads import fetch_canonical_metadata, refresh_materialized_view
 from media_manager.app.persistence.planner import PlanningService
 from media_manager.app.persistence.runs import RunService
 from operator_console.main import app as operator_console_app
@@ -59,3 +60,34 @@ def test_mount_metrics_endpoint_does_not_depend_on_standalone_server(monkeypatch
     assert response.status_code == 200
     assert "planner_stage_duration_seconds" in response.text
 
+
+def test_metrics_endpoint_exposes_canonical_cache_series_for_base_and_mv_with_none_run_id(
+    tmp_path: Path,
+    test_database_url: str,
+    session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    testclient = pytest.importorskip("fastapi.testclient")
+    monkeypatch.setenv("DATABASE_URL", test_database_url)
+    monkeypatch.setenv("CANONICAL_READ_CACHE_ENABLED", "true")
+    run_id = _run_planning_flow(tmp_path, session_factory)
+    assert run_id
+
+    from media_manager.app.persistence.base import create_db_engine
+
+    engine = create_db_engine(test_database_url)
+    refresh_materialized_view(engine, concurrently=False)
+
+    with session_factory() as session:
+        fetch_canonical_metadata(session, use_mv=False, sample_size=1000, use_cache=None, metrics_run_id=None)
+        fetch_canonical_metadata(session, use_mv=True, sample_size=1000, use_cache=None, metrics_run_id=None)
+
+    response = testclient.TestClient(operator_console_app).get("/metrics/")
+    assert response.status_code == 200
+    text = response.text
+    assert 'canonical_read_cache_hit_ratio_percent{run_id="none",source="base"}' in text
+    assert 'canonical_read_cache_hit_ratio_percent{run_id="none",source="mv"}' in text
+    assert observability.read_counter_value(
+        "canonical_read_cache_misses_total", {"run_id": "none", "source": "base"}
+    ) >= 1
+    assert observability.read_counter_value("canonical_read_cache_misses_total", {"run_id": "none", "source": "mv"}) >= 1

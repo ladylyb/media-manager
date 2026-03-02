@@ -96,3 +96,44 @@ def test_concurrent_planner_runs_record_histograms_without_threading_errors(tmp_
     after = _read_histogram_stage_count("action_generation")
     assert errors == []
     assert after - before >= 6
+
+
+def test_concurrent_canonical_cache_metric_recording_is_monotonic_and_thread_safe() -> None:
+    labels = {"run_id": "thread-cache-run", "source": "mv"}
+    before_hits = observability.read_counter_value("canonical_read_cache_hits_total", labels)
+    before_misses = observability.read_counter_value("canonical_read_cache_misses_total", labels)
+    errors: list[BaseException] = []
+    call_count = {"value": 0}
+    call_lock = threading.Lock()
+    total_threads = 16
+    calls_per_thread = 100
+
+    def _worker() -> None:
+        try:
+            for _ in range(calls_per_thread):
+                with call_lock:
+                    call_count["value"] += 1
+                    current = call_count["value"]
+                observability.record_canonical_read_cache_metrics(
+                    run_id="thread-cache-run",
+                    source="mv",
+                    cache_hits=current,
+                    cache_misses=0,
+                )
+        except BaseException as exc:  # pragma: no cover - test guard.
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_worker) for _ in range(total_threads)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    after_hits = observability.read_counter_value("canonical_read_cache_hits_total", labels)
+    after_misses = observability.read_counter_value("canonical_read_cache_misses_total", labels)
+    ratio_percent = observability.read_counter_value("canonical_read_cache_hit_ratio_percent", labels)
+
+    assert errors == []
+    assert after_hits - before_hits == total_threads * calls_per_thread
+    assert after_misses - before_misses == 0
+    assert ratio_percent == 100.0
