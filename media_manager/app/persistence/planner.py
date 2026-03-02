@@ -20,6 +20,7 @@ from media_manager.app.core.logging_config import get_logger
 from media_manager.app.core.metadata_cache import MetadataCache
 from media_manager.app.core.state_machine import RunState, validate_transition
 from media_manager.app.persistence.base import transactional_session
+from media_manager.app.persistence.decision_intelligence import build_decision_traces, write_decision_trace_artifact
 from media_manager.app.persistence.ingest import ingest_paths_in_session
 from media_manager.app.persistence.models import (
     CanonicalAssignment,
@@ -36,6 +37,7 @@ from media_manager.app.persistence.models import (
 )
 
 logger = get_logger(__name__)
+PLANNER_TRACE_VERSION = "phase10.v1"
 
 
 @dataclass(frozen=True)
@@ -159,6 +161,23 @@ class PlanningService:
                         skipped_missing_metadata_count += 1
                     else:
                         skipped_count += 1
+
+                decision_traces = build_decision_traces(
+                    session,
+                    rows,
+                    planner_version=PLANNER_TRACE_VERSION,
+                )
+                trace_path = write_decision_trace_artifact(run_id=run.id, traces=decision_traces)
+                logger.info(
+                    "Decision trace artifact written",
+                    extra={
+                        "run_id": str(run.id),
+                        "phase": "plan",
+                        "action_type": "TRACE",
+                        "path": str(trace_path),
+                        "trace_entries": len(decision_traces),
+                    },
+                )
 
                 summary = PlanningSummary(
                     run_id=run.id,
