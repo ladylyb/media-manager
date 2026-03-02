@@ -1,19 +1,23 @@
 # Media Manager Documentation
 
-This site is the canonical documentation entrypoint for the deterministic media manager.
+This documentation is organized for practical use first, with architecture and legacy context available when needed.
 
-## Core Principles
+## Choose Your Path
 
-- Filesystem mutation is gated by durable DB state.
-- Apply operations are restart-safe and idempotent.
-- Planner remains pure and deterministic.
-- Failure creates durable facts for observability and recovery.
+- New user: start with [Getting Started](getting-started/index.md)
+- Operator: use [Operator Guide](operator-guide/index.md)
+- Contributor: follow [Contributing](contributing/index.md)
 
-## Quick Links
+## Core Product Docs
 
-- [Documentation Index](README.md)
-- [Architecture Overview](architecture/index.md)
-- [Project Planning Docs](project/index.md)
-- [Run Lifecycle](architecture/run-lifecycle.md)
-- [Invariant Summary](architecture/invariants.md)
-- [API Reference Overview](reference/index.md)
+- [Getting Started](getting-started/index.md)
+- [Guides](guides/index.md)
+- [Operator Guide](operator-guide/index.md)
+- [Reference](reference/index.md)
+- [API Docs](api/index.md)
+
+## Engineering Context
+
+- [Architecture](architecture/index.md)
+- [Roadmap](roadmap/index.md)
+- [Archive](archive/index.md)
