@@ -39,3 +39,20 @@ For each run, capture:
 - error message
 - recovery action taken
 - final outcome
+
+## Quick Check Command
+
+Use the built-in CLI quick check to verify canonical read cache metrics wiring:
+
+```bash
+media-manager observability-quick-check --run-id qc-demo --sample-size 1000
+```
+
+Expected pass signal:
+
+1. Command exits with status `0`.
+2. Output contains `Metrics complete: True`.
+3. Output includes all metric families for both `source="base"` and `source="mv"`:
+   - `canonical_read_cache_hits_total`
+   - `canonical_read_cache_misses_total`
+   - `canonical_read_cache_hit_ratio_percent`

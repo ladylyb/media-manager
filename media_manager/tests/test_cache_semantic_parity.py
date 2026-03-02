@@ -49,6 +49,7 @@ def test_cache_reads_and_planner_outputs_are_semantically_identical(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("DATABASE_URL", test_database_url)
+    monkeypatch.setattr(materialized_reads, "_READ_CACHE", TTLCache(ttl_seconds=60.0))
 
     dataset = tmp_path / "dataset"
     a = _write_file(dataset / "a" / "one.jpg", b"same")
