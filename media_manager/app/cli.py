@@ -28,9 +28,15 @@ from media_manager.app.persistence.materialized_reads import (
     refresh_materialized_view,
 )
 from media_manager.app.persistence.models import PlannedAction
+from media_manager.app.persistence.models import TagSource
 from media_manager.app.observability import generate_metrics_text, start_metrics_http_server_if_enabled
 from media_manager.app.persistence.planner import PlanningService
 from media_manager.app.persistence.runs import RunService
+from media_manager.app.persistence.tag_enrichment import (
+    EnrichmentScope,
+    TagEnrichmentCommand,
+    run_tag_enrichment,
+)
 
 
 def _path_sort_key(path: Path) -> str:
@@ -266,6 +272,67 @@ def _render_observability_quick_check_output(
     for line in metric_lines:
         print(f"  {line}")
     print("----------------------------------------")
+
+
+def _render_tag_enrichment_output(summary) -> None:
+    print("----------------------------------------")
+    print("Tag Enrichment Summary")
+    print(f"  Run ID: {summary.run_id}")
+    print(f"  Scope: {summary.scope}")
+    print(f"  Status: {summary.status}")
+    print(f"  Items processed: {summary.number_of_items_processed}")
+    print(f"  Failed items: {summary.failed_items}")
+    print(f"  Average confidence: {summary.average_confidence if summary.average_confidence is not None else 'n/a'}")
+    print(f"  Duration (ms): {summary.duration_ms}")
+    print(f"  Timestamp: {summary.timestamp.isoformat()}")
+    print("----------------------------------------")
+
+
+def _tag_enrich_command(
+    *,
+    run_all: bool,
+    canonical_id: str | None,
+    batch_size: int,
+    source: str,
+) -> int:
+    if run_all == (canonical_id is not None):
+        print("Specify exactly one of --all or --canonical-id.", file=sys.stderr)
+        return 2
+    if batch_size <= 0:
+        print("--batch-size must be > 0.", file=sys.stderr)
+        return 2
+    try:
+        source_value = TagSource(source).value
+    except Exception:
+        print(f"Invalid --source value: {source}", file=sys.stderr)
+        return 2
+
+    target_id: uuid.UUID | None = None
+    if canonical_id is not None:
+        try:
+            target_id = uuid.UUID(canonical_id)
+        except ValueError:
+            print(f"Invalid --canonical-id UUID: {canonical_id}", file=sys.stderr)
+            return 2
+
+    engine = create_db_engine()
+    session_factory = create_session_factory(engine)
+    command = TagEnrichmentCommand(
+        scope=EnrichmentScope.ALL if run_all else EnrichmentScope.SINGLE,
+        canonical_id=target_id,
+        batch_size=batch_size,
+        source=TagSource(source_value),
+    )
+    try:
+        summary = run_tag_enrichment(session_factory, command)
+    except MediaManagerError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    _render_tag_enrichment_output(summary)
+    return 0
 
 
 def _observability_quick_check_command(*, run_id: str | None, sample_size: int) -> int:
@@ -755,6 +822,31 @@ def main(argv: list[str] | None = None) -> int:
         default=1000,
         help="Maximum canonical metadata rows to read per source.",
     )
+    tag_enrich_parser = subparsers.add_parser(
+        "tag-enrich",
+        help="Manually run deterministic tag enrichment for canonical items.",
+    )
+    tag_enrich_parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Enrich all current canonical content ids.",
+    )
+    tag_enrich_parser.add_argument(
+        "--canonical-id",
+        help="Single canonical content id (file_contents.content_id) to enrich.",
+    )
+    tag_enrich_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=100,
+        help="Deterministic batch size for enrichment processing.",
+    )
+    tag_enrich_parser.add_argument(
+        "--source",
+        choices=[member.value for member in TagSource],
+        default=TagSource.SYSTEM.value,
+        help="Tag source label for enrichment writes.",
+    )
 
     args = parser.parse_args(argv)
     if args.command == "plan":
@@ -829,6 +921,13 @@ def main(argv: list[str] | None = None) -> int:
         return _observability_quick_check_command(
             run_id=args.run_id,
             sample_size=args.sample_size,
+        )
+    if args.command == "tag-enrich":
+        return _tag_enrich_command(
+            run_all=args.all,
+            canonical_id=args.canonical_id,
+            batch_size=args.batch_size,
+            source=args.source,
         )
 
     parser.print_help()

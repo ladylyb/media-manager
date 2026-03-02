@@ -8,6 +8,7 @@ from enum import StrEnum
 
 from sqlalchemy import (
     CheckConstraint,
+    BigInteger,
     DateTime,
     Enum,
     Float,
@@ -80,6 +81,25 @@ class TagSource(StrEnum):
     MANUAL = "manual"
     IMPORT = "import"
     SYSTEM = "system"
+
+
+class TagEnrichmentScope(StrEnum):
+    ALL = "ALL"
+    SINGLE = "SINGLE"
+
+
+class TagEnrichmentStatus(StrEnum):
+    STARTED = "STARTED"
+    COMPLETED = "COMPLETED"
+    COMPLETED_WITH_ERRORS = "COMPLETED_WITH_ERRORS"
+    FAILED = "FAILED"
+
+
+class TagEnrichmentItemResult(StrEnum):
+    UNCHANGED = "UNCHANGED"
+    UPDATED = "UPDATED"
+    FAILED = "FAILED"
+    SKIPPED = "SKIPPED"
 
 
 class Run(Base):
@@ -240,6 +260,11 @@ class FileContent(Base):
         passive_deletes=True,
     )
     canonical_tags: Mapped[list[CanonicalTag]] = relationship(
+        back_populates="canonical",
+        cascade="save-update, merge",
+        passive_deletes=True,
+    )
+    tag_enrichment_items: Mapped[list[TagEnrichmentItem]] = relationship(
         back_populates="canonical",
         cascade="save-update, merge",
         passive_deletes=True,
@@ -578,6 +603,127 @@ class CanonicalTag(Base):
 
 Index("idx_canonical_tags_canonical_id", CanonicalTag.canonical_id)
 Index("idx_canonical_tags_tag_id", CanonicalTag.tag_id)
+
+
+class TagEnrichmentRun(Base):
+    __tablename__ = "tag_enrichment_runs"
+    __table_args__ = (
+        CheckConstraint("scope IN ('ALL','SINGLE')", name="ck_tag_enrichment_runs_scope"),
+        CheckConstraint(
+            "source IN ('ai','manual','import','system')",
+            name="ck_tag_enrichment_runs_source",
+        ),
+        CheckConstraint("batch_size > 0", name="ck_tag_enrichment_runs_batch_size_positive"),
+        CheckConstraint(
+            "status IN ('STARTED','COMPLETED','COMPLETED_WITH_ERRORS','FAILED')",
+            name="ck_tag_enrichment_runs_status",
+        ),
+        CheckConstraint(
+            "number_of_items_processed >= 0",
+            name="ck_tag_enrichment_runs_items_processed_nonnegative",
+        ),
+        CheckConstraint("failed_items >= 0", name="ck_tag_enrichment_runs_failed_items_nonnegative"),
+        CheckConstraint("duration_ms >= 0", name="ck_tag_enrichment_runs_duration_ms_nonnegative"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    target_canonical_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("file_contents.content_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    batch_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    number_of_items_processed: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    average_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    duration_ms: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    failed_items: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    items: Mapped[list[TagEnrichmentItem]] = relationship(
+        back_populates="run",
+        cascade="save-update, merge",
+        passive_deletes=True,
+    )
+
+
+Index("idx_tag_enrichment_runs_started_at", TagEnrichmentRun.started_at)
+Index("idx_tag_enrichment_runs_status", TagEnrichmentRun.status)
+
+
+class TagEnrichmentItem(Base):
+    __tablename__ = "tag_enrichment_items"
+    __table_args__ = (
+        UniqueConstraint("run_id", "sequence_no", name="uq_tag_enrichment_items_run_sequence"),
+        UniqueConstraint("run_id", "canonical_id", name="uq_tag_enrichment_items_run_canonical"),
+        CheckConstraint(
+            "result IN ('UNCHANGED','UPDATED','FAILED','SKIPPED')",
+            name="ck_tag_enrichment_items_result",
+        ),
+        CheckConstraint(
+            "tags_emitted_count >= 0",
+            name="ck_tag_enrichment_items_tags_emitted_count_nonnegative",
+        ),
+        CheckConstraint("duration_ms >= 0", name="ck_tag_enrichment_items_duration_ms_nonnegative"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tag_enrichment_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    canonical_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("file_contents.content_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sequence_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    result: Mapped[str] = mapped_column(Text, nullable=False)
+    tags_emitted_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    average_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    previous_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    new_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_ms: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    run: Mapped[TagEnrichmentRun] = relationship(back_populates="items")
+    canonical: Mapped[FileContent] = relationship(back_populates="tag_enrichment_items")
+
+
+Index("idx_tag_enrichment_items_run_id", TagEnrichmentItem.run_id)
+Index("idx_tag_enrichment_items_canonical_id", TagEnrichmentItem.canonical_id)
 
 
 class OperatorPolicySetting(Base):

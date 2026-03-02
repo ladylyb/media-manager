@@ -9,11 +9,13 @@ from uuid import UUID
 from fastapi.testclient import TestClient
 
 from media_manager.app.core.errors import PolicySettingsVersionConflictError
+import operator_console.main as main_module
 from operator_console.main import (
     app,
     get_operator_console_service,
     get_policy_settings_service,
     get_operator_run_trigger_service,
+    get_tag_enrichment_session_factory,
 )
 
 
@@ -681,3 +683,72 @@ def test_post_run_endpoint_returns_bad_request_for_invalid_folder() -> None:
 
     assert response.status_code == 400
     assert "does not exist" in response.json()["detail"]
+
+
+def test_post_tag_enrichment_endpoint_returns_summary(monkeypatch) -> None:
+    class _Summary:
+        def to_dict(self) -> dict[str, Any]:
+            return {
+                "run_id": "44444444-4444-4444-4444-444444444444",
+                "timestamp": "2026-03-02T18:00:00+00:00",
+                "number_of_items_processed": 2,
+                "average_confidence": 0.75,
+                "duration_ms": 10,
+                "status": "COMPLETED",
+                "failed_items": 0,
+                "scope": "ALL",
+            }
+
+    def _fake_run(_session_factory, _command):  # type: ignore[no-untyped-def]
+        return _Summary()
+
+    monkeypatch.setattr(main_module, "run_tag_enrichment", _fake_run)
+    app.dependency_overrides[get_tag_enrichment_session_factory] = lambda: object()
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/tag-enrichment",
+            json={"all": True, "batch_size": 5, "source": "system"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["run_id"] == "44444444-4444-4444-4444-444444444444"
+    assert payload["number_of_items_processed"] == 2
+    assert payload["scope"] == "ALL"
+
+
+def test_post_tag_enrichment_endpoint_validation_error() -> None:
+    app.dependency_overrides[get_tag_enrichment_session_factory] = lambda: object()
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/tag-enrichment",
+            json={"all": True, "canonical_id": "11111111-1111-1111-1111-111111111111"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert "exactly one" in response.json()["detail"].lower()
+
+
+def test_post_tag_enrichment_endpoint_internal_error(monkeypatch) -> None:
+    def _boom(_session_factory, _command):  # type: ignore[no-untyped-def]
+        raise RuntimeError("pipeline exploded")
+
+    monkeypatch.setattr(main_module, "run_tag_enrichment", _boom)
+    app.dependency_overrides[get_tag_enrichment_session_factory] = lambda: object()
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/tag-enrichment",
+            json={"all": True},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 500
+    assert "pipeline exploded" in response.json()["detail"]
