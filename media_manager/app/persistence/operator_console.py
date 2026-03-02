@@ -16,12 +16,17 @@ from sqlalchemy.orm import Session, sessionmaker
 from media_manager.app.core.filenames import infer_media_type_from_extension
 from media_manager.app.core.perf_artifacts import BASELINE_DIR, read_performance_artifact_json, load_baseline_json
 from media_manager.app.core.perf_comparator import compare_to_baseline
+from media_manager.app.persistence.discovery_query import (
+    DiscoveryQueryParams,
+    DiscoveryQueryService,
+)
 from media_manager.app.persistence.models import (
     CanonicalAssignment,
     FileInstance,
     FileInstanceStatus,
     PlannedAction,
     Run,
+    TagSource,
 )
 
 PERF_RUN_DIR = Path("artifacts/perf/runs")
@@ -149,14 +154,20 @@ class CanonicalGalleryItem:
     filename: str
     file_type: str
     media_url: str
+    matched_tags: tuple[str, ...] = ()
+    top_confidence_score: float | None = None
+    sort_tag_name: str | None = None
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, str | list[str] | float | None]:
         """Return a JSON-serializable mapping."""
         return {
             "id": self.id,
             "filename": self.filename,
             "file_type": self.file_type,
             "media_url": self.media_url,
+            "matched_tags": list(self.matched_tags),
+            "top_confidence_score": self.top_confidence_score,
+            "sort_tag_name": self.sort_tag_name,
         }
 
 
@@ -166,14 +177,16 @@ class CanonicalGalleryPage:
 
     total_count: int
     page: int
+    limit: int
     total_pages: int
     items: tuple[CanonicalGalleryItem, ...]
 
-    def to_dict(self) -> dict[str, int | list[dict[str, str]]]:
+    def to_dict(self) -> dict[str, int | list[dict[str, str | list[str] | float | None]]]:
         """Return a JSON-serializable mapping."""
         return {
             "total_count": self.total_count,
             "page": self.page,
+            "limit": self.limit,
             "total_pages": self.total_pages,
             "items": [item.to_dict() for item in self.items],
         }
@@ -213,6 +226,7 @@ class OperatorConsoleReadService:
         self._session_factory = session_factory
         self._perf_run_dir = perf_run_dir
         self._baseline_dir = baseline_dir
+        self._discovery_query = DiscoveryQueryService(session_factory)
 
     def get_dashboard_summary(self) -> DashboardSummary:
         """Return aggregated file/run counters for dashboard summary cards."""
@@ -363,80 +377,49 @@ class OperatorConsoleReadService:
             )
         return output
 
-    def get_canonical_gallery(self, page: int = 1, limit: int = 30) -> CanonicalGalleryPage:
+    def get_canonical_gallery(
+        self,
+        page: int = 1,
+        limit: int = 30,
+        *,
+        tags: tuple[str, ...] = (),
+        sort_by: str = "created_at",
+        sort_order: str | None = None,
+        source: TagSource | None = None,
+        min_confidence: float | None = None,
+    ) -> CanonicalGalleryPage:
         """Return deterministic paginated canonical gallery media items."""
-        normalized_page = max(1, int(page))
-        normalized_limit = min(100, max(1, int(limit)))
-
-        with self._session_factory() as session:
-            latest_assignments = (
-                select(
-                    CanonicalAssignment.content_id.label("content_id"),
-                    CanonicalAssignment.canonical_instance_id.label("canonical_instance_id"),
-                    CanonicalAssignment.assigned_at.label("assigned_at"),
-                    CanonicalAssignment.assignment_id.label("assignment_id"),
-                    func.row_number()
-                    .over(
-                        partition_by=CanonicalAssignment.content_id,
-                        order_by=(
-                            CanonicalAssignment.assigned_at.desc(),
-                            CanonicalAssignment.assignment_id.desc(),
-                        ),
-                    )
-                    .label("rn"),
-                )
-                .subquery()
+        normalized_sort_order = sort_order
+        if normalized_sort_order is None:
+            normalized_sort_order = "asc" if sort_by == "tag_name" else "desc"
+        query = DiscoveryQueryParams(
+            page=page,
+            limit=limit,
+            tags=tags,
+            sort_by=sort_by,  # type: ignore[arg-type]
+            sort_order=normalized_sort_order,  # type: ignore[arg-type]
+            source=source,
+            min_confidence=min_confidence,
+        )
+        page_rows = self._discovery_query.query(query)
+        items = tuple(
+            CanonicalGalleryItem(
+                id=item.id,
+                filename=item.filename,
+                file_type=item.file_type,
+                media_url=item.media_url,
+                matched_tags=item.matched_tags,
+                top_confidence_score=item.top_confidence_score,
+                sort_tag_name=item.sort_tag_name,
             )
-
-            rows = session.execute(
-                select(
-                    latest_assignments.c.canonical_instance_id,
-                    FileInstance.absolute_path,
-                )
-                .join(
-                    FileInstance,
-                    FileInstance.file_instance_id == latest_assignments.c.canonical_instance_id,
-                )
-                .where(
-                    latest_assignments.c.rn == 1,
-                    FileInstance.status == FileInstanceStatus.ACTIVE.value,
-                )
-                .order_by(
-                    latest_assignments.c.assigned_at.desc(),
-                    latest_assignments.c.assignment_id.desc(),
-                )
-            ).all()
-
-        all_items: list[CanonicalGalleryItem] = []
-        for file_instance_id, absolute_path in rows:
-            path = Path(absolute_path)
-            file_type = self._path_to_gallery_file_type(path)
-            if file_type is None:
-                continue
-            instance_id = str(file_instance_id)
-            all_items.append(
-                CanonicalGalleryItem(
-                    id=instance_id,
-                    filename=path.name,
-                    file_type=file_type,
-                    media_url=f"/media/{instance_id}",
-                )
-            )
-
-        total_count = len(all_items)
-        total_pages = (total_count + normalized_limit - 1) // normalized_limit if total_count > 0 else 0
-        if total_pages > 0 and normalized_page <= total_pages:
-            start = (normalized_page - 1) * normalized_limit
-            end = start + normalized_limit
-            page_items = tuple(all_items[start:end])
-        else:
-            page_items = ()
-
+            for item in page_rows.items
+        )
         return CanonicalGalleryPage(
-            total_count=total_count,
-            page=normalized_page,
-            total_pages=total_pages,
-            items=page_items,
+            total_count=page_rows.total_count,
+            page=page_rows.page,
+            limit=page_rows.limit,
+            total_pages=page_rows.total_pages,
+            items=items,
         )
 
     def resolve_thumbnail_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:

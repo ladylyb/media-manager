@@ -273,6 +273,7 @@ class FileContent(Base):
 
 Index("idx_file_contents_sha256_hash", FileContent.sha256_hash)
 Index("idx_file_contents_canonical_instance", FileContent.canonical_file_instance_id)
+Index("idx_file_contents_first_seen_content", FileContent.first_seen_at.desc(), FileContent.content_id.asc())
 
 
 class FileInstance(Base):
@@ -601,8 +602,20 @@ class CanonicalTag(Base):
     tag: Mapped[Tag] = relationship(back_populates="canonical_links")
 
 
+Index("idx_tags_normalized_name", Tag.normalized_name)
 Index("idx_canonical_tags_canonical_id", CanonicalTag.canonical_id)
 Index("idx_canonical_tags_tag_id", CanonicalTag.tag_id)
+Index(
+    "idx_canonical_tags_tag_canonical_confidence",
+    CanonicalTag.tag_id,
+    CanonicalTag.canonical_id,
+    CanonicalTag.confidence_score.desc(),
+)
+Index(
+    "idx_canonical_tags_canonical_confidence",
+    CanonicalTag.canonical_id,
+    CanonicalTag.confidence_score.desc(),
+)
 
 
 class TagEnrichmentRun(Base):
