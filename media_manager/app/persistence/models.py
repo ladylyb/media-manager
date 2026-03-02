@@ -504,3 +504,18 @@ class MediaMetadata(Base):
 Index("idx_media_metadata_content_id", MediaMetadata.content_id)
 Index("idx_media_metadata_code_id", MediaMetadata.code_id)
 Index("uq_media_metadata_content_code", MediaMetadata.content_id, MediaMetadata.code_id, unique=True)
+
+
+class OperatorPolicySetting(Base):
+    __tablename__ = "operator_policy_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, nullable=False)
+    selected_policy: Mapped[str] = mapped_column(Text, nullable=False)
+    preferred_roots_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default=text("'[]'"))
+    recanonicalization_enabled: Mapped[bool] = mapped_column(
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
