@@ -97,6 +97,31 @@ def create_app() -> FastAPI:
         """Render the Operator Console duplicate group browser page."""
         return templates.TemplateResponse(request, "duplicates.html", {})
 
+    @app.get("/gallery", response_class=HTMLResponse)
+    def gallery_page(request: Request) -> HTMLResponse:
+        """Render the Operator Console canonical gallery page."""
+        return templates.TemplateResponse(request, "gallery.html", {})
+
+    @app.get("/gallery/{file_id}", response_class=HTMLResponse)
+    def gallery_detail_page(
+        file_id: UUID,
+        request: Request,
+        page: int = 1,
+        service: OperatorConsoleReadService = Depends(get_operator_console_service),
+    ) -> HTMLResponse:
+        """Render full-page canonical media detail with a gallery back link."""
+        detail = service.get_canonical_gallery_detail(file_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="Canonical media not found.")
+        return templates.TemplateResponse(
+            request,
+            "gallery_detail.html",
+            {
+                "item": detail.to_dict(),
+                "return_page": max(1, int(page)),
+            },
+        )
+
     @app.get("/api/dashboard-summary")
     def dashboard_summary(
         service: OperatorConsoleReadService = Depends(get_operator_console_service),
@@ -118,12 +143,33 @@ def create_app() -> FastAPI:
         """Return recent run history rows for the Operator Console."""
         return [item.to_dict() for item in service.get_run_history(limit=50)]
 
+    @app.get("/api/canonical")
+    def canonical_gallery(
+        page: int = 1,
+        limit: int = 30,
+        service: OperatorConsoleReadService = Depends(get_operator_console_service),
+    ) -> dict[str, int | list[dict[str, str]]]:
+        """Return paginated canonical media entries for the gallery UI."""
+        return service.get_canonical_gallery(page=page, limit=limit).to_dict()
+
     @app.get("/api/duplicates")
     def duplicates(
         service: OperatorConsoleReadService = Depends(get_operator_console_service),
     ) -> dict[str, list[dict[str, object]]]:
         """Return duplicate groups and canonical-file mapping for browser UI."""
         return {"groups": [group.to_dict() for group in service.get_duplicate_groups()]}
+
+    @app.get("/media/{file_id}")
+    def media(
+        file_id: UUID,
+        service: OperatorConsoleReadService = Depends(get_operator_console_service),
+    ) -> FileResponse:
+        """Stream a canonical media file by durable file instance identifier."""
+        resolved = service.resolve_media_source(file_id)
+        if resolved is None:
+            raise HTTPException(status_code=404, detail="Media not found.")
+        path, media_type = resolved
+        return FileResponse(path=path, media_type=media_type)
 
     @app.get("/api/thumbnail/{file_instance_id}")
     def thumbnail(

@@ -99,9 +99,62 @@ class _FakeService:
             )
         ]
 
+    def get_canonical_gallery(self, page: int = 1, limit: int = 30) -> _FakePayload:
+        if page > 10:
+            return _FakePayload(
+                {
+                    "total_count": 2,
+                    "page": page,
+                    "total_pages": 1,
+                    "items": [],
+                }
+            )
+        return _FakePayload(
+            {
+                "total_count": 2,
+                "page": page,
+                "total_pages": 1,
+                "items": [
+                    {
+                        "id": "33333333-0000-0000-0000-000000000001",
+                        "filename": "canon-a.jpg",
+                        "file_type": "image",
+                        "media_url": "/media/33333333-0000-0000-0000-000000000001",
+                    },
+                    {
+                        "id": "33333333-0000-0000-0000-000000000002",
+                        "filename": "canon-b.mov",
+                        "file_type": "video",
+                        "media_url": "/media/33333333-0000-0000-0000-000000000002",
+                    },
+                ],
+            }
+        )
+
     def resolve_thumbnail_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:
         if str(file_instance_id) == "aaaaaaaa-0000-0000-0000-000000000001":
             return Path(__file__), "image/jpeg"
+        return None
+
+    def resolve_media_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:
+        if str(file_instance_id) in {
+            "33333333-0000-0000-0000-000000000001",
+            "33333333-0000-0000-0000-000000000002",
+        }:
+            return Path(__file__), "video/mp4"
+        return None
+
+    def get_canonical_gallery_detail(self, file_instance_id: UUID) -> _FakePayload | None:
+        if str(file_instance_id) == "33333333-0000-0000-0000-000000000001":
+            return _FakePayload(
+                {
+                    "id": "33333333-0000-0000-0000-000000000001",
+                    "filename": "canon-a.jpg",
+                    "file_type": "image",
+                    "media_url": "/media/33333333-0000-0000-0000-000000000001",
+                    "absolute_path": "/dataset/canon-a.jpg",
+                }
+            )
         return None
 
 
@@ -292,6 +345,19 @@ def test_runs_page_renders_template() -> None:
     assert "Regression" in response.text
 
 
+def test_gallery_page_renders_template() -> None:
+    """GET /gallery should render the canonical gallery page template."""
+    client = TestClient(app)
+
+    response = client.get("/gallery")
+
+    assert response.status_code == 200
+    assert "Canonical Gallery" in response.text
+    assert "Browse canonical media currently stored in the database." in response.text
+    assert "Previous" in response.text
+    assert "Next" in response.text
+
+
 def test_runs_endpoint_returns_json() -> None:
     """GET /api/runs should return run history rows as JSON."""
     app.dependency_overrides[get_operator_console_service] = _FakeService
@@ -320,6 +386,104 @@ def test_runs_endpoint_returns_json() -> None:
             "regression_status": "FAIL",
         },
     ]
+
+
+def test_api_canonical_returns_paginated_shape() -> None:
+    """GET /api/canonical should return paginated canonical media payload."""
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/api/canonical?page=1&limit=30")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "total_count": 2,
+        "page": 1,
+        "total_pages": 1,
+        "items": [
+            {
+                "id": "33333333-0000-0000-0000-000000000001",
+                "filename": "canon-a.jpg",
+                "file_type": "image",
+                "media_url": "/media/33333333-0000-0000-0000-000000000001",
+            },
+            {
+                "id": "33333333-0000-0000-0000-000000000002",
+                "filename": "canon-b.mov",
+                "file_type": "video",
+                "media_url": "/media/33333333-0000-0000-0000-000000000002",
+            },
+        ],
+    }
+
+
+def test_api_canonical_out_of_range_page_returns_empty_items() -> None:
+    """GET /api/canonical should preserve page and return empty items when out-of-range."""
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/api/canonical?page=99&limit=30")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["page"] == 99
+    assert payload["items"] == []
+
+
+def test_media_endpoint_streams_file() -> None:
+    """GET /media/{id} should stream media bytes when row is eligible."""
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/media/33333333-0000-0000-0000-000000000001")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("video/mp4")
+
+
+def test_media_endpoint_returns_404_for_missing() -> None:
+    """GET /media/{id} should return 404 when media cannot be resolved."""
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/media/33333333-0000-0000-0000-000000000099")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404
+
+
+def test_gallery_detail_page_renders_template() -> None:
+    """GET /gallery/{id} should render detailed canonical media page."""
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/gallery/33333333-0000-0000-0000-000000000001?page=3")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert "Canonical Media Detail" in response.text
+    assert "canon-a.jpg" in response.text
+    assert "/gallery?page=3" in response.text
+
+
+def test_gallery_detail_page_returns_404_for_unknown() -> None:
+    """GET /gallery/{id} should return 404 when no canonical detail row exists."""
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/gallery/33333333-0000-0000-0000-000000000099")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404
 
 
 def test_duplicates_page_renders_template() -> None:
