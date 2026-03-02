@@ -1,0 +1,384 @@
+{% extends "base.html" %}
+
+{% block title %}Discover{% endblock %}
+
+{% block content %}
+<section class="mx-auto max-w-7xl px-6 py-8">
+  <header class="mb-6 space-y-2">
+    <h2 class="text-3xl font-semibold tracking-tight text-slate-900">Discover</h2>
+    <p class="text-sm text-slate-600">Read-only exploration of canonical media using normalized tags and deterministic ordering.</p>
+  </header>
+
+  <section class="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div class="grid grid-cols-1 gap-4 lg:grid-cols-12">
+      <div class="lg:col-span-7">
+        <label for="discover-tag-input" class="block text-xs font-semibold uppercase tracking-wide text-slate-600">Tags (AND)</label>
+        <input
+          id="discover-tag-input"
+          type="text"
+          autocomplete="off"
+          placeholder="Type a tag and press Enter"
+          class="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-slate-500 focus:outline-none"
+        />
+        <div id="discover-suggestions" class="mt-1 hidden max-h-48 overflow-auto rounded-md border border-slate-200 bg-white text-sm shadow"></div>
+        <div id="discover-tag-chips" class="mt-2 flex flex-wrap gap-2"></div>
+      </div>
+      <div class="lg:col-span-2">
+        <label for="discover-sort-by" class="block text-xs font-semibold uppercase tracking-wide text-slate-600">Sort By</label>
+        <select id="discover-sort-by" class="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-slate-500 focus:outline-none">
+          <option value="created_at">Created</option>
+          <option value="tag_name">Tag</option>
+          <option value="confidence_score">Confidence</option>
+        </select>
+      </div>
+      <div class="lg:col-span-2">
+        <label for="discover-sort-order" class="block text-xs font-semibold uppercase tracking-wide text-slate-600">Order</label>
+        <select id="discover-sort-order" class="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-slate-500 focus:outline-none">
+          <option value="asc">Ascending</option>
+          <option value="desc">Descending</option>
+        </select>
+      </div>
+      <div class="flex items-end lg:col-span-1">
+        <button id="discover-clear" type="button" class="w-full rounded-md bg-slate-100 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-200">Clear</button>
+      </div>
+    </div>
+  </section>
+
+  <section aria-live="polite" aria-busy="false" class="space-y-6" id="discover-root">
+    <div class="hidden items-center justify-center py-16" id="discover-loading">
+      <div class="inline-flex items-center gap-3 text-sm text-slate-500">
+        <span class="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600"></span>
+        Loading media...
+      </div>
+    </div>
+    <div class="hidden py-16 text-center text-sm text-gray-500" id="discover-empty">No matching media found.</div>
+    <div class="hidden py-6 text-center text-sm text-rose-600" id="discover-error"></div>
+
+    <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" id="discover-grid">
+      {% for item in initial_payload["items"] %}
+      <article class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        {% if item.file_type == "video" %}
+        <video class="h-52 w-full bg-slate-900 object-cover" controls preload="metadata">
+          <source src="{{ item.media_url }}" />
+        </video>
+        {% else %}
+        <img src="{{ item.media_url }}" alt="{{ item.filename }}" loading="lazy" class="h-52 w-full bg-slate-100 object-cover" />
+        {% endif %}
+        <div class="space-y-3 px-4 py-3">
+          <p class="truncate text-sm font-medium text-slate-900">{{ item.filename }}</p>
+          <div class="flex flex-wrap gap-2">
+            {% for tag in item.matched_tags %}
+            <span class="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">{{ tag }}</span>
+            {% endfor %}
+            {% if item.top_confidence_score is not none %}
+            <span class="rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700">Top {{ "%.4f"|format(item.top_confidence_score) }}</span>
+            {% endif %}
+          </div>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+
+    <nav class="flex flex-wrap items-center justify-center gap-2" aria-label="Discover pagination controls" id="discover-pagination"></nav>
+  </section>
+</section>
+
+<script>
+  const initialPayload = {{ initial_payload | tojson }};
+  const initialTagsCsv = {{ initial_tags_csv | tojson }};
+  const initialSortBy = {{ initial_sort_by | tojson }};
+  const initialSortOrder = {{ initial_sort_order | tojson }};
+  const state = {
+    page: Number.isFinite(initialPayload.page) ? initialPayload.page : 1,
+    limit: Number.isFinite(initialPayload.limit) ? initialPayload.limit : 30,
+    sortBy: initialSortBy || "created_at",
+    sortOrder: initialSortOrder || "desc",
+    tags: initialTagsCsv ? initialTagsCsv.split(",").filter(Boolean) : [],
+    isLoading: false,
+    totalPages: Number.isFinite(initialPayload.total_pages) ? initialPayload.total_pages : 0,
+  };
+
+  function byId(id) { return document.getElementById(id); }
+  function setHidden(id, hidden) {
+    const node = byId(id);
+    if (!node) return;
+    node.classList.toggle("hidden", hidden);
+  }
+
+  function updateBusy(loading) {
+    state.isLoading = loading;
+    const root = byId("discover-root");
+    if (root) {
+      root.setAttribute("aria-busy", loading ? "true" : "false");
+    }
+    setHidden("discover-loading", !loading);
+  }
+
+  function escapeText(value) {
+    return String(value)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll("\"", "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function normalizeSortOrder(sortBy, sortOrder) {
+    if (sortOrder) return sortOrder;
+    return sortBy === "tag_name" ? "asc" : "desc";
+  }
+
+  function setError(message) {
+    const node = byId("discover-error");
+    if (node) {
+      node.textContent = message;
+      setHidden("discover-error", false);
+    }
+  }
+
+  function clearError() {
+    const node = byId("discover-error");
+    if (node) {
+      node.textContent = "";
+    }
+    setHidden("discover-error", true);
+  }
+
+  function renderCards(items) {
+    const grid = byId("discover-grid");
+    if (!grid) return;
+    grid.innerHTML = "";
+    if (!Array.isArray(items) || items.length === 0) {
+      setHidden("discover-empty", false);
+      return;
+    }
+    setHidden("discover-empty", true);
+    for (const item of items) {
+      const tags = Array.isArray(item.matched_tags) ? item.matched_tags : [];
+      const confidence = typeof item.top_confidence_score === "number" ? item.top_confidence_score.toFixed(4) : null;
+      const media = item.file_type === "video"
+        ? `<video class="h-52 w-full bg-slate-900 object-cover" controls preload="metadata"><source src="${escapeText(item.media_url)}" /></video>`
+        : `<img src="${escapeText(item.media_url)}" alt="${escapeText(item.filename)}" loading="lazy" class="h-52 w-full bg-slate-100 object-cover" />`;
+      const tagsHtml = tags.map((tag) => `<span class="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">${escapeText(tag)}</span>`).join("");
+      const confidenceHtml = confidence
+        ? `<span class="rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700">Top ${confidence}</span>`
+        : "";
+      grid.insertAdjacentHTML("beforeend", `
+        <article class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+          ${media}
+          <div class="space-y-3 px-4 py-3">
+            <p class="truncate text-sm font-medium text-slate-900">${escapeText(item.filename)}</p>
+            <div class="flex flex-wrap gap-2">${tagsHtml}${confidenceHtml}</div>
+          </div>
+        </article>
+      `);
+    }
+  }
+
+  function renderPagination() {
+    const nav = byId("discover-pagination");
+    if (!nav) return;
+    nav.innerHTML = "";
+    if (!state.totalPages || state.totalPages <= 1) return;
+
+    const addBtn = (label, page, disabled, active = false) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.disabled = disabled;
+      button.className = active
+        ? "rounded-md bg-slate-800 px-3 py-1.5 text-sm font-medium text-white"
+        : "rounded-md bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-200 disabled:opacity-40";
+      button.addEventListener("click", () => {
+        if (!disabled) loadPage(page, true);
+      });
+      nav.appendChild(button);
+    };
+
+    addBtn("Previous", state.page - 1, state.page <= 1);
+    const start = Math.max(1, state.page - 2);
+    const end = Math.min(state.totalPages, state.page + 2);
+    for (let page = start; page <= end; page += 1) {
+      addBtn(String(page), page, page === state.page, page === state.page);
+    }
+    addBtn("Next", state.page + 1, state.page >= state.totalPages);
+  }
+
+  function renderTags() {
+    const chips = byId("discover-tag-chips");
+    if (!chips) return;
+    chips.innerHTML = "";
+    for (const tag of state.tags) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "rounded-full bg-slate-200 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-300";
+      chip.textContent = `${tag} x`;
+      chip.addEventListener("click", () => {
+        state.tags = state.tags.filter((value) => value !== tag);
+        state.page = 1;
+        renderTags();
+        loadPage(1, true);
+      });
+      chips.appendChild(chip);
+    }
+  }
+
+  function syncControls() {
+    const sortBy = byId("discover-sort-by");
+    const sortOrder = byId("discover-sort-order");
+    if (sortBy) sortBy.value = state.sortBy;
+    if (sortOrder) sortOrder.value = state.sortOrder;
+    renderTags();
+    renderPagination();
+  }
+
+  function syncUrl() {
+    const url = new URL(window.location.href);
+    url.searchParams.set("page", String(state.page));
+    url.searchParams.set("limit", String(state.limit));
+    url.searchParams.set("sort_by", state.sortBy);
+    url.searchParams.set("sort_order", state.sortOrder);
+    if (state.tags.length) url.searchParams.set("tags", state.tags.join(","));
+    else url.searchParams.delete("tags");
+    window.history.pushState({}, "", url.toString());
+  }
+
+  async function loadPage(page, pushState) {
+    state.page = Math.max(1, page);
+    updateBusy(true);
+    clearError();
+    try {
+      const params = new URLSearchParams();
+      params.set("page", String(state.page));
+      params.set("limit", String(state.limit));
+      params.set("sort_by", state.sortBy);
+      params.set("sort_order", state.sortOrder);
+      if (state.tags.length) params.set("tags", state.tags.join(","));
+      const response = await fetch(`/api/canonical?${params.toString()}`, { headers: { Accept: "application/json" } });
+      if (!response.ok) throw new Error(`status ${response.status}`);
+      const payload = await response.json();
+      state.page = Number.isFinite(payload.page) ? payload.page : state.page;
+      state.totalPages = Number.isFinite(payload.total_pages) ? payload.total_pages : 0;
+      renderCards(payload.items || []);
+      renderPagination();
+      if (pushState) syncUrl();
+    } catch (_error) {
+      setHidden("discover-empty", true);
+      setError("Unable to load discover results.");
+    } finally {
+      updateBusy(false);
+    }
+  }
+
+  function addTag(rawTag) {
+    const normalized = String(rawTag || "").trim().toLowerCase();
+    if (!normalized) return;
+    if (!state.tags.includes(normalized)) state.tags.push(normalized);
+    state.page = 1;
+    renderTags();
+    loadPage(1, true);
+  }
+
+  async function loadSuggestions(raw) {
+    const query = String(raw || "").trim();
+    const panel = byId("discover-suggestions");
+    if (!panel) return;
+    if (!query) {
+      panel.classList.add("hidden");
+      panel.innerHTML = "";
+      return;
+    }
+    const response = await fetch(`/api/canonical/tags?q=${encodeURIComponent(query)}&limit=10`, { headers: { Accept: "application/json" } });
+    if (!response.ok) {
+      panel.classList.add("hidden");
+      panel.innerHTML = "";
+      return;
+    }
+    const payload = await response.json();
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    panel.innerHTML = "";
+    if (!items.length) {
+      panel.classList.add("hidden");
+      return;
+    }
+    for (const tag of items) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "block w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100";
+      button.textContent = tag;
+      button.addEventListener("click", () => {
+        addTag(tag);
+        const input = byId("discover-tag-input");
+        if (input) input.value = "";
+        panel.classList.add("hidden");
+      });
+      panel.appendChild(button);
+    }
+    panel.classList.remove("hidden");
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    const input = byId("discover-tag-input");
+    const sortBy = byId("discover-sort-by");
+    const sortOrder = byId("discover-sort-order");
+    const clear = byId("discover-clear");
+    renderCards(initialPayload.items || []);
+    syncControls();
+    setHidden("discover-empty", (initialPayload.items || []).length > 0);
+
+    if (input) {
+      input.addEventListener("input", () => loadSuggestions(input.value));
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === ",") {
+          event.preventDefault();
+          addTag(input.value.replace(/,+$/, ""));
+          input.value = "";
+          const panel = byId("discover-suggestions");
+          if (panel) panel.classList.add("hidden");
+        }
+      });
+    }
+
+    if (sortBy) {
+      sortBy.value = state.sortBy;
+      sortBy.addEventListener("change", () => {
+        state.sortBy = sortBy.value;
+        state.sortOrder = normalizeSortOrder(state.sortBy, null);
+        if (sortOrder) sortOrder.value = state.sortOrder;
+        loadPage(1, true);
+      });
+    }
+    if (sortOrder) {
+      sortOrder.value = state.sortOrder;
+      sortOrder.addEventListener("change", () => {
+        state.sortOrder = sortOrder.value;
+        loadPage(1, true);
+      });
+    }
+    if (clear) {
+      clear.addEventListener("click", () => {
+        state.tags = [];
+        state.sortBy = "created_at";
+        state.sortOrder = "desc";
+        state.page = 1;
+        if (sortBy) sortBy.value = state.sortBy;
+        if (sortOrder) sortOrder.value = state.sortOrder;
+        renderTags();
+        loadPage(1, true);
+      });
+    }
+
+    window.addEventListener("popstate", () => {
+      const params = new URLSearchParams(window.location.search);
+      state.page = Number.parseInt(params.get("page") || "1", 10) || 1;
+      state.limit = Number.parseInt(params.get("limit") || "30", 10) || 30;
+      state.sortBy = params.get("sort_by") || "created_at";
+      state.sortOrder = params.get("sort_order") || normalizeSortOrder(state.sortBy, null);
+      const tagsCsv = params.get("tags") || "";
+      state.tags = tagsCsv.split(",").map((value) => value.trim()).filter(Boolean);
+      syncControls();
+      loadPage(state.page, false);
+    });
+  });
+</script>
+{% endblock %}

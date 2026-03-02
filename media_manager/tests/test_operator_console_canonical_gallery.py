@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+import time
 from uuid import UUID
+from uuid import uuid4
 
 import pytest
 
-from media_manager.app.persistence.models import CanonicalAssignment, FileContent, FileInstance, FileInstanceStatus
+from media_manager.app.persistence.models import CanonicalAssignment, FileContent, FileInstance, FileInstanceStatus, Tag
 from media_manager.app.persistence.models import TagSource
 from media_manager.app.persistence.tagging import upsert_canonical_tag
 from media_manager.app.persistence.operator_console import OperatorConsoleReadService
@@ -389,6 +391,42 @@ def test_get_canonical_gallery_supports_source_filter(session_factory) -> None:
     assert page.items[0].id == str(b_id)
 
 
+def test_get_canonical_gallery_created_at_tie_breaks_by_content_id(session_factory) -> None:
+    service = OperatorConsoleReadService(session_factory)
+    base = datetime(2026, 3, 2, 13, 45, tzinfo=UTC)
+    content_a = UUID("65000000-0000-0000-0000-00000000000a")
+    content_b = UUID("65000000-0000-0000-0000-00000000000b")
+    a_id = UUID("66000000-0000-0000-0000-00000000000a")
+    b_id = UUID("66000000-0000-0000-0000-00000000000b")
+
+    with session_factory.begin() as session:
+        _add_content(session, content_a, "hash-tie-a", base)
+        _add_content(session, content_b, "hash-tie-b", base)
+        session.flush()
+        _add_instance(session, file_instance_id=a_id, content_id=content_a, absolute_path="/gallery/tie-a.jpg", first_seen_at=base)
+        _add_instance(session, file_instance_id=b_id, content_id=content_b, absolute_path="/gallery/tie-b.jpg", first_seen_at=base)
+        _add_assignment(
+            session,
+            assignment_id=UUID("67000000-0000-0000-0000-00000000000a"),
+            content_id=content_a,
+            canonical_instance_id=a_id,
+            assigned_at=base,
+        )
+        _add_assignment(
+            session,
+            assignment_id=UUID("67000000-0000-0000-0000-00000000000b"),
+            content_id=content_b,
+            canonical_instance_id=b_id,
+            assigned_at=base,
+        )
+
+    first = service.get_canonical_gallery(sort_by="created_at", sort_order="desc")
+    second = service.get_canonical_gallery(sort_by="created_at", sort_order="desc")
+
+    assert [item.id for item in first.items[:2]] == [str(a_id), str(b_id)]
+    assert [item.id for item in second.items[:2]] == [str(a_id), str(b_id)]
+
+
 def test_resolve_media_source_returns_media_for_active_image_and_video(session_factory, tmp_path: Path) -> None:
     service = OperatorConsoleReadService(session_factory)
     now = datetime(2026, 3, 2, 14, 0, tzinfo=UTC)
@@ -609,3 +647,79 @@ def test_get_canonical_gallery_detail_returns_none_for_noncanonical_or_inactive(
     assert service.get_canonical_gallery_detail(noncanonical_id) is None
     assert service.get_canonical_gallery_detail(inactive_canonical_id) is None
     assert service.get_canonical_gallery_detail(UUID("ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb")) is None
+
+
+def test_get_tag_suggestions_are_case_insensitive_prefix_ranked_and_deterministic(session_factory) -> None:
+    service = OperatorConsoleReadService(session_factory)
+    with session_factory.begin() as session:
+        session.add_all(
+            [
+                Tag(name="City", normalized_name="city"),
+                Tag(name="City Night", normalized_name="city night"),
+                Tag(name="Big City", normalized_name="big city"),
+                Tag(name="Travel", normalized_name="travel"),
+            ]
+        )
+
+    first = service.get_tag_suggestions(q="Ci", limit=10)
+    second = service.get_tag_suggestions(q="ci", limit=10)
+
+    assert first == second
+    assert first[:3] == ("city", "city night", "big city")
+
+
+def test_get_tag_suggestions_clamps_limit(session_factory) -> None:
+    service = OperatorConsoleReadService(session_factory)
+    with session_factory.begin() as session:
+        for index in range(80):
+            value = f"tag-{index:03d}"
+            session.add(Tag(name=value, normalized_name=value))
+
+    suggestions = service.get_tag_suggestions(limit=500)
+    assert len(suggestions) == 50
+    assert suggestions[0] == "tag-000"
+    assert suggestions[-1] == "tag-049"
+
+
+def test_get_canonical_gallery_performance_sanity_for_1000_items(session_factory) -> None:
+    service = OperatorConsoleReadService(session_factory)
+    base = datetime(2026, 3, 3, 10, 0, tzinfo=UTC)
+    rows: list[tuple[UUID, UUID, UUID, datetime, str]] = []
+    for index in range(1000):
+        rows.append(
+            (
+                uuid4(),
+                uuid4(),
+                uuid4(),
+                base + timedelta(seconds=index),
+                f"/perf/{index:04d}.jpg",
+            )
+        )
+
+    with session_factory.begin() as session:
+        for index, (content_id, _instance_id, _assignment_id, seen_at, _path) in enumerate(rows):
+            _add_content(session, content_id, f"hash-perf-{index}", seen_at)
+        session.flush()
+        for content_id, instance_id, assignment_id, seen_at, path in rows:
+            _add_instance(
+                session,
+                file_instance_id=instance_id,
+                content_id=content_id,
+                absolute_path=path,
+                first_seen_at=seen_at,
+            )
+            _add_assignment(
+                session,
+                assignment_id=assignment_id,
+                content_id=content_id,
+                canonical_instance_id=instance_id,
+                assigned_at=seen_at,
+            )
+
+    start = time.perf_counter()
+    page = service.get_canonical_gallery(page=1, limit=30, sort_by="created_at", sort_order="desc")
+    duration = time.perf_counter() - start
+
+    assert duration <= 2.5
+    assert page.total_count == 1000
+    assert len(page.items) == 30
