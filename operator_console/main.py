@@ -522,8 +522,8 @@ def create_app() -> FastAPI:
     def runs_history(
         service: OperatorConsoleReadService = Depends(get_operator_console_service),
     ) -> list[dict[str, str | int | float | None]]:
-        """Return recent run history rows for the Operator Console."""
-        return [item.to_dict() for item in service.get_run_history(limit=50)]
+        """Return recent legacy planner/apply run history rows."""
+        return [item.to_dict() for item in service.get_internal_run_history(limit=50)]
 
     @app.get("/api/v2/status")
     def status_v2(
@@ -557,10 +557,36 @@ def create_app() -> FastAPI:
     @app.get("/api/v2/runs")
     def runs_history_v2(
         limit: int = Query(default=50),
+        operation_type: str | None = Query(default=None),
+        status: str | None = Query(default=None),
         services: ReadServices = Depends(get_read_services),
     ) -> JSONResponse:
         parsed_limit = max(1, min(200, int(limit)))
-        return _execute_read("runs", lambda: services.runs(limit=parsed_limit))
+        return _execute_read(
+            "runs",
+            lambda: services.runs(limit=parsed_limit, operation_type=operation_type, status=status),
+        )
+
+    @app.get("/api/v2/operation-runs")
+    def operation_runs_v2(
+        limit: int = Query(default=50),
+        operation_type: str | None = Query(default=None),
+        status: str | None = Query(default=None),
+        services: ReadServices = Depends(get_read_services),
+    ) -> JSONResponse:
+        parsed_limit = max(1, min(200, int(limit)))
+        return _execute_read(
+            "operation-runs",
+            lambda: services.operation_runs(limit=parsed_limit, operation_type=operation_type, status=status),
+        )
+
+    @app.get("/api/v2/internal-runs")
+    def internal_runs_v2(
+        limit: int = Query(default=50),
+        services: ReadServices = Depends(get_read_services),
+    ) -> JSONResponse:
+        parsed_limit = max(1, min(200, int(limit)))
+        return _execute_read("internal-runs", lambda: services.internal_runs(limit=parsed_limit))
 
     @app.get("/api/v2/canonical")
     def canonical_gallery_v2(

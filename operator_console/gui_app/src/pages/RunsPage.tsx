@@ -11,7 +11,7 @@ export default function RunsPage() {
   const [data, setData] = useState<PaginatedResponse<Run> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [sortKey, setSortKey] = useState("timestamp");
+  const [sortKey, setSortKey] = useState("started_at");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [selectedRun, setSelectedRun] = useState<Run | null>(null);
   const [page, setPage] = useState(1);
@@ -37,14 +37,14 @@ export default function RunsPage() {
   };
 
   const columns = [
-    { key: "run_id", header: "Run ID", sortable: true, className: "font-mono text-xs", render: (r: Run) => r.run_id.slice(0, 12) + "…" },
-    { key: "timestamp", header: "Timestamp", sortable: true, render: (r: Run) => new Date(r.timestamp).toLocaleString() },
-    { key: "files_processed", header: "Files", sortable: true, className: "font-mono" },
-    { key: "duplicates_found", header: "Dupes", sortable: true, className: "font-mono" },
-    { key: "runtime_ms", header: "Runtime", sortable: true, render: (r: Run) => `${r.runtime_ms}ms`, className: "font-mono" },
+    { key: "operation_run_id", header: "Operation Run ID", sortable: true, className: "font-mono text-xs", render: (r: Run) => r.operation_run_id.slice(0, 12) + "…" },
+    { key: "operation_type", header: "Type", sortable: true },
+    { key: "status", header: "Status", sortable: true },
+    { key: "started_at", header: "Started", sortable: true, render: (r: Run) => new Date(r.started_at).toLocaleString() },
+    { key: "duration_ms", header: "Duration", sortable: true, render: (r: Run) => r.duration_ms == null ? "--" : `${r.duration_ms.toFixed(1)}ms`, className: "font-mono" },
     {
-      key: "regression_status", header: "Regression", sortable: true,
-      render: (r: Run) => <StatusBadge label={r.regression_status} severity={r.regression_status === "PASS" ? "success" : r.regression_status === "FAIL" ? "destructive" : "caution"} dot />,
+      key: "status", header: "Run Status", sortable: true,
+      render: (r: Run) => <StatusBadge label={r.status} severity={r.status === "COMPLETED" ? "success" : r.status === "FAILED" ? "destructive" : "caution"} dot />,
     },
   ];
   const sorted = [...(data?.items ?? [])].sort((a, b) => {
@@ -87,18 +87,20 @@ export default function RunsPage() {
       {selectedRun && (
         <div className="w-96 shrink-0 rounded-lg border bg-card p-5 space-y-4 animate-slide-in-right self-start sticky top-0">
           <div className="flex items-center justify-between">
-            <h3 className="font-semibold text-sm">Run Details</h3>
+          <h3 className="font-semibold text-sm">Run Details</h3>
             <button onClick={() => setSelectedRun(null)}><X className="h-4 w-4 text-muted-foreground hover:text-foreground" /></button>
           </div>
           <div className="space-y-2 text-sm">
-            <div><span className="text-muted-foreground">ID:</span> <span className="font-mono text-xs">{selectedRun.run_id}</span></div>
-            <div><span className="text-muted-foreground">Time:</span> {new Date(selectedRun.timestamp).toLocaleString()}</div>
-            <div><span className="text-muted-foreground">Files:</span> {selectedRun.files_processed}</div>
-            <div><span className="text-muted-foreground">Duplicates:</span> {selectedRun.duplicates_found}</div>
-            <div><span className="text-muted-foreground">Runtime:</span> {selectedRun.runtime_ms}ms</div>
-            <StatusBadge label={selectedRun.regression_status} severity={selectedRun.regression_status === "PASS" ? "success" : selectedRun.regression_status === "FAIL" ? "destructive" : "caution"} dot />
+            <div><span className="text-muted-foreground">Operation Run ID:</span> <span className="font-mono text-xs">{selectedRun.operation_run_id}</span></div>
+            <div><span className="text-muted-foreground">Type:</span> {selectedRun.operation_type}</div>
+            <div><span className="text-muted-foreground">Status:</span> {selectedRun.status}</div>
+            <div><span className="text-muted-foreground">Started:</span> {new Date(selectedRun.started_at).toLocaleString()}</div>
+            <div><span className="text-muted-foreground">Completed:</span> {selectedRun.completed_at ? new Date(selectedRun.completed_at).toLocaleString() : "--"}</div>
+            <div><span className="text-muted-foreground">Duration:</span> {selectedRun.duration_ms == null ? "--" : `${selectedRun.duration_ms.toFixed(1)}ms`}</div>
+            <div><span className="text-muted-foreground">Linked Run ID:</span> <span className="font-mono text-xs">{selectedRun.linked_run_id ?? "--"}</span></div>
+            <StatusBadge label={selectedRun.status} severity={selectedRun.status === "COMPLETED" ? "success" : selectedRun.status === "FAILED" ? "destructive" : "caution"} dot />
           </div>
-          {selectedRun.details && <JsonViewer data={selectedRun.details} title="Run Metadata" />}
+          {(selectedRun.context || selectedRun.details) && <JsonViewer data={selectedRun.context ?? selectedRun.details ?? {}} title="Run Metadata" />}
         </div>
       )}
     </div>

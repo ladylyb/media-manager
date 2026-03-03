@@ -38,6 +38,16 @@ Optional remote transport for supported commands:
 - `--api http://localhost:8000` (used with `--transport http`)
 - `--timeout 30`
 
+## Operation Run IDs vs Internal Run IDs
+
+The GUI `/runs` and v2 run-history APIs are now driven by unified operation runs.
+
+- `operation_run_id`: primary id for an operator action (ingest/plan/apply/etc.)
+- `linked_run_id`: optional pointer to legacy planner/apply `runs.id`
+
+Use `operation_run_id` for user-facing history and audit trails. Use
+`linked_run_id` only when you need to inspect lower-level planner/apply state.
+
 ## GUI Operations Parity
 
 The Operator Console `/operations` page maps directly to CLI-equivalent flows:

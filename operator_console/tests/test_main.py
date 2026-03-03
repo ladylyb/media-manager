@@ -61,6 +61,24 @@ class _FakeService:
         return [
             _FakePayload(
                 {
+                    "operation_run_id": "aaaaaaaa-1111-1111-1111-111111111111",
+                    "operation_type": "INGEST",
+                    "status": "COMPLETED",
+                    "started_at": "2026-03-01T09:30:00+00:00",
+                    "completed_at": "2026-03-01T09:31:00+00:00",
+                    "duration_ms": 60000.0,
+                    "linked_run_id": None,
+                    "context": {"folder_path": "/dataset"},
+                    "error_message": None,
+                }
+            )
+        ]
+
+    def get_internal_run_history(self, limit: int = 50) -> list["_FakePayload"]:
+        _ = limit
+        return [
+            _FakePayload(
+                {
                     "run_id": "11111111-1111-1111-1111-111111111111",
                     "timestamp": "2026-03-01T09:30:00+00:00",
                     "files_processed": 24,
@@ -481,9 +499,18 @@ class _FakeReadServices:
     def latest_metrics(self) -> dict[str, object]:
         return {"ingest_time_ms": 12.5}
 
-    def runs(self, *, limit: int) -> list[dict[str, object]]:
+    def runs(self, *, limit: int, operation_type: str | None = None, status: str | None = None) -> list[dict[str, object]]:
+        _ = limit, operation_type, status
+        return [{"operation_run_id": "abc", "operation_type": "INGEST", "status": "COMPLETED"}]
+
+    def operation_runs(
+        self, *, limit: int, operation_type: str | None = None, status: str | None = None
+    ) -> list[dict[str, object]]:
+        return self.runs(limit=limit, operation_type=operation_type, status=status)
+
+    def internal_runs(self, *, limit: int) -> list[dict[str, object]]:
         _ = limit
-        return [{"run_id": "abc"}]
+        return [{"run_id": "legacy-run"}]
 
     def canonical(self, **kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
         _ = kwargs
@@ -765,10 +792,9 @@ def test_runs_page_renders_template() -> None:
 
     assert response.status_code == 200
     assert "Run History" in response.text
-    assert "Files Processed" in response.text
-    assert "Duplicates Found" in response.text
-    assert "Runtime (ms)" in response.text
-    assert "Regression" in response.text
+    assert "Operation Type" in response.text
+    assert "Linked Run ID" in response.text
+    assert "Apply Filters" in response.text
 
 
 def test_gallery_page_renders_template() -> None:
@@ -911,7 +937,33 @@ def test_v2_read_endpoints_return_cli_envelopes() -> None:
     assert runs.status_code == 200
     assert summary.json()["data"]["result"]["total_files"] == 10
     assert metrics.json()["data"]["result"]["ingest_time_ms"] == 12.5
-    assert runs.json()["data"]["result"][0]["run_id"] == "abc"
+    assert runs.json()["data"]["result"][0]["operation_run_id"] == "abc"
+
+
+def test_v2_operation_runs_endpoint_returns_cli_envelope() -> None:
+    app.dependency_overrides[get_read_services] = _FakeReadServices
+    client = TestClient(app)
+    try:
+        response = client.get("/api/v2/operation-runs?limit=10&operation_type=INGEST&status=COMPLETED")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"][0]["operation_run_id"] == "abc"
+
+
+def test_v2_internal_runs_endpoint_returns_cli_envelope() -> None:
+    app.dependency_overrides[get_read_services] = _FakeReadServices
+    client = TestClient(app)
+    try:
+        response = client.get("/api/v2/internal-runs?limit=10")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"][0]["run_id"] == "legacy-run"
 
 
 def test_v2_canonical_duplicates_and_ledger_endpoints_return_service_envelopes() -> None:

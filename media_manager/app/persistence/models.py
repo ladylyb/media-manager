@@ -108,6 +108,22 @@ class TagEnrichmentItemResult(StrEnum):
     SKIPPED = "SKIPPED"
 
 
+class OperationRunType(StrEnum):
+    INGEST = "INGEST"
+    PLAN = "PLAN"
+    APPLY = "APPLY"
+    OPERATOR_RUN = "OPERATOR_RUN"
+    CANONICAL_RECOMPUTE = "CANONICAL_RECOMPUTE"
+    TAG_ENRICHMENT = "TAG_ENRICHMENT"
+    DB_RESET = "DB_RESET"
+
+
+class OperationRunStatus(StrEnum):
+    STARTED = "STARTED"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
 class Run(Base):
     __tablename__ = "runs"
 
@@ -148,6 +164,42 @@ Index(
     unique=True,
     postgresql_where=text("state = 'APPLYING'"),
 )
+
+
+class OperationRun(Base):
+    __tablename__ = "operation_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    operation_type: Mapped[OperationRunType] = mapped_column(
+        Enum(OperationRunType, name="operation_run_type", native_enum=True),
+        nullable=False,
+    )
+    status: Mapped[OperationRunStatus] = mapped_column(
+        Enum(OperationRunStatus, name="operation_run_status", native_enum=True),
+        nullable=False,
+        default=OperationRunStatus.STARTED,
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    context: Mapped[dict[str, object]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
+    linked_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("runs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+Index("idx_operation_runs_started_at_desc", OperationRun.started_at.desc())
+Index("idx_operation_runs_operation_type", OperationRun.operation_type)
+Index("idx_operation_runs_status", OperationRun.status)
 
 
 class FailureEvent(Base):

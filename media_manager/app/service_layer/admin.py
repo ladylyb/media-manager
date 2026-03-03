@@ -5,10 +5,13 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+from uuid import UUID
 
 from sqlalchemy import inspect, text
 
 from media_manager.app.persistence.base import transactional_session
+from media_manager.app.persistence.models import OperationRunType
+from media_manager.app.persistence.operation_runs import OperationRunService
 from media_manager.app.service_layer.errors import ServiceLayerException
 
 LOGGER = logging.getLogger(__name__)
@@ -61,37 +64,58 @@ class AdminServices:
 
     session_factory: object
 
+    def _op_runs(self) -> OperationRunService:
+        return OperationRunService(self.session_factory)
+
     def db_reset(self, *, dry_run: bool, challenge_word: str | None) -> dict[str, object]:
         """Reset app data tables in dev/test environments only."""
-        env = self._validate_environment()
-        self._validate_challenge(dry_run=dry_run, challenge_word=challenge_word)
-        affected_tables = self._build_reset_plan()
+        env = (os.getenv("MEDIA_MANAGER_ENV", "") or "").strip().lower() or "<unknown>"
+        affected_tables: tuple[str, ...] = ()
+        run_log = self._op_runs().start(
+            operation_type=OperationRunType.DB_RESET,
+            context={"dry_run": bool(dry_run), "challenge_word_present": bool((challenge_word or "").strip())},
+        )
+        try:
+            env = self._validate_environment()
+            self._validate_challenge(dry_run=dry_run, challenge_word=challenge_word)
+            affected_tables = self._build_reset_plan()
 
-        if dry_run:
+            if dry_run:
+                self._log_attempt(
+                    env=env,
+                    dry_run=True,
+                    success=True,
+                    affected_tables=affected_tables,
+                    error_code=None,
+                )
+                self._op_runs().complete(UUID(run_log.operation_run_id))
+                return {
+                    "success": True,
+                    "dry_run": True,
+                    "affected_tables": list(affected_tables),
+                    "message": "Dry-run only. No data deleted.",
+                }
+
+            self._execute_reset_transaction(affected_tables=affected_tables)
+        except ServiceLayerException as exc:
             self._log_attempt(
                 env=env,
-                dry_run=True,
-                success=True,
+                dry_run=bool(dry_run),
+                success=False,
                 affected_tables=affected_tables,
-                error_code=None,
+                error_code=exc.code,
             )
-            return {
-                "success": True,
-                "dry_run": True,
-                "affected_tables": list(affected_tables),
-                "message": "Dry-run only. No data deleted.",
-            }
-
-        try:
-            self._execute_reset_transaction(affected_tables=affected_tables)
+            self._op_runs().fail(UUID(run_log.operation_run_id), error_message=exc.message)
+            raise
         except Exception as exc:
             self._log_attempt(
                 env=env,
-                dry_run=False,
+                dry_run=bool(dry_run),
                 success=False,
                 affected_tables=affected_tables,
                 error_code="RESET_FAILED",
             )
+            self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))
             raise ServiceLayerException(
                 code="INTERNAL_ERROR",
                 message=f"Database reset failed: {exc}",
@@ -105,6 +129,7 @@ class AdminServices:
             affected_tables=affected_tables,
             error_code=None,
         )
+        self._op_runs().complete(UUID(run_log.operation_run_id))
         return {
             "success": True,
             "dry_run": False,
