@@ -38,6 +38,17 @@ Optional remote transport for supported commands:
 - `--api http://localhost:8000` (used with `--transport http`)
 - `--timeout 30`
 
+## GUI Operations Parity
+
+The Operator Console `/operations` page maps directly to CLI-equivalent flows:
+
+- Ingest: `media-manager ingest <path> [--dry-run]`
+- Plan: `media-manager plan <path> [--strict-metadata]`
+- Apply: `media-manager apply <run_id> [--collision-mode rename|skip|fail]`
+- Canonical recompute: `media-manager canonical recompute --policy <name> [--dry-run|--apply]`
+- Tag enrichment: `media-manager tag-enrich --all|--canonical-id <uuid> [--batch-size N]`
+- Composite run (legacy): `media-manager operator-run --folder-path <path> --policy-name <name> [--dry-run]`
+
 ## Ledger Hash Audit Health Check
 
 `media-manager health-check --audit-hashes` calls Operator Console REST API and reports ledger hash health.

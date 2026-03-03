@@ -532,9 +532,63 @@ class _FakeReadServices:
 
 
 class _FakeOperationServices:
+    def ingest(self, *, folder_path: str, dry_run: bool) -> dict[str, object]:
+        return {
+            "operation": "INGEST",
+            "mode": "VALIDATION_ONLY" if dry_run else "EXECUTION",
+            "report": {"scan": {"files_scanned": 3}},
+            "folder_path": folder_path,
+        }
+
+    def plan(self, *, folder_path: str, strict_metadata: bool) -> dict[str, object]:
+        return {
+            "operation": "PLAN",
+            "run_id": "11111111-1111-1111-1111-111111111111",
+            "strict_metadata": strict_metadata,
+            "summary": {"scanned_count": 2, "move_actions": 1, "noop_actions": 1, "duplicate_actions": 0},
+            "folder_path": folder_path,
+        }
+
+    def apply(self, *, run_id: str, collision_mode: str) -> dict[str, object]:
+        _ = UUID(run_id)
+        if collision_mode not in {"rename", "skip", "fail"}:
+            raise ValueError("collision_mode must be one of: rename, skip, fail.")
+        return {
+            "operation": "APPLY",
+            "run_id": run_id,
+            "collision_mode": collision_mode,
+            "summary": {"applied_count": 2, "moves_count": 1, "duplicates_count": 1, "noop_count": 0, "errors_count": 0, "skipped_count": 0},
+        }
+
+    def canonical_recompute(
+        self,
+        *,
+        policy_name: str,
+        dry_run: bool,
+        preferred_roots: tuple[str, ...],
+    ) -> dict[str, object]:
+        _ = preferred_roots
+        return {
+            "operation": "CANONICAL_RECOMPUTE",
+            "mode": "DRY_RUN" if dry_run else "APPLY",
+            "policy_name": policy_name,
+            "summary": {"scanned_count": 4, "changed_count": 1, "applied_count": 0 if dry_run else 1},
+        }
+
+    def operator_run(self, *, folder_path: str, policy_name: str, dry_run: bool) -> dict[str, object]:
+        return self.run(folder_path=folder_path, policy_name=policy_name, dry_run=dry_run)
+
     def run(self, *, folder_path: str, policy_name: str, dry_run: bool) -> dict[str, object]:
         _ = policy_name
         return {"mode": "VALIDATION_ONLY" if dry_run else "EXECUTION", "run_id": "r1", "folder_path": folder_path}
+
+    def operations_catalog(self) -> dict[str, object]:
+        return {
+            "items": [
+                {"operation_id": "ingest", "supports_dry_run": True},
+                {"operation_id": "plan", "supports_dry_run": False},
+            ]
+        }
 
     def policy_get(self) -> dict[str, object]:
         return {"canonical_priority": {"selected_policy": "FIRST_SEEN"}, "metadata": {"version": 1}}
@@ -580,17 +634,36 @@ def test_dashboard_route_renders_template() -> None:
 
     assert response.status_code == 200
     assert "Dashboard" in response.text
-    assert "Run Trigger" in response.text
+    assert "Quick Operations" in response.text
+    assert "Validate Ingest (dry-run)" in response.text
+    assert "Composite Run (legacy pipeline)" in response.text
     assert "Folder Path" in response.text
     assert "Execute" in response.text
+    assert "Open Operations" in response.text
     assert "Total Files" in response.text
     assert "Performance Metrics" in response.text
     assert "Media Manager Operator Console" in response.text
     assert "Dashboard</a>" in response.text
+    assert "Operations</a>" in response.text
     assert "Runs</a>" in response.text
     assert "Duplicates</a>" in response.text
     assert "Policy</a>" in response.text
     assert "https://cdn.tailwindcss.com" in response.text
+
+
+def test_operations_page_renders_template() -> None:
+    client = TestClient(app)
+
+    response = client.get("/operations")
+
+    assert response.status_code == 200
+    assert "Operations" in response.text
+    assert "Run Ingest" in response.text
+    assert "Run Plan" in response.text
+    assert "Run Apply" in response.text
+    assert "Run Canonical Recompute" in response.text
+    assert "Run Tag Enrichment" in response.text
+    assert "Run Composite" in response.text
 
 
 def test_dashboard_summary_endpoint_returns_json() -> None:
@@ -1425,6 +1498,147 @@ def test_post_run_v2_returns_service_envelope() -> None:
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert response.json()["data"]["result"]["mode"] == "VALIDATION_ONLY"
+
+
+def test_post_operator_run_v2_returns_service_envelope() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/v2/operator-run",
+            json={
+                "folder_path": "/dataset",
+                "policy_name": "PREFER_ROOT",
+                "dry_run": True,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"]["mode"] == "VALIDATION_ONLY"
+
+
+def test_post_operator_run_v2_parity_with_run_v2() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    payload = {"folder_path": "/dataset", "policy_name": "FIRST_SEEN", "dry_run": False}
+    try:
+        run_response = client.post("/api/v2/run", json=payload)
+        alias_response = client.post("/api/v2/operator-run", json=payload)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert run_response.status_code == 200
+    assert alias_response.status_code == 200
+    assert run_response.json()["data"]["result"] == alias_response.json()["data"]["result"]
+
+
+def test_post_ingest_v2_returns_service_envelope() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post("/api/v2/ingest", json={"folder_path": "/dataset", "dry_run": True})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"]["operation"] == "INGEST"
+
+
+def test_post_plan_v2_returns_service_envelope() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post("/api/v2/plan", json={"folder_path": "/dataset", "strict_metadata": True})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()["data"]["result"]
+    assert payload["operation"] == "PLAN"
+    assert payload["strict_metadata"] is True
+
+
+def test_post_apply_v2_returns_service_envelope() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/v2/apply",
+            json={"run_id": "11111111-1111-1111-1111-111111111111", "collision_mode": "rename"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["data"]["result"]["operation"] == "APPLY"
+
+
+def test_post_apply_v2_rejects_invalid_collision_mode() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/v2/apply",
+            json={"run_id": "11111111-1111-1111-1111-111111111111", "collision_mode": "bad"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert response.json()["ok"] is False
+    assert response.json()["errors"][0]["code"] == "VALIDATION_ERROR"
+
+
+def test_post_apply_v2_rejects_invalid_run_id() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/v2/apply",
+            json={"run_id": "not-a-uuid", "collision_mode": "rename"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert response.json()["ok"] is False
+    assert response.json()["errors"][0]["code"] == "VALIDATION_ERROR"
+
+
+def test_post_canonical_recompute_v2_returns_service_envelope() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/v2/canonical/recompute",
+            json={"policy_name": "FIRST_SEEN", "dry_run": True, "preferred_roots": ["/a"]},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()["data"]["result"]
+    assert payload["operation"] == "CANONICAL_RECOMPUTE"
+    assert payload["mode"] == "DRY_RUN"
+
+
+def test_get_operations_catalog_v2_returns_service_envelope() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.get("/api/v2/operations/catalog")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    items = response.json()["data"]["result"]["items"]
+    assert len(items) == 2
+    assert items[0]["operation_id"] == "ingest"
 
 
 def test_post_policy_v2_returns_service_envelope() -> None:

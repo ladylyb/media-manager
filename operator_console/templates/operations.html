@@ -1,0 +1,245 @@
+{% extends "base.html" %}
+
+{% block title %}Operations{% endblock %}
+
+{% block content %}
+<section class="space-y-8">
+  <div class="space-y-2">
+    <h2 class="text-3xl font-semibold tracking-tight">Operations</h2>
+    <p class="text-sm text-slate-600">Explicit operation controls aligned with CLI semantics. Dry-run defaults are enabled where supported.</p>
+  </div>
+
+  <div id="operations-global-error" class="hidden rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800"></div>
+
+  <section class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+    <article class="space-y-3 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+      <h3 class="text-lg font-semibold text-slate-900">Ingest</h3>
+      <p class="text-xs text-slate-500">Reads files and records ledger ingestion facts.</p>
+      <form id="op-ingest" class="space-y-3">
+        <input name="folder_path" placeholder="/absolute/path" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" required />
+        <label class="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" name="dry_run" checked /> Dry-run (read-only)</label>
+        <button class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800" type="submit">Run Ingest</button>
+      </form>
+      <p class="text-xs font-medium text-amber-700">Mutates state when dry-run is off.</p>
+    </article>
+
+    <article class="space-y-3 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+      <h3 class="text-lg font-semibold text-slate-900">Plan</h3>
+      <p class="text-xs text-slate-500">Creates a deterministic run plan from current ledger/content state.</p>
+      <form id="op-plan" class="space-y-3">
+        <input name="folder_path" placeholder="/absolute/path" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" required />
+        <label class="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" name="strict_metadata" /> Strict metadata</label>
+        <button class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800" type="submit">Run Plan</button>
+      </form>
+      <p class="text-xs font-medium text-rose-700">Always mutates state (creates run + planned actions).</p>
+    </article>
+
+    <article class="space-y-3 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+      <h3 class="text-lg font-semibold text-slate-900">Apply</h3>
+      <p class="text-xs text-slate-500">Executes planned actions for a specific run.</p>
+      <form id="op-apply" class="space-y-3">
+        <input name="run_id" placeholder="run UUID" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" required />
+        <select name="collision_mode" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+          <option value="rename">rename</option>
+          <option value="skip">skip</option>
+          <option value="fail">fail</option>
+        </select>
+        <button class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800" type="submit">Run Apply</button>
+      </form>
+      <p class="text-xs font-medium text-rose-700">Mutates DB and filesystem.</p>
+    </article>
+
+    <article class="space-y-3 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+      <h3 class="text-lg font-semibold text-slate-900">Canonical Recompute</h3>
+      <p class="text-xs text-slate-500">Recomputes canonical decisions for duplicate content groups.</p>
+      <form id="op-canonical" class="space-y-3">
+        <select name="policy_name" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+          <option value="FIRST_SEEN">FIRST_SEEN</option>
+          <option value="PREFER_ROOT">PREFER_ROOT</option>
+          <option value="SHORTEST_PATH">SHORTEST_PATH</option>
+        </select>
+        <input name="preferred_roots" placeholder="/root/a,/root/b (optional)" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+        <label class="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" name="dry_run" checked /> Dry-run (read-only)</label>
+        <button class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800" type="submit">Run Canonical Recompute</button>
+      </form>
+      <p class="text-xs font-medium text-amber-700">Dry-run is default. Apply mode mutates canonical assignment history.</p>
+    </article>
+
+    <article class="space-y-3 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+      <h3 class="text-lg font-semibold text-slate-900">Tag Enrichment</h3>
+      <p class="text-xs text-slate-500">Adds/updates canonical tags for all items or one canonical id.</p>
+      <form id="op-tag-enrichment" class="space-y-3">
+        <label class="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" name="all" checked /> Run for all canonical items</label>
+        <input name="canonical_id" placeholder="canonical UUID (required when all=false)" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+        <input name="batch_size" type="number" min="1" value="100" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+        <select name="source" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+          <option value="system">system</option>
+          <option value="user">user</option>
+        </select>
+        <button class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800" type="submit">Run Tag Enrichment</button>
+      </form>
+      <p class="text-xs font-medium text-rose-700">Mutates tag rows.</p>
+    </article>
+
+    <article class="space-y-3 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+      <h3 class="text-lg font-semibold text-slate-900">Composite Run (Legacy)</h3>
+      <p class="text-xs text-slate-500">Legacy combined flow: ingest + canonical recompute + plan + apply.</p>
+      <form id="op-composite" class="space-y-3">
+        <input name="folder_path" placeholder="/absolute/path" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" required />
+        <select name="policy_name" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+          <option value="FIRST_SEEN">FIRST_SEEN</option>
+          <option value="PREFER_ROOT">PREFER_ROOT</option>
+          <option value="SHORTEST_PATH">SHORTEST_PATH</option>
+        </select>
+        <label class="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" name="dry_run" checked /> Dry-run (validation-only)</label>
+        <button class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800" type="submit">Run Composite</button>
+      </form>
+      <p class="text-xs font-medium text-amber-700">Prefer dedicated operations for clearer mutation boundaries.</p>
+    </article>
+  </section>
+
+  <section class="space-y-3 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+    <h3 class="text-lg font-semibold text-slate-900">Operation Result</h3>
+    <p id="operation-result-summary" class="text-sm text-slate-600">No operation executed yet.</p>
+    <details class="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
+      <summary class="cursor-pointer text-sm font-medium text-slate-700">Raw JSON</summary>
+      <pre id="operation-result-json" class="mt-2 overflow-auto text-xs text-slate-800">--</pre>
+    </details>
+  </section>
+</section>
+
+<script>
+  function showGlobalError(message) {
+    const node = document.getElementById("operations-global-error");
+    if (!node) return;
+    node.textContent = message;
+    node.classList.remove("hidden");
+  }
+
+  function clearGlobalError() {
+    const node = document.getElementById("operations-global-error");
+    if (!node) return;
+    node.textContent = "";
+    node.classList.add("hidden");
+  }
+
+  function renderOperationResult(operationName, payload) {
+    const summary = document.getElementById("operation-result-summary");
+    const raw = document.getElementById("operation-result-json");
+    if (summary) {
+      const ok = payload && payload.ok === true;
+      summary.textContent = ok
+        ? `${operationName} completed successfully.`
+        : `${operationName} failed.`;
+    }
+    if (raw) {
+      raw.textContent = JSON.stringify(payload, null, 2);
+    }
+  }
+
+  async function postOperation(operationName, endpoint, body) {
+    clearGlobalError();
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(body),
+      });
+      const payload = await response.json();
+      if (!response.ok || payload.ok !== true) {
+        const first = Array.isArray(payload.errors) && payload.errors.length > 0 ? payload.errors[0] : null;
+        throw new Error(first && first.message ? first.message : `${operationName} failed (${response.status}).`);
+      }
+      renderOperationResult(operationName, payload);
+    } catch (error) {
+      showGlobalError(error instanceof Error ? error.message : `${operationName} failed.`);
+    }
+  }
+
+  function bindForms() {
+    const ingestForm = document.getElementById("op-ingest");
+    if (ingestForm) {
+      ingestForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const form = new FormData(ingestForm);
+        postOperation("Ingest", "/api/v2/ingest", {
+          folder_path: String(form.get("folder_path") || ""),
+          dry_run: Boolean(form.get("dry_run")),
+        });
+      });
+    }
+
+    const planForm = document.getElementById("op-plan");
+    if (planForm) {
+      planForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const form = new FormData(planForm);
+        postOperation("Plan", "/api/v2/plan", {
+          folder_path: String(form.get("folder_path") || ""),
+          strict_metadata: Boolean(form.get("strict_metadata")),
+        });
+      });
+    }
+
+    const applyForm = document.getElementById("op-apply");
+    if (applyForm) {
+      applyForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const form = new FormData(applyForm);
+        postOperation("Apply", "/api/v2/apply", {
+          run_id: String(form.get("run_id") || ""),
+          collision_mode: String(form.get("collision_mode") || "rename"),
+        });
+      });
+    }
+
+    const canonicalForm = document.getElementById("op-canonical");
+    if (canonicalForm) {
+      canonicalForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const form = new FormData(canonicalForm);
+        const preferredRaw = String(form.get("preferred_roots") || "");
+        postOperation("Canonical Recompute", "/api/v2/canonical/recompute", {
+          policy_name: String(form.get("policy_name") || "FIRST_SEEN"),
+          dry_run: Boolean(form.get("dry_run")),
+          preferred_roots: preferredRaw
+            .split(",")
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0),
+        });
+      });
+    }
+
+    const tagForm = document.getElementById("op-tag-enrichment");
+    if (tagForm) {
+      tagForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const form = new FormData(tagForm);
+        const runAll = Boolean(form.get("all"));
+        const canonicalId = String(form.get("canonical_id") || "").trim();
+        postOperation("Tag Enrichment", "/api/v2/tag-enrichment", {
+          all: runAll,
+          canonical_id: canonicalId.length > 0 ? canonicalId : null,
+          batch_size: Number(form.get("batch_size") || 100),
+          source: String(form.get("source") || "system"),
+        });
+      });
+    }
+
+    const compositeForm = document.getElementById("op-composite");
+    if (compositeForm) {
+      compositeForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const form = new FormData(compositeForm);
+        postOperation("Composite Run", "/api/v2/operator-run", {
+          folder_path: String(form.get("folder_path") || ""),
+          policy_name: String(form.get("policy_name") || "FIRST_SEEN"),
+          dry_run: Boolean(form.get("dry_run")),
+        });
+      });
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", bindForms);
+</script>
+{% endblock %}
