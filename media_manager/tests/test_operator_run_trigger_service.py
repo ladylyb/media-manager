@@ -29,7 +29,7 @@ def test_trigger_run_dry_run_skips_apply(tmp_path: Path, monkeypatch: pytest.Mon
     (root / "a.jpg").write_bytes(b"a")
 
     apply_calls = {"count": 0}
-    recompute_mode = {"value": None}
+    validate_calls = {"count": 0}
 
     class FakeIngestService:
         def __init__(self, _session_factory) -> None:
@@ -40,84 +40,71 @@ def test_trigger_run_dry_run_skips_apply(tmp_path: Path, monkeypatch: pytest.Mon
             return [root / "a.jpg"]
 
         def ingest_paths(self, _files: list[Path]) -> IngestSummary:
-            return IngestSummary(
-                files_scanned=1,
-                new_contents=1,
-                new_instances=1,
-                duplicates_detected=0,
-                metadata_extracted=1,
-                duration_s=0.1,
-            )
+            raise AssertionError("ingest_paths must not run for dry-run validation mode")
+
+        def validate_paths(self, _files: list[Path], *, authoritative_root: Path | None = None):
+            validate_calls["count"] += 1
+            assert authoritative_root == root
+            return type(
+                "_ValidationReport",
+                (),
+                {
+                    "to_dict": staticmethod(
+                        lambda: {
+                            "mode": "VALIDATION_ONLY",
+                            "root_path": str(root),
+                            "generated_at": "2026-03-03T00:00:00+00:00",
+                            "scan": {"files_scanned": 1, "files_missing_during_scan": 0},
+                            "delta": {
+                                "would_insert": 1,
+                                "would_update": 0,
+                                "would_mark_deleted": 0,
+                                "hash_mismatch_observed": 0,
+                                "would_reappear_after_delete": 0,
+                            },
+                            "samples": {
+                                "would_insert": [],
+                                "would_update": [],
+                                "would_mark_deleted": [],
+                                "hash_mismatch_observed": [],
+                            },
+                            "warnings": [],
+                        }
+                    )
+                },
+            )()
 
     class FakeRunService:
         def __init__(self, _session_factory) -> None:
-            pass
+            raise AssertionError("RunService must not be constructed for dry-run validation mode")
 
         def create_run(self) -> _RunObj:
             return _RunObj(id=uuid.UUID("11111111-1111-1111-1111-111111111111"))
 
     class FakePlanningService:
         def __init__(self, _session_factory) -> None:
-            pass
-
-        def plan_run(self, run_id, _files, ingest_if_needed=False):
-            assert ingest_if_needed is False
-            return PlanningSummary(
-                run_id=run_id,
-                scanned_count=1,
-                supported_count=1,
-                skipped_count=0,
-                move_actions=1,
-                noop_actions=0,
-                duplicate_actions=2,
-            )
+            raise AssertionError("PlanningService must not be constructed for dry-run validation mode")
 
     class FakeApplyService:
         def __init__(self, _session_factory) -> None:
-            pass
-
-        def apply_run(self, _run_id) -> ApplySummary:
-            apply_calls["count"] += 1
-            return ApplySummary(
-                applied_count=0,
-                skipped_count=0,
-                duplicates_count=0,
-                noop_count=0,
-                errors_count=0,
-                moves_count=0,
-            )
-
-    def fake_recompute(_session_factory, *, policy, context, mode):
-        _ = policy, context
-        recompute_mode["value"] = mode
-        return RecomputeSummary(
-            run_id=uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
-            scanned_count=1,
-            changed_count=3,
-            failed_count=0,
-            applied_count=0,
-            status="COMPLETED",
-            changed_content_ids=(),
-            failed_content_ids=(),
-        )
+            raise AssertionError("ApplyService must not be constructed for dry-run validation mode")
 
     monkeypatch.setattr(module, "IngestService", FakeIngestService)
     monkeypatch.setattr(module, "RunService", FakeRunService)
     monkeypatch.setattr(module, "PlanningService", FakePlanningService)
     monkeypatch.setattr(module, "ApplyService", FakeApplyService)
-    monkeypatch.setattr(module, "recompute_canonical_assignments", fake_recompute)
 
     service = OperatorRunTriggerService(session_factory=None)
-    result = service.trigger_run(RunTriggerCommand(folder_path=str(root), policy_name="FIRST_SEEN", dry_run=True))
+    result = service.trigger_run(
+        RunTriggerCommand(folder_path=str(root), policy_name="FIRST_SEEN", dry_run=True)
+    )
+    payload = result.to_dict()
 
-    assert result.run_id == "11111111-1111-1111-1111-111111111111"
-    assert result.duplicates_found == 2
-    assert result.canonical_changes == 3
-    assert result.summary_metrics["apply"] is None
-    assert result.summary_metrics["policy_name"] == "FIRST_SEEN"
-    assert result.summary_metrics["dry_run"] is True
+    assert payload["mode"] == "VALIDATION_ONLY"
+    assert payload["validation_report"]["scan"]["files_scanned"] == 1
+    assert payload["validation_report"]["delta"]["would_insert"] == 1
+    assert validate_calls["count"] == 1
     assert apply_calls["count"] == 0
-    assert recompute_mode["value"] == RecomputeMode.DRY_RUN
 
 
 def test_trigger_run_full_run_invokes_apply(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -192,6 +179,7 @@ def test_trigger_run_full_run_invokes_apply(tmp_path: Path, monkeypatch: pytest.
     service = OperatorRunTriggerService(session_factory=None)
     result = service.trigger_run(RunTriggerCommand(folder_path=str(root), policy_name="PREFER_ROOT", dry_run=False))
 
+    assert result.to_dict()["mode"] == "EXECUTION"
     assert result.run_id == "22222222-2222-2222-2222-222222222222"
     assert result.duplicates_found == 4
     assert result.canonical_changes == 7
@@ -214,13 +202,29 @@ def test_trigger_run_invalid_folder_validation(tmp_path: Path) -> None:
         service.trigger_run(RunTriggerCommand(folder_path=str(file_path), policy_name="FIRST_SEEN", dry_run=True))
 
 
-def test_trigger_run_rejects_unknown_policy(tmp_path: Path) -> None:
+def test_trigger_run_dry_run_ignores_unknown_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import media_manager.app.persistence.operator_run_trigger as module
+
     root = tmp_path / "dataset"
     root.mkdir(parents=True, exist_ok=True)
-    service = OperatorRunTriggerService(session_factory=None)
 
-    with pytest.raises(Exception, match="Unknown canonical policy"):
-        service.trigger_run(RunTriggerCommand(folder_path=str(root), policy_name="NOPE", dry_run=True))
+    class FakeIngestService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        @staticmethod
+        def collect_files(_root: Path) -> list[Path]:
+            return []
+
+        def validate_paths(self, _files: list[Path], *, authoritative_root: Path | None = None):
+            _ = authoritative_root
+            return type("_ValidationReport", (), {"to_dict": staticmethod(lambda: {"mode": "VALIDATION_ONLY"})})()
+
+    monkeypatch.setattr(module, "IngestService", FakeIngestService)
+
+    service = OperatorRunTriggerService(session_factory=None)
+    result = service.trigger_run(RunTriggerCommand(folder_path=str(root), policy_name="NOPE", dry_run=True))
+    assert result.to_dict()["mode"] == "VALIDATION_ONLY"
 
 
 def test_trigger_result_shape_stable_across_repeated_calls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -288,7 +292,7 @@ def test_trigger_result_shape_stable_across_repeated_calls(tmp_path: Path, monke
     first = service.trigger_run(RunTriggerCommand(folder_path=str(root), policy_name="FIRST_SEEN", dry_run=False)).to_dict()
     second = service.trigger_run(RunTriggerCommand(folder_path=str(root), policy_name="FIRST_SEEN", dry_run=False)).to_dict()
 
-    assert set(first.keys()) == {"run_id", "summary_metrics", "duplicates_found", "canonical_changes"}
+    assert set(first.keys()) == {"mode", "run_id", "summary_metrics", "duplicates_found", "canonical_changes"}
     assert set(second.keys()) == set(first.keys())
     assert set(first["summary_metrics"].keys()) == {"ingest", "plan", "apply", "dry_run", "policy_name"}
     assert set(second["summary_metrics"].keys()) == set(first["summary_metrics"].keys())

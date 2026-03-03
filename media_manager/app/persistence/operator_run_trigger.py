@@ -9,8 +9,8 @@ from media_manager.app.canonical.context import CanonicalContext
 from media_manager.app.canonical.factory import build_canonical_policy
 from media_manager.app.core.errors import MediaManagerError
 from media_manager.app.persistence.apply import ApplyService, ApplySummary
-from media_manager.app.persistence.canonicalization import RecomputeMode, RecomputeSummary, recompute_canonical_assignments
-from media_manager.app.persistence.ingest import IngestService, IngestSummary
+from media_manager.app.persistence.canonicalization import RecomputeMode, recompute_canonical_assignments
+from media_manager.app.persistence.ingest import IngestService, IngestSummary, IngestValidationReport
 from media_manager.app.persistence.planner import PlanningService, PlanningSummary
 from media_manager.app.persistence.runs import RunService
 
@@ -36,10 +36,24 @@ class RunTriggerResult:
     def to_dict(self) -> dict[str, object]:
         """Return JSON-serializable result payload."""
         return {
+            "mode": "EXECUTION",
             "run_id": self.run_id,
             "summary_metrics": self.summary_metrics,
             "duplicates_found": self.duplicates_found,
             "canonical_changes": self.canonical_changes,
+        }
+
+
+@dataclass(frozen=True)
+class RunValidationResult:
+    """Structured API result for dry-run validation-only execution."""
+
+    validation_report: IngestValidationReport
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "mode": "VALIDATION_ONLY",
+            "validation_report": self.validation_report.to_dict(),
         }
 
 
@@ -49,7 +63,7 @@ class OperatorRunTriggerService:
     def __init__(self, session_factory) -> None:
         self._session_factory = session_factory
 
-    def trigger_run(self, command: RunTriggerCommand) -> RunTriggerResult:
+    def trigger_run(self, command: RunTriggerCommand) -> RunTriggerResult | RunValidationResult:
         """Execute ingest/recompute/plan/(optional apply) deterministically."""
         root = Path(command.folder_path)
         if not root.exists():
@@ -57,18 +71,21 @@ class OperatorRunTriggerService:
         if not root.is_dir():
             raise ValueError(f"Folder path must be a directory: {root}")
 
-        policy = build_canonical_policy(command.policy_name)
-
         ingest_service = IngestService(self._session_factory)
+        files = IngestService.collect_files(root)
+        if command.dry_run:
+            # Dry-run is strict validation mode: no durable mutations anywhere.
+            validation_report = ingest_service.validate_paths(files, authoritative_root=root)
+            return RunValidationResult(validation_report=validation_report)
+
+        policy = build_canonical_policy(command.policy_name)
         run_service = RunService(self._session_factory)
         planner = PlanningService(self._session_factory)
         apply_service = ApplyService(self._session_factory)
-
-        files = IngestService.collect_files(root)
         ingest_summary = ingest_service.ingest_paths(files)
 
         run = run_service.create_run()
-        recompute_mode = RecomputeMode.DRY_RUN if command.dry_run else RecomputeMode.APPLY
+        recompute_mode = RecomputeMode.APPLY
         recompute_summary = recompute_canonical_assignments(
             self._session_factory,
             policy=policy,
@@ -81,9 +98,7 @@ class OperatorRunTriggerService:
             ingest_if_needed=False,
         )
 
-        apply_summary: ApplySummary | None = None
-        if not command.dry_run:
-            apply_summary = apply_service.apply_run(run.id)
+        apply_summary = apply_service.apply_run(run.id)
 
         return RunTriggerResult(
             run_id=str(run.id),

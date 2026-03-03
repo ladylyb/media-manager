@@ -12,6 +12,7 @@ from media_manager.app.core.errors import PolicySettingsVersionConflictError
 import operator_console.main as main_module
 from operator_console.main import (
     app,
+    get_ingest_service,
     get_operator_console_service,
     get_policy_settings_service,
     get_operator_run_trigger_service,
@@ -222,6 +223,34 @@ class _FakeService:
             }
         )
 
+    def get_dry_run_side_effect_audit(
+        self,
+        *,
+        start: str | None = None,
+        end: str | None = None,
+        limit: int = 50,
+    ) -> _FakePayload:
+        _ = start, end, limit
+        return _FakePayload(
+            {
+                "coverage": "BEST_EFFORT",
+                "method": "Heuristic correlation over run timestamps and recompute/apply evidence.",
+                "window": {"start": start, "end": end},
+                "candidates": [
+                    {
+                        "started_at": "2026-03-01T10:00:00+00:00",
+                        "ended_at": "2026-03-01T10:02:00+00:00",
+                        "inferred_run_id": "33333333-3333-3333-3333-333333333333",
+                        "inferred_folder_path": None,
+                        "estimated_ledger_rows_touched": 12,
+                        "confidence": "MEDIUM",
+                        "signals": ["run_without_apply_audit", "nearby_canonical_recompute_dry_run"],
+                    }
+                ],
+                "limitations": ["Historical run rows do not persist a dry_run flag."],
+            }
+        )
+
     def resolve_thumbnail_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:
         if str(file_instance_id) == "aaaaaaaa-0000-0000-0000-000000000001":
             return Path(__file__), "image/jpeg"
@@ -333,8 +362,35 @@ class _FakeRunTriggerService:
     def trigger_run(self, command) -> _FakeRunTriggerResult:
         if command.folder_path == "/missing":
             raise ValueError("Folder path does not exist: /missing")
+        if command.dry_run:
+            return _FakeRunTriggerResult(
+                {
+                    "mode": "VALIDATION_ONLY",
+                    "validation_report": {
+                        "mode": "VALIDATION_ONLY",
+                        "root_path": command.folder_path,
+                        "generated_at": "2026-03-03T00:00:00+00:00",
+                        "scan": {"files_scanned": 12, "files_missing_during_scan": 0},
+                        "delta": {
+                            "would_insert": 6,
+                            "would_update": 4,
+                            "would_mark_deleted": 2,
+                            "hash_mismatch_observed": 1,
+                            "would_reappear_after_delete": 0,
+                        },
+                        "samples": {
+                            "would_insert": [],
+                            "would_update": [],
+                            "would_mark_deleted": [],
+                            "hash_mismatch_observed": [],
+                        },
+                        "warnings": [],
+                    },
+                }
+            )
         return _FakeRunTriggerResult(
             {
+                "mode": "EXECUTION",
                 "run_id": "33333333-3333-3333-3333-333333333333",
                 "summary_metrics": {
                     "ingest": {
@@ -357,6 +413,34 @@ class _FakeRunTriggerService:
                 },
                 "duplicates_found": 2,
                 "canonical_changes": 1,
+            }
+        )
+
+
+class _FakeIngestService:
+    def validate_path(self, folder) -> _FakePayload:
+        if str(folder) == "/missing":
+            raise ValueError("Folder path does not exist: /missing")
+        return _FakePayload(
+            {
+                "mode": "VALIDATION_ONLY",
+                "root_path": str(folder),
+                "generated_at": "2026-03-03T00:00:00+00:00",
+                "scan": {"files_scanned": 3, "files_missing_during_scan": 0},
+                "delta": {
+                    "would_insert": 1,
+                    "would_update": 1,
+                    "would_mark_deleted": 0,
+                    "hash_mismatch_observed": 0,
+                    "would_reappear_after_delete": 0,
+                },
+                "samples": {
+                    "would_insert": [],
+                    "would_update": [],
+                    "would_mark_deleted": [],
+                    "hash_mismatch_observed": [],
+                },
+                "warnings": [],
             }
         )
 
@@ -622,6 +706,67 @@ def test_media_file_analytics_endpoint_returns_expected_shape() -> None:
     assert payload["totals"]["duplicate_hash_groups"] == 2
     assert payload["by_status"]["INGESTED"] == 6
     assert payload["window"]["mode"] == "all_time"
+
+
+def test_media_file_dry_run_audit_endpoint_returns_expected_shape() -> None:
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/api/media-file/dry-run-audit?limit=10")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["coverage"] == "BEST_EFFORT"
+    assert payload["candidates"][0]["confidence"] == "MEDIUM"
+
+
+def test_media_file_dry_run_audit_endpoint_rejects_invalid_limit() -> None:
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/api/media-file/dry-run-audit?limit=999")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert "limit" in response.json()["detail"]
+
+
+def test_post_media_file_validate_returns_validation_payload(tmp_path: Path) -> None:
+    dataset = tmp_path / "dataset"
+    dataset.mkdir(parents=True, exist_ok=True)
+    app.dependency_overrides[get_ingest_service] = _FakeIngestService
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/media-file/validate",
+            json={"folder_path": str(dataset), "policy_name": "FIRST_SEEN"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] == "VALIDATION_ONLY"
+    assert payload["delta"]["would_insert"] == 1
+
+
+def test_post_media_file_validate_rejects_invalid_folder(tmp_path: Path) -> None:
+    missing = tmp_path / "missing"
+    app.dependency_overrides[get_ingest_service] = _FakeIngestService
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/media-file/validate",
+            json={"folder_path": str(missing), "policy_name": None},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert "does not exist" in response.json()["detail"]
 
 
 def test_media_file_endpoints_reject_invalid_inputs() -> None:
@@ -994,12 +1139,31 @@ def test_post_run_endpoint_returns_trigger_summary() -> None:
 
     assert response.status_code == 200
     payload = response.json()
+    assert payload["mode"] == "VALIDATION_ONLY"
+    assert payload["validation_report"]["delta"]["would_update"] == 4
+    assert payload["validation_report"]["scan"]["files_scanned"] == 12
+
+
+def test_post_run_endpoint_non_dry_run_returns_execution_payload() -> None:
+    app.dependency_overrides[get_operator_run_trigger_service] = _FakeRunTriggerService
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/run",
+            json={
+                "folder_path": "/dataset",
+                "policy_name": "PREFER_ROOT",
+                "dry_run": False,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] == "EXECUTION"
     assert payload["run_id"] == "33333333-3333-3333-3333-333333333333"
-    assert payload["duplicates_found"] == 2
-    assert payload["canonical_changes"] == 1
-    assert payload["summary_metrics"]["policy_name"] == "PREFER_ROOT"
-    assert payload["summary_metrics"]["dry_run"] is True
-    assert payload["summary_metrics"]["ingest"]["files_scanned"] == 12
+    assert payload["summary_metrics"]["dry_run"] is False
 
 
 def test_post_run_endpoint_returns_bad_request_for_invalid_folder() -> None:
