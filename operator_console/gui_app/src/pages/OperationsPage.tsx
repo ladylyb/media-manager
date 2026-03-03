@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { OperationRiskLabel } from "@/components/OperationRiskLabel";
 import { JsonViewer } from "@/components/JsonViewer";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -6,7 +7,15 @@ import { ErrorAlert } from "@/components/ErrorAlert";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Loader2, Upload, Map, CheckSquare, RefreshCw, Tag, PlayCircle } from "lucide-react";
-import { runIngest, runPlan, runApply, runCanonicalRecompute, runTagEnrichment, runOperatorRun } from "@/lib/api/endpoints";
+import {
+  invalidateReadsAfterOperation,
+  runIngest,
+  runPlan,
+  runApply,
+  runCanonicalRecompute,
+  runTagEnrichment,
+  runOperatorRun,
+} from "@/lib/api/endpoints";
 import type { OperationResult } from "@/types/api";
 
 interface OpConfig {
@@ -15,6 +24,7 @@ interface OpConfig {
   description: string;
   mutating: boolean;
   icon: React.ReactNode;
+  invalidationTarget: "ingest" | "plan" | "apply" | "canonicalRecompute" | "tagEnrichment" | "operatorRun";
   inputs?: { key: string; label: string; placeholder: string; type?: string }[];
   execute: (params: Record<string, string>) => Promise<{ data: OperationResult }>;
 }
@@ -23,40 +33,49 @@ const operations: OpConfig[] = [
   {
     id: "ingest", title: "Ingest", description: "Scan filesystem for new/changed media files and register them in the ledger.", mutating: true,
     icon: <Upload className="h-5 w-5" />,
+    invalidationTarget: "ingest",
     inputs: [{ key: "folder_path", label: "Folder Path", placeholder: "/media/incoming" }],
     execute: (p) => runIngest({ folder_path: p.folder_path || undefined, dry_run: true }),
   },
   {
     id: "plan", title: "Plan", description: "Generate a deduplication and canonicalization plan based on current ledger state. Does not modify data.",
     mutating: true, icon: <Map className="h-5 w-5" />,
+    invalidationTarget: "plan",
     inputs: [{ key: "folder_path", label: "Folder Path", placeholder: "/media/incoming" }],
     execute: (p) => runPlan({ folder_path: p.folder_path || undefined, strict_metadata: false }),
   },
   {
     id: "apply", title: "Apply", description: "Apply the most recent plan, executing file moves and ledger updates. Irreversible.",
     mutating: true, icon: <CheckSquare className="h-5 w-5" />,
+    invalidationTarget: "apply",
     inputs: [{ key: "run_id", label: "Run ID", placeholder: "00000000-0000-0000-0000-000000000000" }],
     execute: (p) => runApply({ run_id: p.run_id || "", collision_mode: "rename" }),
   },
   {
     id: "canonical-recompute", title: "Canonical Recompute", description: "Recalculate canonical file selections for all duplicate groups based on current policy.",
     mutating: true, icon: <RefreshCw className="h-5 w-5" />,
+    invalidationTarget: "canonicalRecompute",
     inputs: [{ key: "policy_name", label: "Policy", placeholder: "FIRST_SEEN" }],
     execute: (p) => runCanonicalRecompute({ policy_name: p.policy_name || "FIRST_SEEN", dry_run: true }),
   },
   {
     id: "tag-enrichment", title: "Tag Enrichment", description: "Run AI-based tag enrichment on untagged canonical files.",
-    mutating: true, icon: <Tag className="h-5 w-5" />, execute: () => runTagEnrichment({ all: true, batch_size: 100, source: "system" }),
+    mutating: true,
+    icon: <Tag className="h-5 w-5" />,
+    invalidationTarget: "tagEnrichment",
+    execute: () => runTagEnrichment({ all: true, batch_size: 100, source: "system" }),
   },
   {
     id: "composite-run", title: "Composite Run", description: "Full ingest → plan → apply pipeline in a single operation. Legacy interface.",
     mutating: true, icon: <PlayCircle className="h-5 w-5" />,
+    invalidationTarget: "operatorRun",
     inputs: [{ key: "folder_path", label: "Folder Path", placeholder: "/media/incoming" }],
     execute: (p) => runOperatorRun({ folder_path: p.folder_path || undefined, policy_name: "FIRST_SEEN", dry_run: true }),
   },
 ];
 
 function OperationCard({ op }: { op: OpConfig }) {
+  const queryClient = useQueryClient();
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<OperationResult | null>(null);
@@ -70,6 +89,7 @@ function OperationCard({ op }: { op: OpConfig }) {
     try {
       const res = await op.execute(inputs);
       setResult(res.data);
+      await invalidateReadsAfterOperation(queryClient, op.invalidationTarget);
     } catch (err: any) {
       setError(err.message);
     } finally {

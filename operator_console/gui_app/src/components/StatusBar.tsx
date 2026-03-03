@@ -4,6 +4,8 @@ import type { SystemStatus } from "@/types/api";
 import { cn } from "@/lib/utils";
 import { Activity, RefreshCw } from "lucide-react";
 
+const STATUS_POLL_INTERVAL_MS = 120_000;
+
 export function StatusBar() {
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
@@ -23,9 +25,34 @@ export function StatusBar() {
   };
 
   useEffect(() => {
-    refresh();
-    const interval = setInterval(refresh, 30000);
-    return () => clearInterval(interval);
+    let isMounted = true;
+
+    const safeRefresh = async () => {
+      if (!isMounted || document.visibilityState !== "visible") {
+        return;
+      }
+      await refresh();
+    };
+
+    void safeRefresh();
+
+    const interval = window.setInterval(() => {
+      void safeRefresh();
+    }, STATUS_POLL_INTERVAL_MS);
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void refresh();
+      }
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      isMounted = false;
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, []);
 
   return (
