@@ -75,8 +75,14 @@ Safety:
 - hard-blocked unless `MEDIA_MANAGER_ENV` is `dev` or `test`
 - `--challenge-word` required unless `--dry-run`
 - truncates data tables only; does not modify Alembic migration state
+- optional override: `MEDIA_MANAGER_DB_RESET_CHALLENGE_WORD` (default `media-manager`)
+- optional scope expansion: `MEDIA_MANAGER_DB_RESET_INCLUDE_DYNAMIC=true` (destructive, use only in isolated dev/test DBs)
 
 Exit codes:
 - `0`: success
 - `1`: semantic failure from API response
 - `2`: invalid CLI args or transport/parse failure
+
+## Environment Variables
+
+See [Environment Variables](../reference/environment-variables.md) for complete CLI/runtime configuration defaults and accepted values.

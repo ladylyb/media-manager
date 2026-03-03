@@ -7,13 +7,18 @@ This walkthrough gets you from install to a completed deterministic run.
 ```bash
 source .venv/bin/activate
 pip install -e ".[dev]"
+cp .env.sample .env
 ```
 
-Set database config if needed:
+Edit `.env` with your PostgreSQL URLs:
 
 ```bash
-export DATABASE_URL='postgresql+psycopg://user:password@localhost:5432/media_manager'
+DATABASE_URL='postgresql+psycopg://user:password@localhost:5432/media_manager'
+TEST_DATABASE_URL='postgresql+psycopg://user:password@localhost:5432/media_manager_test'
 ```
+
+`media-manager` loads repo `.env` automatically.  
+For all variables and defaults, see [Environment Variables](../reference/environment-variables.md).
 
 ## 2. Select Input Path
 

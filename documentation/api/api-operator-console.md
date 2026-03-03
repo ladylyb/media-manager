@@ -60,6 +60,8 @@ Rules:
 - `dry_run=true`: preview only, no data deletion.
 - `dry_run=false`: `challenge_word` must match exactly.
 - hard blocked unless `MEDIA_MANAGER_ENV` is `dev` or `test`.
+- optional server-side challenge override: `MEDIA_MANAGER_DB_RESET_CHALLENGE_WORD`.
+- optional destructive scope expansion: `MEDIA_MANAGER_DB_RESET_INCLUDE_DYNAMIC=true`.
 
 Result payload in envelope `data.result`:
 
@@ -258,6 +260,10 @@ Response fields:
 ### `POST /api/run` dry-run behavior
 
 `POST /api/run` now returns a validation-only payload when `dry_run=true`:
+
+## Environment Variables
+
+See [Environment Variables](../reference/environment-variables.md) for all Operator Console/runtime env flags, including metrics and admin safety controls.
 
 ```json
 {
