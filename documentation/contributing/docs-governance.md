@@ -12,11 +12,13 @@ Applies to all content under `documentation/`.
 2. Reference docs: stable technical lookup material.
 3. API docs: generated module-level reference.
 4. Architecture docs: behavior model and ADRs.
-5. Legacy archive docs: historical, non-primary material retained outside the published docs tree.
+5. Legacy archive docs: historical, non-primary material retained via frozen git refs.
 
 ## Legacy Documentation Policy
 
-- Canonical legacy location is `archive/legacy/docs/`.
+- Canonical legacy source is frozen refs:
+  - Branch `archive/legacy-freeze-YYYYMMDD`
+  - Tag `legacy-freeze-YYYYMMDD`
 - Legacy documentation must not be linked from files under `documentation/`.
 - Legacy documentation must not be included in `mkdocs.yml` navigation.
 - Any historical note in published docs must be plain text (non-link) unless superseded by an active current-doc page.
@@ -26,7 +28,7 @@ Applies to all content under `documentation/`.
 - Behavior change: update workflow docs and relevant runbooks.
 - Architecture change: add new ADR and update architecture overview links.
 - Schema/lifecycle change: update operator guides and reference docs.
-- Deprecated content: move to `archive/legacy/docs/` and mark as non-primary.
+- Deprecated content: stage in a release PR, then archive via freeze branch/tag before deletion from `develop`.
 
 ## ADR Rules
 

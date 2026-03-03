@@ -18,7 +18,7 @@ This folder contains the structured documentation system for media-manager.
 ## Planning and Historical Context
 
 - [Roadmap](roadmap/index.md)
-- Historical legacy documentation is stored in the repository archive (`archive/legacy/docs/`) and is not linked from the published site.
+- Historical legacy documentation is retained via frozen refs (`archive/legacy-freeze-*` branch and `legacy-freeze-*` tag) and is not linked from the published site.
 
 ## Authority Rules
 
