@@ -1,0 +1,53 @@
+name: Tests Full
+
+on:
+  push:
+    branches:
+      - develop
+  schedule:
+    - cron: "15 2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: tests-full-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  full-pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: media_manager_test
+        options: >-
+          --health-cmd "pg_isready -U postgres -d media_manager_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/media_manager_test
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/media_manager_test
+      MEDIA_MANAGER_ENV: test
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,operator_console]"
+
+      - name: Run full pytest suite
+        run: pytest -q

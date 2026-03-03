@@ -1,0 +1,80 @@
+name: Tests Fast
+
+on:
+  pull_request:
+  push:
+    branches:
+      - develop
+
+concurrency:
+  group: tests-fast-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-fast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: media_manager_test
+        options: >-
+          --health-cmd "pg_isready -U postgres -d media_manager_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/media_manager_test
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/media_manager_test
+      MEDIA_MANAGER_ENV: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,operator_console]"
+
+      - name: Run fast Python test suite
+        run: |
+          pytest -q \
+            operator_console/tests/test_main.py \
+            media_manager/tests/test_env_sample_sync.py \
+            media_manager/tests/test_service_layer_operations.py
+
+  gui-fast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: operator_console/gui_app/package-lock.json
+
+      - name: Install GUI dependencies
+        working-directory: operator_console/gui_app
+        run: npm ci
+
+      - name: Run GUI tests
+        working-directory: operator_console/gui_app
+        run: npm run test
+
+      - name: Build GUI assets
+        working-directory: operator_console/gui_app
+        run: npm run build
