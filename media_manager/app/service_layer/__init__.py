@@ -1,5 +1,6 @@
 """Service-layer public exports."""
 
+from media_manager.app.service_layer.admin import AdminServices
 from media_manager.app.service_layer.cache import ServiceCache
 from media_manager.app.service_layer.contracts import ServiceEnvelope, ServiceError, iso_now
 from media_manager.app.service_layer.errors import ServiceLayerException, map_exception
@@ -10,6 +11,7 @@ from media_manager.app.service_layer.versioning import WORKFLOW_VERSION, compute
 __all__ = [
     "OperationServices",
     "ReadServices",
+    "AdminServices",
     "ServiceCache",
     "ServiceEnvelope",
     "ServiceError",

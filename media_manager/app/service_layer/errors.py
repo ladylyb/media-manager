@@ -12,7 +12,7 @@ from media_manager.app.core.errors import (
 from media_manager.app.service_layer.contracts import ServiceError
 
 
-@dataclass(frozen=True)
+@dataclass
 class ServiceLayerException(Exception):
     code: str
     message: str
