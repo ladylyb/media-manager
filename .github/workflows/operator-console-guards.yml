@@ -15,6 +15,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
       - name: Enforce subtree guard for gui_upstream
         run: bash tools/ci/check_gui_upstream_subtree_guard.sh
 
