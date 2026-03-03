@@ -159,6 +159,16 @@
     }
   }
 
+  function envelopeData(payload) {
+    if (!payload || typeof payload !== "object") {
+      return {};
+    }
+    if (payload.data && typeof payload.data === "object") {
+      return payload.data;
+    }
+    return {};
+  }
+
   function formatMs(value) {
     if (typeof value !== "number" || Number.isNaN(value)) {
       return "--";
@@ -195,19 +205,20 @@
 
   async function loadDashboardSummary() {
     try {
-      const response = await fetch("/api/dashboard-summary", {
+      const response = await fetch("/api/v2/dashboard-summary", {
         headers: { Accept: "application/json" },
       });
       if (!response.ok) {
         throw new Error(`dashboard-summary status ${response.status}`);
       }
       const payload = await response.json();
-      setText("total-files", String(payload.total_files ?? "--"));
-      setText("total-images", String(payload.total_images ?? "--"));
-      setText("total-videos", String(payload.total_videos ?? "--"));
-      setText("duplicate-groups", String(payload.duplicate_groups ?? "--"));
-      setText("canonical-files", String(payload.canonical_files ?? "--"));
-      setText("total-runs", String(payload.total_runs ?? "--"));
+      const result = envelopeData(payload).result || {};
+      setText("total-files", String(result.total_files ?? "--"));
+      setText("total-images", String(result.total_images ?? "--"));
+      setText("total-videos", String(result.total_videos ?? "--"));
+      setText("duplicate-groups", String(result.duplicate_groups ?? "--"));
+      setText("canonical-files", String(result.canonical_files ?? "--"));
+      setText("total-runs", String(result.total_runs ?? "--"));
       setText("summary-error", "");
     } catch (error) {
       setText("summary-error", "Unable to load library summary.");
@@ -216,19 +227,20 @@
 
   async function loadLatestMetrics() {
     try {
-      const response = await fetch("/api/latest-metrics", {
+      const response = await fetch("/api/v2/latest-metrics", {
         headers: { Accept: "application/json" },
       });
       if (!response.ok) {
         throw new Error(`latest-metrics status ${response.status}`);
       }
       const payload = await response.json();
-      setText("ingest-time-ms", formatMs(payload.ingest_time_ms));
-      setText("plan-time-ms", formatMs(payload.plan_time_ms));
-      setText("apply-time-ms", formatMs(payload.apply_time_ms));
-      setText("db-time-ms", formatMs(payload.db_time_ms));
-      setText("cache-hit-rate", formatPercent(payload.cache_hit_rate));
-      applyRegressionBadge(payload.last_regression_status);
+      const result = envelopeData(payload).result || {};
+      setText("ingest-time-ms", formatMs(result.ingest_time_ms));
+      setText("plan-time-ms", formatMs(result.plan_time_ms));
+      setText("apply-time-ms", formatMs(result.apply_time_ms));
+      setText("db-time-ms", formatMs(result.db_time_ms));
+      setText("cache-hit-rate", formatPercent(result.cache_hit_rate));
+      applyRegressionBadge(result.last_regression_status);
       setText("metrics-error", "");
     } catch (error) {
       setText("metrics-error", "Unable to load performance metrics.");
@@ -271,13 +283,14 @@
   }
 
   function renderRunSummary(payload) {
+    const result = envelopeData(payload).result || {};
     const summary = document.getElementById("run-summary");
     if (summary) {
       summary.classList.remove("hidden");
     }
 
-    if ((payload.mode || "") === "VALIDATION_ONLY") {
-      const report = payload.validation_report || {};
+    if ((result.mode || "") === "VALIDATION_ONLY") {
+      const report = result.validation_report || {};
       const scan = report.scan || {};
       const delta = report.delta || {};
       setText("run-result-run-id", "VALIDATION_ONLY");
@@ -292,12 +305,12 @@
       return;
     }
 
-    const metrics = payload.summary_metrics || {};
+    const metrics = result.summary_metrics || {};
     const ingest = metrics.ingest || {};
-    const duplicatesFound = payload.duplicates_found;
-    const canonicalChanges = payload.canonical_changes;
+    const duplicatesFound = result.duplicates_found;
+    const canonicalChanges = result.canonical_changes;
 
-    setText("run-result-run-id", String(payload.run_id ?? "--"));
+    setText("run-result-run-id", String(result.run_id ?? "--"));
     setText("run-result-policy", String(metrics.policy_name ?? "--"));
     setText("run-result-dry-run", String(metrics.dry_run ?? "--"));
     setText("run-result-duplicates-found", String(duplicatesFound ?? "--"));
@@ -321,7 +334,7 @@
     };
 
     try {
-      const response = await fetch("/api/run", {
+      const response = await fetch("/api/v2/run", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -334,7 +347,12 @@
         let message = `Run trigger failed (${response.status})`;
         try {
           const errorPayload = await response.json();
-          if (errorPayload && typeof errorPayload.detail === "string") {
+          if (errorPayload && Array.isArray(errorPayload.errors) && errorPayload.errors.length > 0) {
+            const first = errorPayload.errors[0];
+            if (first && typeof first.message === "string" && first.message.length > 0) {
+              message = first.message;
+            }
+          } else if (errorPayload && typeof errorPayload.detail === "string") {
             message = errorPayload.detail;
           }
         } catch (error) {

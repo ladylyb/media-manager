@@ -62,6 +62,16 @@
 <script>
   let currentVersion = 0;
 
+  function envelopeData(payload) {
+    if (!payload || typeof payload !== "object") {
+      return {};
+    }
+    if (payload.data && typeof payload.data === "object") {
+      return payload.data;
+    }
+    return {};
+  }
+
   function showSuccess(message) {
     const success = document.getElementById("policy-success");
     const error = document.getElementById("policy-error");
@@ -161,14 +171,14 @@
   }
 
   async function loadPolicy() {
-    const response = await fetch("/api/policy", {
+    const response = await fetch("/api/v2/policy", {
       headers: { Accept: "application/json" },
     });
     if (!response.ok) {
       throw new Error(`policy load failed (${response.status})`);
     }
     const payload = await response.json();
-    populateForm(payload);
+    populateForm(envelopeData(payload).result || {});
   }
 
   async function savePolicy(event) {
@@ -185,7 +195,7 @@
       version: currentVersion,
     };
 
-    const response = await fetch("/api/policy", {
+    const response = await fetch("/api/v2/policy", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -198,7 +208,12 @@
       let detail = "Unable to save policy settings.";
       try {
         const errorPayload = await response.json();
-        if (typeof errorPayload.detail === "string" && errorPayload.detail.length > 0) {
+        if (Array.isArray(errorPayload.errors) && errorPayload.errors.length > 0) {
+          const first = errorPayload.errors[0];
+          if (first && typeof first.message === "string" && first.message.length > 0) {
+            detail = first.message;
+          }
+        } else if (typeof errorPayload.detail === "string" && errorPayload.detail.length > 0) {
           detail = errorPayload.detail;
         }
       } catch (error) {
@@ -211,8 +226,9 @@
     }
 
     const result = await response.json();
-    populateForm(result);
-    showSuccess(String(result.message ?? "Policy settings saved."));
+    const policyPayload = envelopeData(result).result || {};
+    populateForm(policyPayload);
+    showSuccess("Policy settings saved.");
   }
 
   document.addEventListener("DOMContentLoaded", async () => {

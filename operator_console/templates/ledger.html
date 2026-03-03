@@ -191,6 +191,16 @@
 </section>
 
 <script>
+  function envelopeData(payload) {
+    if (!payload || typeof payload !== "object") {
+      return {};
+    }
+    if (payload.data && typeof payload.data === "object") {
+      return payload.data;
+    }
+    return {};
+  }
+
   const state = {
     mode: "hash",
     input: "",
@@ -415,14 +425,15 @@
     params.set("sample_limit", "20");
 
     try {
-      const response = await fetch(`/api/v1/ledger/hash-audit?${params.toString()}`, {
+      const response = await fetch(`/api/v2/ledger/hash-audit?${params.toString()}`, {
         headers: { Accept: "application/json" },
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.detail || `status ${response.status}`);
       }
-      renderHashAudit(await response.json());
+      const payload = await response.json();
+      renderHashAudit(envelopeData(payload).result || {});
     } catch (error) {
       if (statusNode) {
         statusNode.textContent = "Failed";
@@ -435,12 +446,13 @@
   async function loadAnalytics() {
     clearAnalyticsError();
     try {
-      const response = await fetch("/api/media-file/analytics", { headers: { Accept: "application/json" } });
+      const response = await fetch("/api/v2/media-file/analytics", { headers: { Accept: "application/json" } });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.detail || `status ${response.status}`);
       }
-      renderAnalytics(await response.json());
+      const payload = await response.json();
+      renderAnalytics(envelopeData(payload).result || {});
     } catch (error) {
       setAnalyticsError(error instanceof Error ? error.message : "Unable to load analytics.");
     }
@@ -468,18 +480,18 @@
 
     if (state.mode === "hash") {
       params.set("hash_prefix", state.input.trim());
-      return `/api/media-file/by-hash?${params.toString()}`;
+      return `/api/v2/media-file/by-hash?${params.toString()}`;
     }
     if (state.mode === "history") {
       params.set("path", state.input.trim());
-      return `/api/media-file/history?${params.toString()}`;
+      return `/api/v2/media-file/history?${params.toString()}`;
     }
     if (state.mode === "status") {
       params.set("status", state.status);
-      return `/api/media-file/by-status?${params.toString()}`;
+      return `/api/v2/media-file/by-status?${params.toString()}`;
     }
     params.set("path", state.input.trim());
-    return `/api/media-file/reappearances?${params.toString()}`;
+    return `/api/v2/media-file/reappearances?${params.toString()}`;
   }
 
   async function loadRows(pushState = true) {
@@ -492,9 +504,10 @@
         throw new Error(payload.detail || `status ${response.status}`);
       }
       const payload = await response.json();
-      state.page = Number.isFinite(payload.page) ? payload.page : state.page;
-      state.totalPages = Number.isFinite(payload.total_pages) ? payload.total_pages : 0;
-      renderRows(payload.items || []);
+      const result = envelopeData(payload).result || {};
+      state.page = Number.isFinite(result.page) ? result.page : state.page;
+      state.totalPages = Number.isFinite(result.total_pages) ? result.total_pages : 0;
+      renderRows(result.items || []);
       const indicator = byId("ledger-page-indicator");
       if (indicator) indicator.textContent = `Page ${state.page} of ${state.totalPages}`;
       const prev = byId("ledger-prev");

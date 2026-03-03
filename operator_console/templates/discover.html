@@ -84,6 +84,16 @@
 </section>
 
 <script>
+  function envelopeData(payload) {
+    if (!payload || typeof payload !== "object") {
+      return {};
+    }
+    if (payload.data && typeof payload.data === "object") {
+      return payload.data;
+    }
+    return {};
+  }
+
   const initialPayload = {{ initial_payload | tojson }};
   const initialTagsCsv = {{ initial_tags_csv | tojson }};
   const initialSortBy = {{ initial_sort_by | tojson }};
@@ -254,12 +264,13 @@
       params.set("sort_by", state.sortBy);
       params.set("sort_order", state.sortOrder);
       if (state.tags.length) params.set("tags", state.tags.join(","));
-      const response = await fetch(`/api/canonical?${params.toString()}`, { headers: { Accept: "application/json" } });
+      const response = await fetch(`/api/v2/canonical?${params.toString()}`, { headers: { Accept: "application/json" } });
       if (!response.ok) throw new Error(`status ${response.status}`);
       const payload = await response.json();
-      state.page = Number.isFinite(payload.page) ? payload.page : state.page;
-      state.totalPages = Number.isFinite(payload.total_pages) ? payload.total_pages : 0;
-      renderCards(payload.items || []);
+      const result = envelopeData(payload).result || {};
+      state.page = Number.isFinite(result.page) ? result.page : state.page;
+      state.totalPages = Number.isFinite(result.total_pages) ? result.total_pages : 0;
+      renderCards(result.items || []);
       renderPagination();
       if (pushState) syncUrl();
     } catch (_error) {
@@ -288,14 +299,15 @@
       panel.innerHTML = "";
       return;
     }
-    const response = await fetch(`/api/canonical/tags?q=${encodeURIComponent(query)}&limit=10`, { headers: { Accept: "application/json" } });
+    const response = await fetch(`/api/v2/canonical/tags?q=${encodeURIComponent(query)}&limit=10`, { headers: { Accept: "application/json" } });
     if (!response.ok) {
       panel.classList.add("hidden");
       panel.innerHTML = "";
       return;
     }
     const payload = await response.json();
-    const items = Array.isArray(payload.items) ? payload.items : [];
+    const result = envelopeData(payload).result || {};
+    const items = Array.isArray(result.items) ? result.items : [];
     panel.innerHTML = "";
     if (!items.length) {
       panel.classList.add("hidden");
