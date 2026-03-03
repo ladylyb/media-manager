@@ -40,6 +40,16 @@ class IngestSummary:
     metadata_extracted: int
     duration_s: float
 
+    def to_dict(self) -> dict[str, int | float]:
+        return {
+            "files_scanned": self.files_scanned,
+            "new_contents": self.new_contents,
+            "new_instances": self.new_instances,
+            "duplicates_detected": self.duplicates_detected,
+            "metadata_extracted": self.metadata_extracted,
+            "duration_s": self.duration_s,
+        }
+
 
 @dataclass(frozen=True)
 class IngestValidationDelta:

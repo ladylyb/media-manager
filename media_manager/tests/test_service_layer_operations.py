@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 
 import media_manager.app.service_layer.operations as operations_module
+from media_manager.app.persistence.ingest import IngestSummary
 from media_manager.app.service_layer.operations import OperationServices
 
 
@@ -49,8 +50,15 @@ def test_ingest_execute_invalidates_caches(tmp_path: Path, monkeypatch: pytest.M
         def __init__(self, _session_factory) -> None:
             pass
 
-        def ingest_path(self, _root: Path) -> SimpleNamespace:
-            return SimpleNamespace(to_dict=lambda: {"files_scanned": 3})
+        def ingest_path(self, _root: Path) -> IngestSummary:
+            return IngestSummary(
+                files_scanned=3,
+                new_contents=1,
+                new_instances=2,
+                duplicates_detected=0,
+                metadata_extracted=3,
+                duration_s=0.25,
+            )
 
     monkeypatch.setattr(operations_module, "IngestService", _FakeIngestService)
     cache = _FakeCache(invalidations=[])
@@ -60,6 +68,11 @@ def test_ingest_execute_invalidates_caches(tmp_path: Path, monkeypatch: pytest.M
 
     assert payload["mode"] == "EXECUTION"
     assert payload["summary"]["files_scanned"] == 3
+    assert payload["summary"]["new_contents"] == 1
+    assert payload["summary"]["new_instances"] == 2
+    assert payload["summary"]["duplicates_detected"] == 0
+    assert payload["summary"]["metadata_extracted"] == 3
+    assert payload["summary"]["duration_s"] == 0.25
     assert ("dashboard_summary", "latest_metrics", "status") in cache.invalidations
 
 

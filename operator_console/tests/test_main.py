@@ -537,6 +537,14 @@ class _FakeOperationServices:
             "operation": "INGEST",
             "mode": "VALIDATION_ONLY" if dry_run else "EXECUTION",
             "report": {"scan": {"files_scanned": 3}},
+            "summary": {
+                "files_scanned": 3,
+                "new_contents": 1,
+                "new_instances": 2,
+                "duplicates_detected": 0,
+                "metadata_extracted": 3,
+                "duration_s": 0.25,
+            },
             "folder_path": folder_path,
         }
 
@@ -1546,6 +1554,25 @@ def test_post_ingest_v2_returns_service_envelope() -> None:
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert response.json()["data"]["result"]["operation"] == "INGEST"
+
+
+def test_post_ingest_v2_execute_returns_summary_fields() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post("/api/v2/ingest", json={"folder_path": "/dataset", "dry_run": False})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()["data"]["result"]
+    assert payload["mode"] == "EXECUTION"
+    assert payload["summary"]["files_scanned"] == 3
+    assert payload["summary"]["new_contents"] == 1
+    assert payload["summary"]["new_instances"] == 2
+    assert payload["summary"]["duplicates_detected"] == 0
+    assert payload["summary"]["metadata_extracted"] == 3
+    assert payload["summary"]["duration_s"] == 0.25
 
 
 def test_post_plan_v2_returns_service_envelope() -> None:
