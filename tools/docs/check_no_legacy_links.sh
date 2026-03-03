@@ -28,4 +28,11 @@ if rg -n "$FORBIDDEN_LINK_PATTERN" documentation >/dev/null; then
   exit 1
 fi
 
+TARGET_BRANCH="${GITHUB_BASE_REF:-$(git rev-parse --abbrev-ref HEAD)}"
+if [[ "$TARGET_BRANCH" == "develop" ]] && find documentation/project -type f -name '*.md' 2>/dev/null | rg -q .; then
+  echo "[docs-guard] ERROR: documentation/project/** must not exist on develop-targeted changes"
+  find documentation/project -type f -name '*.md' 2>/dev/null
+  exit 1
+fi
+
 echo "[docs-guard] OK: no legacy/archive nav entries or published links found."

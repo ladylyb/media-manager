@@ -84,5 +84,6 @@ nav:
   - Contributing:
       - Overview: contributing/index.md
       - Documentation Governance: contributing/docs-governance.md
+      - Legacy Freeze Manifest: contributing/legacy-freeze-manifest-20260303.md
   - Roadmap:
       - Documentation Roadmap: roadmap/index.md
