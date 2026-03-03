@@ -84,8 +84,3 @@ nav:
       - Documentation Governance: contributing/docs-governance.md
   - Roadmap:
       - Documentation Roadmap: roadmap/index.md
-  - Archive:
-      - Archive Overview: archive/index.md
-      - Archived Project History: archive/project-history.md
-      - Legacy Implementation Archive: archive/legacy-implementation.md
-      - Archive Retention Policy: archive/retention-policy.md
