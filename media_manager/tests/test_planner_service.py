@@ -30,11 +30,15 @@ def _write_file(path: Path, payload: bytes) -> Path:
 
 
 def test_duplicate_identity_and_canonical_selection(tmp_path: Path, session_factory) -> None:
+    run_service = RunService(session_factory)
+    planner = PlanningService(session_factory)
     ingest = IngestService(session_factory)
     first = _write_file(tmp_path / "a.jpg", b"same-content")
     second = _write_file(tmp_path / "b.jpg", b"same-content")
 
     ingest.ingest_paths([first, second])
+    run = run_service.create_run()
+    planner.plan_run(run.id, [first, second], ingest_if_needed=False)
     with session_factory() as session:
         contents = session.scalars(select(FileContent)).all()
         instances = session.scalars(select(FileInstance).order_by(FileInstance.absolute_path)).all()

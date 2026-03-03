@@ -22,6 +22,7 @@ from media_manager.app.core.state_machine import RunState, validate_transition
 from media_manager.app.observability import record_planner_metrics, record_planner_stage_duration
 from media_manager.app.persistence.base import transactional_session
 from media_manager.app.persistence.decision_intelligence import build_decision_traces, write_decision_trace_artifact
+from media_manager.app.persistence.discovery import process_all_discovery_in_session, process_discovery_paths_in_session
 from media_manager.app.persistence.ingest import ingest_paths_in_session
 from media_manager.app.persistence.models import (
     CanonicalAssignment,
@@ -127,10 +128,16 @@ class PlanningService:
                 )
 
                 t_load_candidates = perf_counter()
-                rows = self._load_candidate_instances(session, input_paths)
                 if input_paths and ingest_if_needed:
                     ingest_paths_in_session(session, sorted(input_paths, key=lambda p: p.resolve(strict=False).as_posix()))
-                    rows = self._load_candidate_instances(session, input_paths)
+                if input_paths:
+                    process_discovery_paths_in_session(
+                        session,
+                        sorted(input_paths, key=lambda p: p.resolve(strict=False).as_posix()),
+                    )
+                else:
+                    process_all_discovery_in_session(session)
+                rows = self._load_candidate_instances(session, input_paths)
                 base_root = self._determine_base_root([Path(row.absolute_path) for row in rows])
                 load_candidates_duration_s = perf_counter() - t_load_candidates
 

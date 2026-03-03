@@ -1,8 +1,7 @@
-"""Ingestion service for Phase 7 identity-first architecture."""
+"""Ingestion service for Phase 13 ledger + legacy identity architecture."""
 
 from __future__ import annotations
 
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
@@ -10,15 +9,19 @@ from time import perf_counter
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from media_manager.app.canonical.context import CanonicalContext
-from media_manager.app.canonical.factory import build_canonical_policy, resolve_default_policy_name
 from media_manager.app.core.hashing import sha256_file
 from media_manager.app.core.logging_config import get_logger
 import media_manager.app.core.metadata_extractor as metadata_extractor
 from media_manager.app.observability import record_ingest_metrics, record_ingest_structured_metrics
 from media_manager.app.persistence.base import transactional_session
-from media_manager.app.persistence.canonicalization import append_assignment, get_active_assignment
-from media_manager.app.persistence.models import FileContent, FileInstance, FileInstanceStatus, MediaMetadata
+from media_manager.app.persistence.models import (
+    FileContent,
+    FileInstance,
+    FileInstanceStatus,
+    MediaFile,
+    MediaFileStatus,
+    MediaMetadata,
+)
 
 logger = get_logger(__name__)
 
@@ -39,35 +42,88 @@ class _IngestLatencySamples:
     db_write_latencies_ms: list[float]
 
 
-def ensure_canonical_assignment(session: Session, content_id: uuid.UUID) -> uuid.UUID | None:
-    active = get_active_assignment(session, content_id)
-    if active is not None:
-        return active.canonical_instance_id
+def _upsert_media_file_ledger(
+    session: Session,
+    *,
+    absolute_path: str,
+    digest: str,
+    size_bytes: int,
+) -> None:
+    """
+    media_file is an ingestion tracking ledger only.
+    Canonical authority remains in legacy tables.
+    No canonical decisions are mirrored here in Phase 13.
+    """
 
-    instances = session.scalars(
-        select(FileInstance)
-        .where(FileInstance.content_id == content_id)
-        .order_by(FileInstance.first_seen_at.asc(), FileInstance.absolute_path.asc(), FileInstance.file_instance_id.asc())
-    ).all()
-    if not instances:
-        return None
-
-    policy = build_canonical_policy(resolve_default_policy_name())
-    selected = policy.select(str(content_id), instances, CanonicalContext())
-    row = append_assignment(
-        session,
-        content_id=content_id,
-        canonical_instance_id=selected.file_instance_id,
-        policy_name=policy.name,
-        policy_version=policy.version,
+    row = session.scalar(
+        select(MediaFile)
+        .where(
+            MediaFile.current_path == absolute_path,
+            MediaFile.status != MediaFileStatus.DELETED.value,
+        )
+        .with_for_update()
     )
-    return row.canonical_instance_id
+    if row is None:
+        session.add(
+            MediaFile(
+                discovered_path=absolute_path,
+                current_path=absolute_path,
+                size_bytes=size_bytes,
+                hash_sha256=digest,
+                discovered_at=func.now(),
+                status=MediaFileStatus.INGESTED.value,
+                quarantined_at=None,
+                deleted_at=None,
+                ingested_at=func.now(),
+            )
+        )
+        return
+
+    row.current_path = absolute_path
+    row.size_bytes = size_bytes
+    row.hash_sha256 = digest
+    row.status = MediaFileStatus.INGESTED.value
+    row.ingested_at = func.now()
+
+
+def _mark_missing_paths_deleted_for_root(
+    session: Session,
+    *,
+    root: Path,
+    observed_paths: set[str],
+) -> None:
+    root_path = root.resolve(strict=False)
+    live_rows = session.scalars(
+        select(MediaFile)
+        .where(
+            MediaFile.current_path.is_not(None),
+            MediaFile.status.in_([MediaFileStatus.INGESTED.value, MediaFileStatus.PROCESSED.value]),
+        )
+        .with_for_update()
+    ).all()
+    for row in live_rows:
+        path = row.current_path
+        if path is None:
+            continue
+        path_obj = Path(path)
+        # DELETED is strictly a filesystem observation for authoritative root scans.
+        try:
+            within_root = path_obj.resolve(strict=False).is_relative_to(root_path)
+        except Exception:
+            within_root = False
+        if not within_root:
+            continue
+        if path in observed_paths:
+            continue
+        row.status = MediaFileStatus.DELETED.value
+        row.deleted_at = func.now()
 
 
 def ingest_paths_in_session(
     session: Session,
     files: list[Path],
     *,
+    authoritative_root: Path | None = None,
     latency_samples: _IngestLatencySamples | None = None,
 ) -> IngestSummary:
     t_start = perf_counter()
@@ -76,6 +132,7 @@ def ingest_paths_in_session(
     new_instances = 0
     duplicates = 0
     metadata_extracted = 0
+    observed_paths: set[str] = set()
 
     for candidate in files:
         if not candidate.exists() or not candidate.is_file():
@@ -87,8 +144,12 @@ def ingest_paths_in_session(
         if latency_samples is not None:
             latency_samples.hash_latencies_ms.append(hash_latency_ms)
         absolute_path = str(candidate.resolve(strict=False))
+        observed_paths.add(absolute_path)
+        size_bytes = int(candidate.stat().st_size)
 
         t_db_start = perf_counter()
+        _upsert_media_file_ledger(session, absolute_path=absolute_path, digest=digest, size_bytes=size_bytes)
+
         content = session.scalar(select(FileContent).where(FileContent.sha256_hash == digest).with_for_update())
         content_was_new = False
         if content is None:
@@ -128,11 +189,12 @@ def ingest_paths_in_session(
                 rows = metadata_extractor.extract_file_metadata(candidate, digest)
                 metadata_extractor.upsert_metadata_for_content(session, rows, content.content_id)
                 metadata_extracted += len(rows)
-
-        ensure_canonical_assignment(session, content.content_id)
         db_write_latency_ms = (perf_counter() - t_db_start) * 1000.0
         if latency_samples is not None:
             latency_samples.db_write_latencies_ms.append(db_write_latency_ms)
+
+    if authoritative_root is not None:
+        _mark_missing_paths_deleted_for_root(session, root=authoritative_root, observed_paths=observed_paths)
 
     duration_s = perf_counter() - t_start
     logger.info(
@@ -163,12 +225,19 @@ class IngestService:
         self._session_factory = session_factory
 
     def ingest_path(self, root: Path) -> IngestSummary:
-        return self.ingest_paths(self.collect_files(root))
+        files = self.collect_files(root)
+        authoritative_root = root if root.is_dir() else None
+        return self.ingest_paths(files, authoritative_root=authoritative_root)
 
-    def ingest_paths(self, files: list[Path]) -> IngestSummary:
+    def ingest_paths(self, files: list[Path], *, authoritative_root: Path | None = None) -> IngestSummary:
         latency_samples = _IngestLatencySamples(hash_latencies_ms=[], db_write_latencies_ms=[])
         with transactional_session(self._session_factory) as session:
-            summary = ingest_paths_in_session(session, files, latency_samples=latency_samples)
+            summary = ingest_paths_in_session(
+                session,
+                files,
+                authoritative_root=authoritative_root,
+                latency_samples=latency_samples,
+            )
         # Ingest is not currently run-bound, so run_id is explicitly stable as "none".
         try:
             record_ingest_metrics(run_id="none", files_scanned=summary.files_scanned, new_contents=summary.new_contents)
