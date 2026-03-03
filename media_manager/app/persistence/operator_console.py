@@ -20,10 +20,18 @@ from media_manager.app.persistence.discovery_query import (
     DiscoveryQueryParams,
     DiscoveryQueryService,
 )
+from media_manager.app.persistence.media_file_queries import (
+    get_history_by_path,
+    get_reappearances_after_deleted,
+    get_rows_by_hash,
+    get_rows_by_status,
+)
 from media_manager.app.persistence.models import (
     CanonicalAssignment,
     FileInstance,
     FileInstanceStatus,
+    MediaFile,
+    MediaFileStatus,
     PlannedAction,
     Run,
     Tag,
@@ -211,6 +219,56 @@ class CanonicalGalleryDetail:
             "file_type": self.file_type,
             "media_url": self.media_url,
             "absolute_path": self.absolute_path,
+        }
+
+
+@dataclass(frozen=True)
+class MediaFileLedgerItem:
+    """Read-only Phase 13 media_file ledger row for operator diagnostics."""
+
+    id: str
+    current_path: str | None
+    discovered_path: str | None
+    size_bytes: int | None
+    hash_sha256: str | None
+    status: str
+    discovered_at: str
+    ingested_at: str | None
+    deleted_at: str | None
+
+    def to_dict(self) -> dict[str, str | int | None]:
+        """Return a JSON-serializable mapping."""
+        return {
+            "id": self.id,
+            "current_path": self.current_path,
+            "discovered_path": self.discovered_path,
+            "size_bytes": self.size_bytes,
+            "hash_sha256": self.hash_sha256,
+            "status": self.status,
+            "discovered_at": self.discovered_at,
+            "ingested_at": self.ingested_at,
+            "deleted_at": self.deleted_at,
+        }
+
+
+@dataclass(frozen=True)
+class MediaFileLedgerPage:
+    """Deterministic paginated ledger rows for `/api/media-file/*` endpoints."""
+
+    total_count: int
+    page: int
+    limit: int
+    total_pages: int
+    items: tuple[MediaFileLedgerItem, ...]
+
+    def to_dict(self) -> dict[str, int | list[dict[str, str | int | None]]]:
+        """Return a JSON-serializable mapping."""
+        return {
+            "total_count": self.total_count,
+            "page": self.page,
+            "limit": self.limit,
+            "total_pages": self.total_pages,
+            "items": [item.to_dict() for item in self.items],
         }
 
 
@@ -441,6 +499,36 @@ class OperatorConsoleReadService:
                 stmt = stmt.order_by(Tag.normalized_name.asc())
             stmt = stmt.limit(bounded_limit)
             return tuple(session.scalars(stmt).all())
+
+    def get_media_file_by_hash_page(self, *, hash_prefix: str, page: int = 1, limit: int = 30) -> MediaFileLedgerPage:
+        """Return paginated ledger rows by exact SHA-256 hash or literal prefix."""
+        with self._session_factory() as session:
+            rows = get_rows_by_hash(session, hash_prefix)
+        return self._paginate_media_file_rows(rows, page=page, limit=limit)
+
+    def get_media_file_history_page(self, *, path: str, page: int = 1, limit: int = 30) -> MediaFileLedgerPage:
+        """Return paginated ledger history rows for current/discovered path matches."""
+        with self._session_factory() as session:
+            rows = get_history_by_path(session, path)
+        return self._paginate_media_file_rows(rows, page=page, limit=limit)
+
+    def get_media_file_by_status_page(
+        self,
+        *,
+        status: MediaFileStatus,
+        page: int = 1,
+        limit: int = 30,
+    ) -> MediaFileLedgerPage:
+        """Return paginated ledger rows for a Phase 13 lifecycle status."""
+        with self._session_factory() as session:
+            rows = get_rows_by_status(session, status)
+        return self._paginate_media_file_rows(rows, page=page, limit=limit)
+
+    def get_media_file_reappearances_page(self, *, path: str, page: int = 1, limit: int = 30) -> MediaFileLedgerPage:
+        """Return rows discovered after the latest deleted tombstone for the path."""
+        with self._session_factory() as session:
+            rows = get_reappearances_after_deleted(session, path)
+        return self._paginate_media_file_rows(rows, page=page, limit=limit)
 
     def resolve_thumbnail_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:
         """Resolve an active image file path and media type for thumbnail streaming."""
@@ -737,6 +825,35 @@ class OperatorConsoleReadService:
     def _run_duration_ms_fallback(self, created_at: datetime, updated_at: datetime) -> float:
         delta_ms = (updated_at - created_at).total_seconds() * 1000.0
         return 0.0 if delta_ms < 0 else float(delta_ms)
+
+    def _paginate_media_file_rows(self, rows: list[MediaFile], *, page: int, limit: int) -> MediaFileLedgerPage:
+        bounded_page = max(1, int(page))
+        bounded_limit = min(100, max(1, int(limit)))
+        total_count = len(rows)
+        total_pages = (total_count + bounded_limit - 1) // bounded_limit if total_count > 0 else 0
+        offset = (bounded_page - 1) * bounded_limit
+        paged_rows = rows[offset: offset + bounded_limit]
+        items = tuple(self._to_media_file_ledger_item(row) for row in paged_rows)
+        return MediaFileLedgerPage(
+            total_count=total_count,
+            page=bounded_page,
+            limit=bounded_limit,
+            total_pages=total_pages,
+            items=items,
+        )
+
+    def _to_media_file_ledger_item(self, row: MediaFile) -> MediaFileLedgerItem:
+        return MediaFileLedgerItem(
+            id=str(row.id),
+            current_path=row.current_path,
+            discovered_path=row.discovered_path,
+            size_bytes=row.size_bytes,
+            hash_sha256=row.hash_sha256,
+            status=row.status,
+            discovered_at=row.discovered_at.isoformat(),
+            ingested_at=row.ingested_at.isoformat() if row.ingested_at is not None else None,
+            deleted_at=row.deleted_at.isoformat() if row.deleted_at is not None else None,
+        )
 
     def _extract_db_time_ms(self, stage_payload: Any) -> float | None:
         if not isinstance(stage_payload, dict):

@@ -26,7 +26,7 @@ from media_manager.app.persistence.operator_run_trigger import (
     RunTriggerCommand,
 )
 from media_manager.app.persistence.policy_settings import PolicySettingsService, UpdatePolicySettingsCommand
-from media_manager.app.persistence.models import TagSource
+from media_manager.app.persistence.models import MediaFileStatus, TagSource
 from media_manager.app.persistence.tag_enrichment import (
     EnrichmentScope,
     TagEnrichmentCommand,
@@ -102,6 +102,23 @@ class _DiscoveryQueryArgs:
     sort_order: str
     source: TagSource | None
     min_confidence: float | None
+
+
+def _parse_paging_args(*, page: int, limit: int) -> tuple[int, int]:
+    parsed_page = int(page)
+    parsed_limit = int(limit)
+    if parsed_page < 1:
+        raise HTTPException(status_code=400, detail="page must be >= 1.")
+    if parsed_limit < 1 or parsed_limit > 100:
+        raise HTTPException(status_code=400, detail="limit must be within [1, 100].")
+    return parsed_page, parsed_limit
+
+
+def _require_non_empty(value: str | None, field_name: str) -> str:
+    normalized = (value or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail=f"{field_name} must not be empty.")
+    return normalized
 
 
 def _parse_discovery_query_args(
@@ -185,6 +202,11 @@ def create_app() -> FastAPI:
     def gallery_page(request: Request) -> HTMLResponse:
         """Render the Operator Console canonical gallery page."""
         return templates.TemplateResponse(request, "gallery.html", {})
+
+    @app.get("/ledger", response_class=HTMLResponse)
+    def ledger_page(request: Request) -> HTMLResponse:
+        """Render read-only media_file ledger explorer page."""
+        return templates.TemplateResponse(request, "ledger.html", {})
 
     @app.get("/discover", response_class=HTMLResponse)
     def discover_page(
@@ -315,6 +337,70 @@ def create_app() -> FastAPI:
     ) -> dict[str, list[dict[str, object]]]:
         """Return duplicate groups and canonical-file mapping for browser UI."""
         return {"groups": [group.to_dict() for group in service.get_duplicate_groups()]}
+
+    @app.get("/api/media-file/by-hash")
+    def media_file_by_hash(
+        hash_prefix: str | None = Query(default=None),
+        page: int = 1,
+        limit: int = 30,
+        service: OperatorConsoleReadService = Depends(get_operator_console_service),
+    ) -> dict[str, object]:
+        normalized_hash = _require_non_empty(hash_prefix, "hash_prefix")
+        parsed_page, parsed_limit = _parse_paging_args(page=page, limit=limit)
+        return service.get_media_file_by_hash_page(
+            hash_prefix=normalized_hash,
+            page=parsed_page,
+            limit=parsed_limit,
+        ).to_dict()
+
+    @app.get("/api/media-file/history")
+    def media_file_history(
+        path: str | None = Query(default=None),
+        page: int = 1,
+        limit: int = 30,
+        service: OperatorConsoleReadService = Depends(get_operator_console_service),
+    ) -> dict[str, object]:
+        normalized_path = _require_non_empty(path, "path")
+        parsed_page, parsed_limit = _parse_paging_args(page=page, limit=limit)
+        return service.get_media_file_history_page(
+            path=normalized_path,
+            page=parsed_page,
+            limit=parsed_limit,
+        ).to_dict()
+
+    @app.get("/api/media-file/by-status")
+    def media_file_by_status(
+        status: str | None = Query(default=None),
+        page: int = 1,
+        limit: int = 30,
+        service: OperatorConsoleReadService = Depends(get_operator_console_service),
+    ) -> dict[str, object]:
+        normalized_status = _require_non_empty(status, "status")
+        parsed_page, parsed_limit = _parse_paging_args(page=page, limit=limit)
+        try:
+            status_value = MediaFileStatus(normalized_status.upper())
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="status must be one of: INGESTED, PROCESSED, DELETED.") from exc
+        return service.get_media_file_by_status_page(
+            status=status_value,
+            page=parsed_page,
+            limit=parsed_limit,
+        ).to_dict()
+
+    @app.get("/api/media-file/reappearances")
+    def media_file_reappearances(
+        path: str | None = Query(default=None),
+        page: int = 1,
+        limit: int = 30,
+        service: OperatorConsoleReadService = Depends(get_operator_console_service),
+    ) -> dict[str, object]:
+        normalized_path = _require_non_empty(path, "path")
+        parsed_page, parsed_limit = _parse_paging_args(page=page, limit=limit)
+        return service.get_media_file_reappearances_page(
+            path=normalized_path,
+            page=parsed_page,
+            limit=parsed_limit,
+        ).to_dict()
 
     @app.get("/media/{file_id}")
     def media(
