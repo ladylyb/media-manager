@@ -9,6 +9,73 @@
     <p class="text-sm text-slate-600">Phase 13 read-only ledger explorer for ingestion history. No canonical or duplicate decisions are made here.</p>
   </header>
 
+  <section class="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div class="mb-4 flex items-center justify-between">
+      <h3 class="text-lg font-semibold text-slate-900">Ledger Analytics</h3>
+      <button id="ledger-analytics-refresh" type="button" class="rounded-md bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-200">Refresh</button>
+    </div>
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <article class="rounded-lg border border-slate-200 p-3">
+        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Tracked</p>
+        <p id="analytics-total-tracked" class="mt-1 text-xl font-semibold text-slate-900">--</p>
+      </article>
+      <article class="rounded-lg border border-slate-200 p-3">
+        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Ingested</p>
+        <p id="analytics-status-ingested" class="mt-1 text-xl font-semibold text-slate-900">--</p>
+      </article>
+      <article class="rounded-lg border border-slate-200 p-3">
+        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Processed</p>
+        <p id="analytics-status-processed" class="mt-1 text-xl font-semibold text-slate-900">--</p>
+      </article>
+      <article class="rounded-lg border border-slate-200 p-3">
+        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Deleted</p>
+        <p id="analytics-status-deleted" class="mt-1 text-xl font-semibold text-slate-900">--</p>
+      </article>
+      <article class="rounded-lg border border-slate-200 p-3">
+        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Duplicate Hash Groups</p>
+        <p id="analytics-hash-groups" class="mt-1 text-xl font-semibold text-slate-900">--</p>
+      </article>
+    </div>
+
+    <div id="ledger-analytics-error" class="mt-3 hidden text-sm text-rose-600"></div>
+
+    <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+      <div class="rounded-lg border border-slate-200 p-3">
+        <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Ingested Per Day</p>
+        <div class="max-h-44 overflow-auto">
+          <table class="min-w-full text-xs sm:text-sm">
+            <thead class="text-left text-slate-500">
+              <tr><th class="py-1 pr-2">Day</th><th class="py-1">Count</th></tr>
+            </thead>
+            <tbody id="analytics-ingested-days"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="rounded-lg border border-slate-200 p-3">
+        <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Deleted Per Day</p>
+        <div class="max-h-44 overflow-auto">
+          <table class="min-w-full text-xs sm:text-sm">
+            <thead class="text-left text-slate-500">
+              <tr><th class="py-1 pr-2">Day</th><th class="py-1">Count</th></tr>
+            </thead>
+            <tbody id="analytics-deleted-days"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="rounded-lg border border-slate-200 p-3">
+        <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Reappearances Per Day</p>
+        <div class="max-h-44 overflow-auto">
+          <table class="min-w-full text-xs sm:text-sm">
+            <thead class="text-left text-slate-500">
+              <tr><th class="py-1 pr-2">Day</th><th class="py-1">Count</th></tr>
+            </thead>
+            <tbody id="analytics-reappearance-days"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
     <div class="mb-4 flex flex-wrap gap-2" role="tablist" aria-label="Ledger query tools">
       <button type="button" data-tab="hash" class="ledger-tab rounded-md bg-slate-800 px-3 py-1.5 text-sm font-medium text-white">By Hash</button>
@@ -183,6 +250,70 @@
     node.classList.add("hidden");
   }
 
+  function setAnalyticsError(message) {
+    const node = byId("ledger-analytics-error");
+    if (!node) return;
+    node.textContent = message;
+    node.classList.remove("hidden");
+  }
+
+  function clearAnalyticsError() {
+    const node = byId("ledger-analytics-error");
+    if (!node) return;
+    node.textContent = "";
+    node.classList.add("hidden");
+  }
+
+  function setText(id, value) {
+    const node = byId(id);
+    if (!node) return;
+    node.textContent = String(value ?? "--");
+  }
+
+  function renderDayRows(id, rows) {
+    const body = byId(id);
+    if (!body) return;
+    body.innerHTML = "";
+    if (!Array.isArray(rows) || rows.length === 0) {
+      body.insertAdjacentHTML("beforeend", `<tr><td class="py-1 pr-2 text-slate-500">-</td><td class="py-1 text-slate-500">0</td></tr>`);
+      return;
+    }
+    for (const row of rows) {
+      body.insertAdjacentHTML(
+        "beforeend",
+        `<tr><td class="py-1 pr-2 text-slate-700">${escapeText(row.day)}</td><td class="py-1 text-slate-700">${escapeText(row.count)}</td></tr>`,
+      );
+    }
+  }
+
+  function renderAnalytics(payload) {
+    const totals = payload?.totals || {};
+    const byStatus = payload?.by_status || {};
+    setText("analytics-total-tracked", totals.files_tracked ?? 0);
+    setText("analytics-hash-groups", totals.duplicate_hash_groups ?? 0);
+    setText("analytics-status-ingested", byStatus.INGESTED ?? 0);
+    setText("analytics-status-processed", byStatus.PROCESSED ?? 0);
+    setText("analytics-status-deleted", byStatus.DELETED ?? 0);
+
+    renderDayRows("analytics-ingested-days", payload?.ingested_per_day || []);
+    renderDayRows("analytics-deleted-days", payload?.deleted_per_day || []);
+    renderDayRows("analytics-reappearance-days", payload?.reappearances_per_day || []);
+  }
+
+  async function loadAnalytics() {
+    clearAnalyticsError();
+    try {
+      const response = await fetch("/api/media-file/analytics", { headers: { Accept: "application/json" } });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.detail || `status ${response.status}`);
+      }
+      renderAnalytics(await response.json());
+    } catch (error) {
+      setAnalyticsError(error instanceof Error ? error.message : "Unable to load analytics.");
+    }
+  }
+
   function syncUrl() {
     const url = new URL(window.location.href);
     url.searchParams.set("mode", state.mode);
@@ -347,6 +478,10 @@
       loadRows(false);
     });
 
+    const analyticsRefresh = byId("ledger-analytics-refresh");
+    if (analyticsRefresh) analyticsRefresh.addEventListener("click", () => loadAnalytics());
+
+    loadAnalytics();
     loadRows(false);
   });
 </script>

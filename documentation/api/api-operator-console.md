@@ -61,6 +61,43 @@ Query params:
 - `page` (default `1`)
 - `limit` (default `30`, max `100`)
 
+### `GET /api/media-file/analytics`
+
+Returns all-time, read-only Phase 13 ledger analytics for the `/ledger` page.
+
+Response:
+
+```json
+{
+  "totals": {
+    "files_tracked": 0,
+    "duplicate_hash_groups": 0
+  },
+  "by_status": {
+    "INGESTED": 0,
+    "PROCESSED": 0,
+    "DELETED": 0
+  },
+  "ingested_per_day": [
+    { "day": "2026-03-01", "count": 0 }
+  ],
+  "deleted_per_day": [
+    { "day": "2026-03-01", "count": 0 }
+  ],
+  "reappearances_per_day": [
+    { "day": "2026-03-01", "count": 0 }
+  ],
+  "window": {
+    "mode": "all_time"
+  }
+}
+```
+
+Notes:
+- `duplicate_hash_groups` counts hash values shared across more than one distinct ledger path.
+- `reappearances_per_day` counts non-`DELETED` rows with a prior `DELETED` tombstone for the same path history (`current_path`/`discovered_path`).
+- This endpoint is analytics-only and does not perform canonical inference or row mutation.
+
 ## Validation and Error Semantics
 
 - `400` for validation failures:
