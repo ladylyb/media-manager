@@ -26,6 +26,8 @@ mkdocs build --strict
 - Keep API docs under `documentation/reference/` using `mkdocstrings` directives.
 - Keep roadmap and phase material under `documentation/project/`.
 - Ensure `mkdocs build --strict` passes before opening a PR.
+- Keep legacy/historical docs under `archive/legacy/docs/` only; do not link them from published docs pages.
+- Run `bash tools/docs/check_no_legacy_links.sh` before opening a PR.
 
 ## API Docstring Conventions
 

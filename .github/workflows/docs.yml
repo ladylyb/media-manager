@@ -25,3 +25,6 @@ jobs:
 
       - name: Build docs (strict)
         run: mkdocs build --strict
+
+      - name: Enforce current-only docs links
+        run: bash tools/docs/check_no_legacy_links.sh
