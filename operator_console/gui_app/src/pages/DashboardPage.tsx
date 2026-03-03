@@ -1,40 +1,75 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { MetricCard } from "@/components/MetricCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { ErrorAlert } from "@/components/ErrorAlert";
 import { OperationRiskLabel } from "@/components/OperationRiskLabel";
 import { JsonViewer } from "@/components/JsonViewer";
 import { Button } from "@/components/ui/button";
-import { getDashboardSummary, getLatestMetrics, runIngest, runOperatorRun } from "@/lib/api/endpoints";
+import {
+  getDashboardSummary,
+  getLatestMetrics,
+  invalidateReadsAfterOperation,
+  runIngest,
+  runOperatorRun,
+} from "@/lib/api/endpoints";
+import { queryKeys } from "@/lib/api/queryKeys";
+import { queryOptions } from "@/lib/api/queryOptions";
 import type { DashboardSummary, LatestMetrics, OperationResult } from "@/types/api";
-import { Files, ImageIcon, Video, Layers, Crown, PlayCircle, Timer, Database, Zap, BarChart3, Loader2 } from "lucide-react";
+import {
+  Files,
+  ImageIcon,
+  Video,
+  Layers,
+  Crown,
+  PlayCircle,
+  Timer,
+  Database,
+  Zap,
+  Loader2,
+} from "lucide-react";
+
+function getErrorMessage(err: unknown): string | null {
+  if (!err) return null;
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
 
 export default function DashboardPage() {
-  const [summary, setSummary] = useState<DashboardSummary | null>(null);
-  const [metrics, setMetrics] = useState<LatestMetrics | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
   const [actionMode, setActionMode] = useState<"validate" | "composite">("validate");
   const [actionLoading, setActionLoading] = useState(false);
   const [actionResult, setActionResult] = useState<OperationResult | null>(null);
   const [rootPath, setRootPath] = useState("");
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  useEffect(() => {
-    Promise.all([
-      getDashboardSummary().then(e => setSummary(e.data)),
-      getLatestMetrics().then(e => setMetrics(e.data)),
-    ])
-      .catch(err => setError(err.message))
-      .finally(() => setLoading(false));
-  }, []);
+  const summaryQuery = useQuery({
+    queryKey: queryKeys.dashboardSummary,
+    queryFn: async () => (await getDashboardSummary()).data as DashboardSummary,
+    staleTime: queryOptions.dashboardSummary.staleTime,
+  });
+
+  const metricsQuery = useQuery({
+    queryKey: queryKeys.latestMetrics,
+    queryFn: async () => (await getLatestMetrics()).data as LatestMetrics,
+    staleTime: queryOptions.latestMetrics.staleTime,
+  });
+
+  const summary = summaryQuery.data;
+  const metrics = metricsQuery.data;
+  const loading = summaryQuery.isLoading || metricsQuery.isLoading;
+  const error =
+    actionError || getErrorMessage(summaryQuery.error) || getErrorMessage(metricsQuery.error);
 
   const handleQuickAction = async () => {
     setActionLoading(true);
     setActionResult(null);
+    setActionError(null);
     try {
       if (actionMode === "validate") {
         const res = await runIngest({ folder_path: rootPath || undefined, dry_run: true });
         setActionResult(res.data);
+        await invalidateReadsAfterOperation(queryClient, "ingest");
       } else {
         const res = await runOperatorRun({
           folder_path: rootPath || undefined,
@@ -42,9 +77,10 @@ export default function DashboardPage() {
           dry_run: false,
         });
         setActionResult(res.data);
+        await invalidateReadsAfterOperation(queryClient, "operatorRun");
       }
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setActionError(getErrorMessage(err) || "Operation failed");
     } finally {
       setActionLoading(false);
     }
@@ -57,9 +93,8 @@ export default function DashboardPage() {
         <p className="text-sm text-muted-foreground mt-1">System overview and quick actions</p>
       </div>
 
-      {error && <ErrorAlert message={error} onDismiss={() => setError(null)} />}
+      {error && <ErrorAlert message={error} onDismiss={() => setActionError(null)} />}
 
-      {/* KPI Cards */}
       <div>
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Pipeline Summary</h2>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -72,7 +107,6 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Performance Cards */}
       <div>
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Performance</h2>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -95,7 +129,6 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Quick Action */}
       <div>
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Quick Action</h2>
         <div className="rounded-lg border bg-card p-5 space-y-4">

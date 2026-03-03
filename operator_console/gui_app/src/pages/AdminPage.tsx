@@ -1,13 +1,15 @@
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { ErrorAlert } from "@/components/ErrorAlert";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { JsonViewer } from "@/components/JsonViewer";
 import { Button } from "@/components/ui/button";
-import { adminDbReset } from "@/lib/api/endpoints";
+import { adminDbReset, invalidateAllReadsAfterDbReset } from "@/lib/api/endpoints";
 import type { DbResetPreview, DbResetResult } from "@/types/api";
 import { AlertTriangle, Loader2, Trash2, Eye } from "lucide-react";
 
 export default function AdminPage() {
+  const queryClient = useQueryClient();
   const [preview, setPreview] = useState<DbResetPreview | null>(null);
   const [result, setResult] = useState<DbResetResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -32,6 +34,7 @@ export default function AdminPage() {
       const res = await adminDbReset({ dry_run: false, challenge_word: "media-manager" });
       setResult(res.data as DbResetResult);
       setPreview(null);
+      await invalidateAllReadsAfterDbReset(queryClient);
     } catch (err: any) { setError(err.message); }
     finally { setLoading(false); setConfirmOpen(false); }
   };
