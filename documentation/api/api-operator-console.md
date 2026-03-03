@@ -61,6 +61,28 @@ Query params:
 - `page` (default `1`)
 - `limit` (default `30`, max `100`)
 
+### `GET /api/v1/ledger/hash-audit`
+### `GET /api/media-file/hash-audit` (alias)
+
+Run a read-only ledger hash health audit (Phase 13 compliant; no row mutation).
+
+Query params:
+- `root_path` (optional, non-empty when provided)
+- `sample_limit` (default `20`, max `200`)
+
+Response:
+
+```json
+{
+  "total_files": 1234,
+  "missing_hash": 12,
+  "hash_mismatches": 0,
+  "deleted_rows_skipped": 3,
+  "sample_missing_hash_paths": ["/dataset/a.jpg"],
+  "sample_mismatch_paths": ["/dataset/b.jpg"]
+}
+```
+
 ### `GET /api/media-file/analytics`
 
 Returns all-time, read-only Phase 13 ledger analytics for the `/ledger` page.

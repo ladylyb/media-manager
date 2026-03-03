@@ -5,6 +5,9 @@ import json
 import sys
 import uuid
 from pathlib import Path
+from urllib import error as urllib_error
+from urllib import parse as urllib_parse
+from urllib import request as urllib_request
 
 from sqlalchemy import select
 
@@ -316,6 +319,26 @@ def _render_tag_enrichment_output(summary) -> None:
     print("----------------------------------------")
 
 
+def _render_hash_audit_output(payload: dict[str, object]) -> None:
+    print("----------------------------------------")
+    print("Ledger Hash Audit")
+    print(f"  Total files: {payload.get('total_files', 0)}")
+    print(f"  Missing hash: {payload.get('missing_hash', 0)}")
+    print(f"  Hash mismatches: {payload.get('hash_mismatches', 0)}")
+    print(f"  Deleted rows skipped: {payload.get('deleted_rows_skipped', 0)}")
+    missing_samples = payload.get("sample_missing_hash_paths") or []
+    mismatch_samples = payload.get("sample_mismatch_paths") or []
+    if missing_samples:
+        print("  Sample missing-hash paths:")
+        for value in missing_samples:
+            print(f"    - {value}")
+    if mismatch_samples:
+        print("  Sample mismatch paths:")
+        for value in mismatch_samples:
+            print(f"    - {value}")
+    print("----------------------------------------")
+
+
 def _tag_enrich_command(
     *,
     run_all: bool,
@@ -360,6 +383,58 @@ def _tag_enrich_command(
         print(str(exc), file=sys.stderr)
         return 1
     _render_tag_enrichment_output(summary)
+    return 0
+
+
+def _health_check_command(
+    *,
+    audit_hashes: bool,
+    root: str | None,
+    api: str,
+    timeout: int,
+    sample_limit: int,
+) -> int:
+    if not audit_hashes:
+        print("Specify --audit-hashes for health-check command.", file=sys.stderr)
+        return 2
+    normalized_api = (api or "").strip().rstrip("/")
+    if not normalized_api:
+        print("--api must not be empty.", file=sys.stderr)
+        return 2
+    if timeout <= 0:
+        print("--timeout must be > 0.", file=sys.stderr)
+        return 2
+    if sample_limit < 1 or sample_limit > 200:
+        print("--sample-limit must be within [1, 200].", file=sys.stderr)
+        return 2
+
+    query: dict[str, str] = {"sample_limit": str(sample_limit)}
+    if root is not None and root.strip():
+        query["root_path"] = root.strip()
+    endpoint = f"{normalized_api}/api/v1/ledger/hash-audit?{urllib_parse.urlencode(query)}"
+    request = urllib_request.Request(endpoint, headers={"Accept": "application/json"})
+    try:
+        with urllib_request.urlopen(request, timeout=timeout) as response:
+            if response.status != 200:
+                print(f"Health-check API returned status {response.status}.", file=sys.stderr)
+                return 2
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib_error.HTTPError, urllib_error.URLError, TimeoutError) as exc:
+        print(f"Health-check API request failed: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:
+        print(f"Unable to parse health-check response: {exc}", file=sys.stderr)
+        return 2
+
+    if not isinstance(payload, dict):
+        print("Health-check API returned invalid payload shape.", file=sys.stderr)
+        return 2
+    _render_hash_audit_output(payload)
+
+    missing_hash = int(payload.get("missing_hash") or 0)
+    hash_mismatches = int(payload.get("hash_mismatches") or 0)
+    if missing_hash > 0 or hash_mismatches > 0:
+        return 1
     return 0
 
 
@@ -890,6 +965,36 @@ def main(argv: list[str] | None = None) -> int:
         default=TagSource.SYSTEM.value,
         help="Tag source label for enrichment writes.",
     )
+    health_check_parser = subparsers.add_parser(
+        "health-check",
+        help="Run read-only health checks against operator-console REST endpoints.",
+    )
+    health_check_parser.add_argument(
+        "--audit-hashes",
+        action="store_true",
+        help="Run ledger hash audit check.",
+    )
+    health_check_parser.add_argument(
+        "--root",
+        help="Optional root path scope filter for ledger hash audit.",
+    )
+    health_check_parser.add_argument(
+        "--api",
+        default="http://localhost:8000",
+        help="Operator Console base URL.",
+    )
+    health_check_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=30,
+        help="HTTP timeout in seconds.",
+    )
+    health_check_parser.add_argument(
+        "--sample-limit",
+        type=int,
+        default=20,
+        help="Sample path cap for the audit response.",
+    )
 
     args = parser.parse_args(argv)
     if args.command == "plan":
@@ -974,6 +1079,14 @@ def main(argv: list[str] | None = None) -> int:
             canonical_id=args.canonical_id,
             batch_size=args.batch_size,
             source=args.source,
+        )
+    if args.command == "health-check":
+        return _health_check_command(
+            audit_hashes=args.audit_hashes,
+            root=args.root,
+            api=args.api,
+            timeout=args.timeout,
+            sample_limit=args.sample_limit,
         )
 
     parser.print_help()

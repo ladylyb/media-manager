@@ -137,6 +137,13 @@ def _require_non_empty(value: str | None, field_name: str) -> str:
     return normalized
 
 
+def _parse_sample_limit(value: int) -> int:
+    parsed = int(value)
+    if parsed < 1 or parsed > 200:
+        raise HTTPException(status_code=400, detail="sample_limit must be within [1, 200].")
+    return parsed
+
+
 def _parse_discovery_query_args(
     *,
     page: int,
@@ -424,6 +431,23 @@ def create_app() -> FastAPI:
     ) -> dict[str, object]:
         """Return all-time Phase 13 ledger analytics for dashboard/reporting views."""
         return service.get_media_file_analytics().to_dict()
+
+    @app.get("/api/v1/ledger/hash-audit")
+    @app.get("/api/media-file/hash-audit")
+    def media_file_hash_audit(
+        root_path: str | None = Query(default=None),
+        sample_limit: int = Query(default=20),
+        service: OperatorConsoleReadService = Depends(get_operator_console_service),
+    ) -> dict[str, object]:
+        """Return read-only ledger hash audit metrics and sample paths."""
+        normalized_root: str | None = None
+        if root_path is not None:
+            normalized_root = _require_non_empty(root_path, "root_path")
+        parsed_limit = _parse_sample_limit(sample_limit)
+        try:
+            return service.get_ledger_hash_audit(root_path=normalized_root, sample_limit=parsed_limit).to_dict()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/media-file/dry-run-audit")
     def media_file_dry_run_audit(

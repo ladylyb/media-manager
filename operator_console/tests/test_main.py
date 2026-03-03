@@ -251,6 +251,28 @@ class _FakeService:
             }
         )
 
+    def get_ledger_hash_audit(
+        self,
+        *,
+        root_path: str | None = None,
+        sample_limit: int = 20,
+    ) -> _FakePayload:
+        self.last_media_file_call = {
+            "mode": "hash_audit",
+            "root_path": root_path,
+            "sample_limit": sample_limit,
+        }
+        return _FakePayload(
+            {
+                "total_files": 10,
+                "missing_hash": 2,
+                "hash_mismatches": 1,
+                "deleted_rows_skipped": 3,
+                "sample_missing_hash_paths": ["/ledger/missing-1.jpg", "/ledger/missing-2.jpg"],
+                "sample_mismatch_paths": ["/ledger/mismatch-1.jpg"],
+            }
+        )
+
     def resolve_thumbnail_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:
         if str(file_instance_id) == "aaaaaaaa-0000-0000-0000-000000000001":
             return Path(__file__), "image/jpeg"
@@ -595,6 +617,8 @@ def test_ledger_page_renders_template() -> None:
 
     assert response.status_code == 200
     assert "MediaFile Ledger" in response.text
+    assert "Ledger Health Check" in response.text
+    assert "Run Hash Audit" in response.text
     assert "By Hash" in response.text
     assert "Path History" in response.text
     assert "Reappearances" in response.text
@@ -706,6 +730,58 @@ def test_media_file_analytics_endpoint_returns_expected_shape() -> None:
     assert payload["totals"]["duplicate_hash_groups"] == 2
     assert payload["by_status"]["INGESTED"] == 6
     assert payload["window"]["mode"] == "all_time"
+
+
+def test_media_file_hash_audit_endpoint_returns_expected_shape() -> None:
+    fake = _FakeService()
+    app.dependency_overrides[get_operator_console_service] = lambda: fake
+    client = TestClient(app)
+    try:
+        response = client.get("/api/v1/ledger/hash-audit?root_path=/ledger&sample_limit=25")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_files"] == 10
+    assert payload["missing_hash"] == 2
+    assert payload["hash_mismatches"] == 1
+    assert fake.last_media_file_call == {"mode": "hash_audit", "root_path": "/ledger", "sample_limit": 25}
+
+
+def test_media_file_hash_audit_alias_endpoint_returns_expected_shape() -> None:
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/api/media-file/hash-audit")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert set(payload.keys()) == {
+        "total_files",
+        "missing_hash",
+        "hash_mismatches",
+        "deleted_rows_skipped",
+        "sample_missing_hash_paths",
+        "sample_mismatch_paths",
+    }
+
+
+def test_media_file_hash_audit_endpoint_rejects_invalid_params() -> None:
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        bad_sample = client.get("/api/v1/ledger/hash-audit?sample_limit=500")
+        bad_root = client.get("/api/v1/ledger/hash-audit?root_path= ")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert bad_sample.status_code == 400
+    assert "sample_limit" in bad_sample.json()["detail"]
+    assert bad_root.status_code == 400
+    assert "root_path" in bad_root.json()["detail"]
 
 
 def test_media_file_dry_run_audit_endpoint_returns_expected_shape() -> None:
