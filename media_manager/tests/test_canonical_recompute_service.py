@@ -66,8 +66,6 @@ def test_recompute_apply_inserts_only_changed_rows(tmp_path: Path, session_facto
     with session_factory() as session:
         content_id = session.scalar(select(FileContent.content_id))
         assert content_id is not None
-        current = get_active_assignment(session, content_id)
-        assert current is not None
         before_count = len(session.scalars(select(CanonicalAssignment)).all())
 
     summary = recompute_canonical_assignments(

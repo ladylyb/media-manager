@@ -57,6 +57,12 @@ class FileInstanceStatus(StrEnum):
     DELETED = "DELETED"
 
 
+class MediaFileStatus(StrEnum):
+    INGESTED = "INGESTED"
+    PROCESSED = "PROCESSED"
+    DELETED = "DELETED"
+
+
 class CanonicalRecomputeMode(StrEnum):
     DRY_RUN = "DRY_RUN"
     APPLY = "APPLY"
@@ -318,6 +324,38 @@ class FileInstance(Base):
 Index("idx_file_instances_content_id", FileInstance.content_id)
 Index("idx_file_instances_absolute_path", FileInstance.absolute_path)
 Index("idx_file_instances_status", FileInstance.status)
+
+
+class MediaFile(Base):
+    """
+    media_file is an ingestion tracking ledger only.
+    Canonical authority remains in legacy tables.
+    No canonical decisions are mirrored here in Phase 13.
+    """
+
+    __tablename__ = "media_file"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    discovered_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    current_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    hash_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    ingested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default=MediaFileStatus.INGESTED.value)
+    # Reserved for a future phase. Phase 13 must not write canonical decisions here.
+    canonical_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("media_file.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    quarantined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+Index("idx_media_file_hash_sha256_not_null", MediaFile.hash_sha256, postgresql_where=MediaFile.hash_sha256.is_not(None))
+Index("idx_media_file_canonical_id", MediaFile.canonical_id)
+Index("idx_media_file_status", MediaFile.status)
 
 
 class CanonicalAssignment(Base):

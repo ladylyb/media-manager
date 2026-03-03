@@ -1,8 +1,7 @@
-"""Ingestion service for Phase 7 identity-first architecture."""
+"""Ingestion service for Phase 13 ledger + legacy identity architecture."""
 
 from __future__ import annotations
 
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
@@ -10,15 +9,19 @@ from time import perf_counter
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from media_manager.app.canonical.context import CanonicalContext
-from media_manager.app.canonical.factory import build_canonical_policy, resolve_default_policy_name
 from media_manager.app.core.hashing import sha256_file
 from media_manager.app.core.logging_config import get_logger
 import media_manager.app.core.metadata_extractor as metadata_extractor
 from media_manager.app.observability import record_ingest_metrics, record_ingest_structured_metrics
 from media_manager.app.persistence.base import transactional_session
-from media_manager.app.persistence.canonicalization import append_assignment, get_active_assignment
-from media_manager.app.persistence.models import FileContent, FileInstance, FileInstanceStatus, MediaMetadata
+from media_manager.app.persistence.models import (
+    FileContent,
+    FileInstance,
+    FileInstanceStatus,
+    MediaFile,
+    MediaFileStatus,
+    MediaMetadata,
+)
 
 logger = get_logger(__name__)
 
@@ -39,29 +42,49 @@ class _IngestLatencySamples:
     db_write_latencies_ms: list[float]
 
 
-def ensure_canonical_assignment(session: Session, content_id: uuid.UUID) -> uuid.UUID | None:
-    active = get_active_assignment(session, content_id)
-    if active is not None:
-        return active.canonical_instance_id
+def _upsert_media_file_ledger(
+    session: Session,
+    *,
+    absolute_path: str,
+    digest: str,
+    size_bytes: int,
+) -> None:
+    """
+    media_file is an ingestion tracking ledger only.
+    Canonical authority remains in legacy tables.
+    No canonical decisions are mirrored here in Phase 13.
+    """
 
-    instances = session.scalars(
-        select(FileInstance)
-        .where(FileInstance.content_id == content_id)
-        .order_by(FileInstance.first_seen_at.asc(), FileInstance.absolute_path.asc(), FileInstance.file_instance_id.asc())
-    ).all()
-    if not instances:
-        return None
-
-    policy = build_canonical_policy(resolve_default_policy_name())
-    selected = policy.select(str(content_id), instances, CanonicalContext())
-    row = append_assignment(
-        session,
-        content_id=content_id,
-        canonical_instance_id=selected.file_instance_id,
-        policy_name=policy.name,
-        policy_version=policy.version,
+    row = session.scalar(
+        select(MediaFile)
+        .where(
+            MediaFile.current_path == absolute_path,
+            MediaFile.status != MediaFileStatus.DELETED.value,
+        )
+        .with_for_update()
     )
-    return row.canonical_instance_id
+    if row is None:
+        session.add(
+            MediaFile(
+                discovered_path=absolute_path,
+                current_path=absolute_path,
+                size_bytes=size_bytes,
+                hash_sha256=digest,
+                discovered_at=func.now(),
+                status=MediaFileStatus.INGESTED.value,
+                canonical_id=None,
+                quarantined_at=None,
+                deleted_at=None,
+                ingested_at=func.now(),
+            )
+        )
+        return
+
+    row.current_path = absolute_path
+    row.size_bytes = size_bytes
+    row.hash_sha256 = digest
+    row.status = MediaFileStatus.INGESTED.value
+    row.ingested_at = func.now()
 
 
 def ingest_paths_in_session(
@@ -87,8 +110,11 @@ def ingest_paths_in_session(
         if latency_samples is not None:
             latency_samples.hash_latencies_ms.append(hash_latency_ms)
         absolute_path = str(candidate.resolve(strict=False))
+        size_bytes = int(candidate.stat().st_size)
 
         t_db_start = perf_counter()
+        _upsert_media_file_ledger(session, absolute_path=absolute_path, digest=digest, size_bytes=size_bytes)
+
         content = session.scalar(select(FileContent).where(FileContent.sha256_hash == digest).with_for_update())
         content_was_new = False
         if content is None:
@@ -128,8 +154,6 @@ def ingest_paths_in_session(
                 rows = metadata_extractor.extract_file_metadata(candidate, digest)
                 metadata_extractor.upsert_metadata_for_content(session, rows, content.content_id)
                 metadata_extracted += len(rows)
-
-        ensure_canonical_assignment(session, content.content_id)
         db_write_latency_ms = (perf_counter() - t_db_start) * 1000.0
         if latency_samples is not None:
             latency_samples.db_write_latencies_ms.append(db_write_latency_ms)
