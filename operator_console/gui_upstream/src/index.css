@@ -1,0 +1,135 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap');
+
+@layer base {
+  :root {
+    --background: 220 16% 96%;
+    --foreground: 220 20% 10%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 20% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 20% 10%;
+
+    --primary: 220 70% 50%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 14% 90%;
+    --secondary-foreground: 220 20% 20%;
+
+    --muted: 220 14% 93%;
+    --muted-foreground: 220 10% 46%;
+
+    --accent: 220 14% 90%;
+    --accent-foreground: 220 20% 15%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+
+    --caution: 38 92% 50%;
+    --caution-foreground: 38 92% 15%;
+
+    --info: 210 100% 52%;
+    --info-foreground: 0 0% 100%;
+
+    --border: 220 13% 87%;
+    --input: 220 13% 87%;
+    --ring: 220 70% 50%;
+
+    --radius: 0.5rem;
+
+    --sidebar-background: 222 22% 12%;
+    --sidebar-foreground: 220 14% 80%;
+    --sidebar-primary: 220 70% 55%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 222 18% 18%;
+    --sidebar-accent-foreground: 220 14% 90%;
+    --sidebar-border: 222 16% 20%;
+    --sidebar-ring: 220 70% 55%;
+    --sidebar-muted: 222 14% 40%;
+
+    --status-bar: 222 22% 10%;
+    --status-bar-foreground: 220 14% 70%;
+  }
+
+  .dark {
+    --background: 222 22% 8%;
+    --foreground: 220 14% 90%;
+
+    --card: 222 20% 12%;
+    --card-foreground: 220 14% 90%;
+
+    --popover: 222 20% 12%;
+    --popover-foreground: 220 14% 90%;
+
+    --primary: 220 70% 55%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 222 16% 18%;
+    --secondary-foreground: 220 14% 85%;
+
+    --muted: 222 14% 16%;
+    --muted-foreground: 220 10% 50%;
+
+    --accent: 222 16% 20%;
+    --accent-foreground: 220 14% 90%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+
+    --caution: 38 92% 50%;
+    --caution-foreground: 38 92% 15%;
+
+    --info: 210 100% 52%;
+    --info-foreground: 0 0% 100%;
+
+    --border: 222 16% 20%;
+    --input: 222 16% 22%;
+    --ring: 220 70% 55%;
+
+    --sidebar-background: 222 24% 6%;
+    --sidebar-foreground: 220 14% 75%;
+    --sidebar-primary: 220 70% 55%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 222 20% 12%;
+    --sidebar-accent-foreground: 220 14% 90%;
+    --sidebar-border: 222 18% 14%;
+    --sidebar-ring: 220 70% 55%;
+    --sidebar-muted: 222 14% 35%;
+
+    --status-bar: 222 24% 5%;
+    --status-bar-foreground: 220 14% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+}
+
+@layer utilities {
+  .font-mono-data {
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+  .gradient-status-bar {
+    background: linear-gradient(90deg, hsl(var(--status-bar)) 0%, hsl(var(--status-bar) / 0.95) 100%);
+  }
+}

@@ -92,6 +92,13 @@ Defaults below reflect runtime code defaults, not shell defaults.
 - Safety note: disabled by default to prevent correctness-sensitive planner paths from using eventually-consistent MV reads.
 - Example: `false`
 
+### `MEDIA_MANAGER_UI_V2_ENABLED`
+- Purpose: Feature-flag cutover from legacy Jinja operator console routes to React v2 shell.
+- Truthy values: `1`, `true`, `yes`, `on`
+- Default in code: `false`
+- Safety note: when enabled, legacy HTML routes (`/`, `/operations`, `/runs`, `/ledger`, `/discover`, `/duplicates`, `/gallery`, `/policy`) serve v2 shell; `/admin` remains legacy fallback.
+- Example: `false`
+
 ## Admin Safety Controls
 
 ### `MEDIA_MANAGER_ENV`

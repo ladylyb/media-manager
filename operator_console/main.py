@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 import logging
+import os
 from pathlib import Path
 import threading
 import time
@@ -12,7 +13,7 @@ from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -50,6 +51,7 @@ from media_manager.app.service_layer import (
 
 LOGGER = logging.getLogger(__name__)
 _MUTATION_SEMAPHORE = threading.BoundedSemaphore(value=4)
+_TRUTHY_ENV = {"1", "true", "yes", "on"}
 
 
 @lru_cache(maxsize=1)
@@ -236,6 +238,12 @@ def _parse_sample_limit(value: int) -> int:
     return parsed
 
 
+def _ui_v2_enabled() -> bool:
+    """Return whether v2 React console routing is enabled."""
+    raw = os.getenv("MEDIA_MANAGER_UI_V2_ENABLED", "false")
+    return raw.strip().lower() in _TRUTHY_ENV
+
+
 def _v2_ok(*, data: dict[str, object]) -> JSONResponse:
     session_factory = get_service_session_factory()
     payload = ServiceEnvelope(
@@ -355,25 +363,50 @@ def create_app() -> FastAPI:
     package_root = Path(__file__).parent
     templates_dir = package_root / "templates"
     static_dir = package_root / "static"
+    static_v2_dir = package_root / "static_v2"
+    static_v2_index = static_v2_dir / "index.html"
 
     app = FastAPI(title="Media Manager Operator Console")
     templates = Jinja2Templates(directory=str(templates_dir))
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    app.mount("/static-v2", StaticFiles(directory=str(static_v2_dir)), name="static-v2")
     mount_metrics_endpoint(app)
 
+    def _render_console_v2_shell() -> Response:
+        if not static_v2_index.exists():
+            return HTMLResponse(
+                status_code=503,
+                content=(
+                    "Operator Console v2 assets are missing. "
+                    "Build and copy frontend assets into operator_console/static_v2/."
+                ),
+            )
+        return FileResponse(path=static_v2_index)
+
+    @app.get("/console-v2", response_class=HTMLResponse)
+    def console_v2_entry() -> Response:
+        """Serve v2 React operator console shell regardless of feature-flag state."""
+        return _render_console_v2_shell()
+
     @app.get("/", response_class=HTMLResponse)
-    def dashboard(request: Request) -> HTMLResponse:
+    def dashboard(request: Request) -> Response:
         """Render the Operator Console dashboard page."""
+        if _ui_v2_enabled():
+            return _render_console_v2_shell()
         return templates.TemplateResponse(request, "dashboard.html", {})
 
     @app.get("/runs", response_class=HTMLResponse)
-    def runs_page(request: Request) -> HTMLResponse:
+    def runs_page(request: Request) -> Response:
         """Render the Operator Console run history page."""
+        if _ui_v2_enabled():
+            return _render_console_v2_shell()
         return templates.TemplateResponse(request, "runs.html", {})
 
     @app.get("/policy", response_class=HTMLResponse)
-    def policy_page(request: Request) -> HTMLResponse:
+    def policy_page(request: Request) -> Response:
         """Render the Operator Console policy management page."""
+        if _ui_v2_enabled():
+            return _render_console_v2_shell()
         return templates.TemplateResponse(request, "policy.html", {})
 
     @app.get("/admin", response_class=HTMLResponse)
@@ -382,23 +415,31 @@ def create_app() -> FastAPI:
         return templates.TemplateResponse(request, "admin.html", {})
 
     @app.get("/operations", response_class=HTMLResponse)
-    def operations_page(request: Request) -> HTMLResponse:
+    def operations_page(request: Request) -> Response:
         """Render explicit operation controls with CLI-parity semantics."""
+        if _ui_v2_enabled():
+            return _render_console_v2_shell()
         return templates.TemplateResponse(request, "operations.html", {})
 
     @app.get("/duplicates", response_class=HTMLResponse)
-    def duplicates_page(request: Request) -> HTMLResponse:
+    def duplicates_page(request: Request) -> Response:
         """Render the Operator Console duplicate group browser page."""
+        if _ui_v2_enabled():
+            return _render_console_v2_shell()
         return templates.TemplateResponse(request, "duplicates.html", {})
 
     @app.get("/gallery", response_class=HTMLResponse)
-    def gallery_page(request: Request) -> HTMLResponse:
+    def gallery_page(request: Request) -> Response:
         """Render the Operator Console canonical gallery page."""
+        if _ui_v2_enabled():
+            return _render_console_v2_shell()
         return templates.TemplateResponse(request, "gallery.html", {})
 
     @app.get("/ledger", response_class=HTMLResponse)
-    def ledger_page(request: Request) -> HTMLResponse:
+    def ledger_page(request: Request) -> Response:
         """Render read-only media_file ledger explorer page."""
+        if _ui_v2_enabled():
+            return _render_console_v2_shell()
         return templates.TemplateResponse(request, "ledger.html", {})
 
     @app.get("/discover", response_class=HTMLResponse)
@@ -410,8 +451,10 @@ def create_app() -> FastAPI:
         sort_by: str = Query(default="created_at"),
         sort_order: str | None = Query(default=None),
         service: OperatorConsoleReadService = Depends(get_operator_console_service),
-    ) -> HTMLResponse:
+    ) -> Response:
         """Render read-only discovery explorer with initial SSR payload."""
+        if _ui_v2_enabled():
+            return _render_console_v2_shell()
         parsed = _parse_discovery_query_args(
             page=page,
             limit=limit,
@@ -445,8 +488,10 @@ def create_app() -> FastAPI:
         request: Request,
         page: int = 1,
         service: OperatorConsoleReadService = Depends(get_operator_console_service),
-    ) -> HTMLResponse:
+    ) -> Response:
         """Render full-page canonical media detail with a gallery back link."""
+        if _ui_v2_enabled():
+            return _render_console_v2_shell()
         detail = service.get_canonical_gallery_detail(file_id)
         if detail is None:
             raise HTTPException(status_code=404, detail="Canonical media not found.")
