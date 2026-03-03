@@ -1,54 +1,56 @@
-# Legacy Documentation Archive Strategy (Deferred Execution)
+# Legacy Archive Freeze and Removal Strategy
 
-This document defines the future procedure for moving legacy documentation out
-of the default branch while keeping durable historical access.
+This document defines the archival and removal contract for legacy repository
+content that is no longer kept on `develop`.
 
 ## Scope
 
-- Legacy documentation currently centralized under `archive/legacy/docs/`.
-- Strategy only; no deletion is performed by this document.
+- Applies to legacy content previously stored under `archive/legacy/**`.
+- Legacy content is retained only via frozen git refs after removal.
 
-## Branch and Tag Naming
+## Naming Standard
 
-- Archive branch format: `archive/docs-legacy-YYYYMMDD`
-- Freeze tag format: `legacy-docs-freeze-YYYYMMDD`
+- Freeze branch: `archive/legacy-freeze-YYYYMMDD`
+- Freeze tag: `legacy-freeze-YYYYMMDD`
+- Deletion branch: `feature/remove-legacy-archive-YYYYMMDD`
 
-Example:
+## Required Approvals
 
-- Branch: `archive/docs-legacy-20260303`
-- Tag: `legacy-docs-freeze-20260303`
+Before removal from `develop`:
 
-## Preconditions Before Legacy Removal
+1. Owner approval.
+2. Manual release gate acknowledgment.
+3. Successful docs checks on the candidate branch.
 
-1. `mkdocs build --strict` passes on the default branch.
-2. Legacy docs are centralized under `archive/legacy/docs/`.
-3. No published docs links point to legacy content:
-   - `bash tools/docs/check_no_legacy_links.sh` passes.
-4. Release notes/changelog entry is prepared.
+## Execution Contract
 
-## Archival Procedure (Future Change)
+1. Create freeze branch from gate commit on `develop`.
+2. Create annotated freeze tag on the same commit.
+3. Push branch and tag to origin.
+4. Verify remote refs and capture commit SHA.
+5. Produce a dated freeze manifest under `documentation/contributing/`.
+6. In a separate PR, remove `archive/legacy/**` from `develop`.
 
-1. Create branch from the current default branch:
-   - `git checkout -b archive/docs-legacy-YYYYMMDD`
-2. Create and push an immutable freeze tag:
-   - `git tag legacy-docs-freeze-YYYYMMDD`
-   - `git push origin archive/docs-legacy-YYYYMMDD`
-   - `git push origin legacy-docs-freeze-YYYYMMDD`
-3. Generate a manifest listing archived files and commit it on the default
-   branch before deletion.
-4. In a separate PR, remove legacy docs from default branch.
+## Freeze Snapshot Executed
 
-## Post-Delete Verification Checklist
+- Date: `2026-03-03`
+- Freeze branch: `archive/legacy-freeze-20260303`
+- Freeze tag: `legacy-freeze-20260303`
+- Frozen commit SHA: `add054dff55cd6e032917c9fa5552e99a8772981`
+- Manifest: `documentation/contributing/legacy-freeze-manifest-20260303.md`
+
+## Post-Removal Verification
 
 1. `mkdocs build --strict` passes.
 2. `bash tools/docs/check_no_legacy_links.sh` passes.
-3. No links in `documentation/` point to deleted legacy paths.
-4. Site navigation includes only current documentation sections.
-5. Archive branch and tag are present on remote and documented in release notes.
+3. `rg --files archive/legacy` returns no files on `develop`.
+4. Historical references in docs point to freeze branch/tag, not removed paths.
 
 ## Rollback
 
-If historical content must be restored, recover files from:
+To restore removed legacy content, recover files from:
 
-- `archive/docs-legacy-YYYYMMDD` branch, or
-- `legacy-docs-freeze-YYYYMMDD` tag.
+- `archive/legacy-freeze-20260303` branch, or
+- `legacy-freeze-20260303` tag.
+
+Rollback must be done via a normal PR; do not rewrite history.
