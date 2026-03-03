@@ -22,5 +22,5 @@ This folder contains the structured documentation system for media-manager.
 
 ## Authority Rules
 
-- If project docs conflict, use [Unified Architecture Spec](project/07-unified-architecture-spec.md) for technical behavior.
+- If docs conflict, use [Architecture Invariants](architecture/invariants.md) and [Run Lifecycle](architecture/run-lifecycle.md) as the technical authority.
 - Runtime behavior constraints are governed by root `AGENTS.md` and documentation state-machine docs.

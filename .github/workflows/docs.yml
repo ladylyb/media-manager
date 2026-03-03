@@ -28,3 +28,6 @@ jobs:
 
       - name: Enforce current-only docs links
         run: bash tools/docs/check_no_legacy_links.sh
+
+      - name: Enforce nav-driven docs orphan policy
+        run: bash tools/docs/check_orphan_docs.sh

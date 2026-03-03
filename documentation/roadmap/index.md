@@ -13,5 +13,4 @@ This section tracks future documentation work and sequencing.
 ## Upcoming Work
 
 - Next: content hardening and progressive examples for operator playbooks
-
-Historical project phase material remains under `documentation/project/` during transition.
+- Next: tighten orphan-doc enforcement and keep nav-driven documentation as single source of truth.
