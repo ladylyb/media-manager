@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from uuid import UUID
 
 from media_manager.app.canonical.context import CanonicalContext
@@ -20,6 +21,68 @@ from media_manager.app.persistence.runs import RunService
 from media_manager.app.persistence.tag_enrichment import EnrichmentScope, TagEnrichmentCommand, run_tag_enrichment
 from media_manager.app.service_layer.cache import ServiceCache
 
+_WINDOWS_DRIVE_PATH_RE = re.compile(r"^([A-Za-z]):[\\/](.*)$")
+_MNT_DRIVE_PATH_RE = re.compile(r"^/mnt/([A-Z])(?:/(.*))?$")
+
+
+def _strip_wrapping_quotes(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        return value[1:-1].strip()
+    return value
+
+
+def _iter_normalized_directory_candidates(raw: str) -> list[Path]:
+    """Return deterministic candidate directories for GUI-provided path variants."""
+    normalized = _strip_wrapping_quotes(raw.strip())
+    if not normalized:
+        raise ValueError("folder_path is required.")
+
+    candidates: list[Path] = [Path(normalized)]
+
+    mnt_match = _MNT_DRIVE_PATH_RE.match(normalized)
+    if mnt_match is not None:
+        drive = mnt_match.group(1).lower()
+        tail = mnt_match.group(2) or ""
+        mapped = Path("/mnt") / drive
+        if tail:
+            mapped = mapped / tail
+        candidates.append(mapped)
+
+    win_match = _WINDOWS_DRIVE_PATH_RE.match(normalized)
+    if win_match is not None:
+        drive = win_match.group(1).lower()
+        tail = win_match.group(2).replace("\\", "/").lstrip("/")
+        mapped = Path("/mnt") / drive
+        if tail:
+            mapped = mapped / tail
+        candidates.append(mapped)
+
+    # Keep order stable and remove duplicates while preserving first occurrence.
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+    return deduped
+
+
+def normalize_and_resolve_directory(raw: str) -> Path:
+    """Normalize common GUI path forms and resolve a readable directory."""
+    candidates = _iter_normalized_directory_candidates(raw)
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_dir():
+            return candidate
+
+    normalized_input = _strip_wrapping_quotes(raw.strip())
+    raise ValueError(
+        "Folder path does not exist or is not a directory: "
+        f"{normalized_input}. Accepted examples: /mnt/c/path/to/folder, C:\\path\\to\\folder "
+        "(auto-mapped on WSL), and unquoted absolute paths."
+    )
+
 
 @dataclass
 class OperationServices:
@@ -32,11 +95,7 @@ class OperationServices:
         return OperationRunService(self.session_factory)
 
     def ingest(self, *, folder_path: str, dry_run: bool) -> dict[str, object]:
-        folder = Path(folder_path)
-        if not folder.exists():
-            raise ValueError(f"Folder path does not exist: {folder}")
-        if not folder.is_dir():
-            raise ValueError(f"Folder path must be a directory: {folder}")
+        folder = normalize_and_resolve_directory(folder_path)
         run_log = self._op_runs().start(
             operation_type=OperationRunType.INGEST,
             context={"folder_path": str(folder), "dry_run": bool(dry_run)},
@@ -66,11 +125,7 @@ class OperationServices:
             raise
 
     def plan(self, *, folder_path: str, strict_metadata: bool) -> dict[str, object]:
-        folder = Path(folder_path)
-        if not folder.exists():
-            raise ValueError(f"Folder path does not exist: {folder}")
-        if not folder.is_dir():
-            raise ValueError(f"Folder path must be a directory: {folder}")
+        folder = normalize_and_resolve_directory(folder_path)
         run_log = self._op_runs().start(
             operation_type=OperationRunType.PLAN,
             context={"folder_path": str(folder), "strict_metadata": bool(strict_metadata)},
@@ -177,13 +232,14 @@ class OperationServices:
         return self.run(folder_path=folder_path, policy_name=policy_name, dry_run=dry_run)
 
     def run(self, *, folder_path: str, policy_name: str, dry_run: bool) -> dict[str, object]:
+        folder = normalize_and_resolve_directory(folder_path)
         run_log = self._op_runs().start(
             operation_type=OperationRunType.OPERATOR_RUN,
-            context={"folder_path": folder_path, "policy_name": policy_name, "dry_run": bool(dry_run)},
+            context={"folder_path": str(folder), "policy_name": policy_name, "dry_run": bool(dry_run)},
         )
         try:
             result = OperatorRunTriggerService(self.session_factory).trigger_run(
-                RunTriggerCommand(folder_path=folder_path, policy_name=policy_name, dry_run=dry_run)
+                RunTriggerCommand(folder_path=str(folder), policy_name=policy_name, dry_run=dry_run)
             ).to_dict()
             linked_run_id = result.get("run_id")
             if isinstance(linked_run_id, str):
@@ -319,9 +375,5 @@ class OperationServices:
         ]
 
     def media_file_validate(self, *, folder_path: str) -> dict[str, object]:
-        folder = Path(folder_path)
-        if not folder.exists():
-            raise ValueError(f"Folder path does not exist: {folder}")
-        if not folder.is_dir():
-            raise ValueError(f"Folder path must be a directory: {folder}")
+        folder = normalize_and_resolve_directory(folder_path)
         return IngestService(self.session_factory).validate_path(folder).to_dict()

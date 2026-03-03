@@ -1670,6 +1670,72 @@ def test_post_ingest_v2_execute_returns_summary_fields() -> None:
     assert payload["summary"]["duration_s"] == 0.25
 
 
+def test_post_ingest_v2_invalid_path_returns_actionable_400() -> None:
+    class _BadPathOperationServices(_FakeOperationServices):
+        def ingest(self, *, folder_path: str, dry_run: bool) -> dict[str, object]:
+            _ = dry_run
+            raise ValueError(
+                "Folder path does not exist or is not a directory: "
+                f"{folder_path}. Accepted examples: /mnt/c/path/to/folder, C:\\path\\to\\folder "
+                "(auto-mapped on WSL), and unquoted absolute paths."
+            )
+
+    app.dependency_overrides[get_operation_services] = _BadPathOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post("/api/v2/ingest", json={"folder_path": '"/mnt/C/foo"', "dry_run": True})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["errors"][0]["code"] == "VALIDATION_ERROR"
+    assert "Accepted examples" in payload["errors"][0]["message"]
+
+
+def test_execute_mutation_logs_4xx_without_traceback(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def _warn(message: str, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        _ = args, kwargs
+        calls.append(f"warning:{message}")
+
+    def _exc(message: str, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        _ = args, kwargs
+        calls.append(f"exception:{message}")
+
+    monkeypatch.setattr(main_module.LOGGER, "warning", _warn)
+    monkeypatch.setattr(main_module.LOGGER, "exception", _exc)
+
+    response = main_module._execute_mutation("ingest", lambda: (_ for _ in ()).throw(ValueError("bad input")))
+
+    assert response.status_code == 400
+    assert "warning:v2 mutation rejected" in calls
+    assert not any(call.startswith("exception:") for call in calls)
+
+
+def test_execute_mutation_logs_5xx_with_traceback(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def _warn(message: str, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        _ = args, kwargs
+        calls.append(f"warning:{message}")
+
+    def _exc(message: str, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        _ = args, kwargs
+        calls.append(f"exception:{message}")
+
+    monkeypatch.setattr(main_module.LOGGER, "warning", _warn)
+    monkeypatch.setattr(main_module.LOGGER, "exception", _exc)
+
+    response = main_module._execute_mutation("ingest", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    assert response.status_code == 500
+    assert "exception:v2 mutation failed" in calls
+    assert not any(call.startswith("warning:") for call in calls)
+
+
 def test_post_plan_v2_returns_service_envelope() -> None:
     app.dependency_overrides[get_operation_services] = _FakeOperationServices
     client = TestClient(app)
