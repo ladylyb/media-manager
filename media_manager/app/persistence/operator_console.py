@@ -36,6 +36,9 @@ from media_manager.app.persistence.models import (
     FileInstanceStatus,
     MediaFile,
     MediaFileStatus,
+    OperationRun,
+    OperationRunStatus,
+    OperationRunType,
     PlannedAction,
     Run,
     Tag,
@@ -95,6 +98,35 @@ class LatestMetrics:
 
 @dataclass(frozen=True)
 class RunHistoryItem:
+    """Unified operation run history row for operator console list/table rendering."""
+
+    operation_run_id: str
+    operation_type: str
+    status: str
+    started_at: str
+    completed_at: str | None
+    duration_ms: float | None
+    linked_run_id: str | None
+    context: dict[str, object]
+    error_message: str | None
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-serializable mapping."""
+        return {
+            "operation_run_id": self.operation_run_id,
+            "operation_type": self.operation_type,
+            "status": self.status,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "duration_ms": self.duration_ms,
+            "linked_run_id": self.linked_run_id,
+            "context": dict(self.context),
+            "error_message": self.error_message,
+        }
+
+
+@dataclass(frozen=True)
+class InternalRunHistoryItem:
     """Run history row for operator console list/table rendering."""
 
     run_id: str
@@ -445,8 +477,44 @@ class OperatorConsoleReadService:
             last_regression_status=regression_status,
         )
 
-    def get_run_history(self, limit: int = 50) -> list[RunHistoryItem]:
-        """Return latest run history rows with derived counts and status."""
+    def get_run_history(
+        self,
+        limit: int = 50,
+        *,
+        operation_type: str | None = None,
+        status: str | None = None,
+    ) -> list[RunHistoryItem]:
+        """Return unified operation run history rows."""
+        bounded_limit = max(1, int(limit))
+        with self._session_factory() as session:
+            stmt = select(OperationRun).order_by(OperationRun.started_at.desc(), OperationRun.id.desc()).limit(bounded_limit)
+            if operation_type is not None:
+                stmt = stmt.where(OperationRun.operation_type == OperationRunType(operation_type.strip().upper()))
+            if status is not None:
+                stmt = stmt.where(OperationRun.status == OperationRunStatus(status.strip().upper()))
+            rows = session.scalars(stmt).all()
+        items: list[InternalRunHistoryItem] = []
+        for row in rows:
+            duration_ms: float | None = None
+            if row.completed_at is not None:
+                duration_ms = (row.completed_at - row.started_at).total_seconds() * 1000.0
+            items.append(
+                RunHistoryItem(
+                    operation_run_id=str(row.id),
+                    operation_type=row.operation_type.value,
+                    status=row.status.value,
+                    started_at=row.started_at.isoformat(),
+                    completed_at=row.completed_at.isoformat() if row.completed_at is not None else None,
+                    duration_ms=duration_ms,
+                    linked_run_id=str(row.linked_run_id) if row.linked_run_id is not None else None,
+                    context=dict(row.context or {}),
+                    error_message=row.error_message,
+                )
+            )
+        return items
+
+    def get_internal_run_history(self, limit: int = 50) -> list[InternalRunHistoryItem]:
+        """Return legacy planner/apply run history rows with derived counts and status."""
         bounded_limit = max(1, int(limit))
         with self._session_factory() as session:
             runs = session.scalars(
@@ -473,7 +541,7 @@ class OperatorConsoleReadService:
             regression_status = self._latest_regression_status(artifact) if artifact is not None else "UNKNOWN"
 
             items.append(
-                RunHistoryItem(
+                InternalRunHistoryItem(
                     run_id=run_id_str,
                     timestamp=run.created_at.isoformat(),
                     files_processed=int(files_processed),
@@ -1047,7 +1115,7 @@ class OperatorConsoleReadService:
         return int(value or 0)
 
     def _count_total_runs(self, session: Session) -> int:
-        value = session.scalar(select(func.count()).select_from(Run))
+        value = session.scalar(select(func.count()).select_from(OperationRun))
         return int(value or 0)
 
     def _planned_action_counts_by_run(self, session: Session, run_ids: list[UUID]) -> dict[UUID, int]:

@@ -20,6 +20,35 @@ class _FakeCache:
         self.invalidations.append(tuple(keys))
 
 
+class _FakeOperationRunService:
+    def __init__(self, _session_factory) -> None:
+        self._id = uuid4()
+
+    def start(self, *, operation_type, context, linked_run_id=None):  # type: ignore[no-untyped-def]
+        _ = operation_type, context, linked_run_id
+        return SimpleNamespace(operation_run_id=str(self._id))
+
+    def complete(self, operation_run_id):  # type: ignore[no-untyped-def]
+        _ = operation_run_id
+        return None
+
+    def fail(self, operation_run_id, *, error_message):  # type: ignore[no-untyped-def]
+        _ = operation_run_id, error_message
+        return None
+
+    def link_run(self, operation_run_id, *, linked_run_id):  # type: ignore[no-untyped-def]
+        _ = operation_run_id, linked_run_id
+        return None
+
+    def list_history(self, *, limit, operation_type=None, status=None):  # type: ignore[no-untyped-def]
+        _ = limit, operation_type, status
+        return []
+
+
+def _install_fake_operation_run_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(operations_module, "OperationRunService", _FakeOperationRunService)
+
+
 def test_ingest_dry_run_is_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     dataset = tmp_path / "dataset"
     dataset.mkdir()
@@ -32,6 +61,7 @@ def test_ingest_dry_run_is_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyP
             return SimpleNamespace(to_dict=lambda: {"mode": "VALIDATION_ONLY", "delta": {"would_insert": 1}})
 
     monkeypatch.setattr(operations_module, "IngestService", _FakeIngestService)
+    _install_fake_operation_run_service(monkeypatch)
     cache = _FakeCache(invalidations=[])
     services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
 
@@ -61,6 +91,7 @@ def test_ingest_execute_invalidates_caches(tmp_path: Path, monkeypatch: pytest.M
             )
 
     monkeypatch.setattr(operations_module, "IngestService", _FakeIngestService)
+    _install_fake_operation_run_service(monkeypatch)
     cache = _FakeCache(invalidations=[])
     services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
 
@@ -73,7 +104,10 @@ def test_ingest_execute_invalidates_caches(tmp_path: Path, monkeypatch: pytest.M
     assert payload["summary"]["duplicates_detected"] == 0
     assert payload["summary"]["metadata_extracted"] == 3
     assert payload["summary"]["duration_s"] == 0.25
-    assert ("dashboard_summary", "latest_metrics", "status") in cache.invalidations
+    assert any(
+        {"dashboard_summary", "latest_metrics", "status"}.issubset(set(invalidated))
+        for invalidated in cache.invalidations
+    )
 
 
 def test_plan_returns_run_and_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -111,6 +145,7 @@ def test_plan_returns_run_and_summary(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setattr(operations_module, "IngestService", _FakeIngestService)
     monkeypatch.setattr(operations_module, "RunService", _FakeRunService)
     monkeypatch.setattr(operations_module, "PlanningService", _FakePlanner)
+    _install_fake_operation_run_service(monkeypatch)
 
     cache = _FakeCache(invalidations=[])
     services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
@@ -153,6 +188,7 @@ def test_canonical_recompute_apply_invalidates_cache(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(operations_module, "build_canonical_policy", _fake_build_policy)
     monkeypatch.setattr(operations_module, "recompute_canonical_assignments", _fake_recompute)
+    _install_fake_operation_run_service(monkeypatch)
 
     cache = _FakeCache(invalidations=[])
     services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
@@ -161,7 +197,7 @@ def test_canonical_recompute_apply_invalidates_cache(monkeypatch: pytest.MonkeyP
 
     assert payload["operation"] == "CANONICAL_RECOMPUTE"
     assert payload["mode"] == "APPLY"
-    assert ("latest_metrics", "status") in cache.invalidations
+    assert any({"latest_metrics", "status"}.issubset(set(invalidated)) for invalidated in cache.invalidations)
 
 
 def test_operations_catalog_contains_expected_items() -> None:

@@ -43,12 +43,15 @@ export interface LatestMetrics {
 
 // Runs
 export interface Run {
-  run_id: string;
-  timestamp: string;
-  files_processed: number;
-  duplicates_found: number;
-  runtime_ms: number;
-  regression_status: "PASS" | "FAIL" | "UNKNOWN";
+  operation_run_id: string;
+  operation_type: string;
+  status: "STARTED" | "COMPLETED" | "FAILED";
+  started_at: string;
+  completed_at: string | null;
+  duration_ms: number | null;
+  linked_run_id?: string | null;
+  context?: Record<string, unknown>;
+  error_message?: string | null;
   details?: Record<string, unknown>;
 }
 

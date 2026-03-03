@@ -130,17 +130,20 @@ export const getRuns = async (params?: { limit?: number }) => {
   const mapped: Run[] = items.map((item) => {
     const row = item as Record<string, unknown>;
     return {
-      run_id: String(row.run_id ?? ""),
-      timestamp: String(row.timestamp ?? ""),
-      files_processed: Number(row.files_processed ?? 0),
-      duplicates_found: Number(row.duplicates_found ?? 0),
-      runtime_ms: Number(row.runtime_ms ?? 0),
-      regression_status:
-        String(row.regression_status ?? "UNKNOWN").toUpperCase() === "PASS"
-          ? "PASS"
-          : String(row.regression_status ?? "UNKNOWN").toUpperCase() === "FAIL"
-            ? "FAIL"
-            : "UNKNOWN",
+      operation_run_id: String(row.operation_run_id ?? ""),
+      operation_type: String(row.operation_type ?? ""),
+      status:
+        String(row.status ?? "STARTED").toUpperCase() === "COMPLETED"
+          ? "COMPLETED"
+          : String(row.status ?? "STARTED").toUpperCase() === "FAILED"
+            ? "FAILED"
+            : "STARTED",
+      started_at: String(row.started_at ?? ""),
+      completed_at: row.completed_at ? String(row.completed_at) : null,
+      duration_ms: row.duration_ms == null ? null : Number(row.duration_ms),
+      linked_run_id: row.linked_run_id ? String(row.linked_run_id) : null,
+      context: (row.context as Record<string, unknown>) ?? {},
+      error_message: row.error_message ? String(row.error_message) : null,
     };
   });
   const paged = mapPagination({ total_count: mapped.length, page: 1, limit: mapped.length, total_pages: 1 }, mapped);

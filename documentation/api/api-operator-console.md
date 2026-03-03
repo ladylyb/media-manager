@@ -24,7 +24,9 @@ Available v2 endpoints:
 - `GET /api/v2/status`
 - `GET /api/v2/dashboard-summary`
 - `GET /api/v2/latest-metrics`
-- `GET /api/v2/runs?limit=50`
+- `GET /api/v2/runs?limit=50&operation_type=INGEST&status=COMPLETED`
+- `GET /api/v2/operation-runs?limit=50&operation_type=PLAN&status=FAILED`
+- `GET /api/v2/internal-runs?limit=50`
 - `GET /api/v2/operations/catalog`
 - `GET /api/v2/policy`
 - `POST /api/v2/policy`
@@ -89,6 +91,30 @@ validation-only when `dry_run=true`).
 
 `POST /api/v2/operator-run` is an alias endpoint with the same payload/behavior,
 used by the refreshed Dashboard quick action.
+
+## Unified Run History
+
+`GET /api/v2/runs` is now backed by the unified `operation_runs` log and is the
+default operator-facing history feed.
+
+Supported filters:
+- `limit` (1..200)
+- `operation_type` (`INGEST|PLAN|APPLY|OPERATOR_RUN|CANONICAL_RECOMPUTE|TAG_ENRICHMENT|DB_RESET`)
+- `status` (`STARTED|COMPLETED|FAILED`)
+
+Each row includes:
+- `operation_run_id` (primary history id for GUI/CLI operations)
+- `operation_type`
+- `status`
+- `started_at`
+- `completed_at`
+- `duration_ms`
+- `linked_run_id` (legacy planner/apply `runs.id` when available)
+- `context`
+- `error_message`
+
+`GET /api/v2/internal-runs` remains available for legacy planner/apply lifecycle
+records from the original `runs` table.
 
 ## Ledger Endpoints
 

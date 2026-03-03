@@ -34,6 +34,8 @@ class ReadServices:
                 "tag_enrichment",
                 "dashboard_summary",
                 "runs",
+                "operation_runs",
+                "internal_runs",
                 "latest_metrics",
                 "canonical",
                 "duplicates",
@@ -68,8 +70,33 @@ class ReadServices:
         self.cache.set("latest_metrics", payload, ttl_s=2)
         return payload
 
-    def runs(self, *, limit: int) -> list[dict[str, object]]:
-        return [item.to_dict() for item in self._read_service.get_run_history(limit=limit)]
+    def runs(
+        self,
+        *,
+        limit: int,
+        operation_type: str | None = None,
+        status: str | None = None,
+    ) -> list[dict[str, object]]:
+        return [
+            item.to_dict()
+            for item in self._read_service.get_run_history(
+                limit=limit,
+                operation_type=operation_type,
+                status=status,
+            )
+        ]
+
+    def operation_runs(
+        self,
+        *,
+        limit: int,
+        operation_type: str | None = None,
+        status: str | None = None,
+    ) -> list[dict[str, object]]:
+        return self.runs(limit=limit, operation_type=operation_type, status=status)
+
+    def internal_runs(self, *, limit: int) -> list[dict[str, object]]:
+        return [item.to_dict() for item in self._read_service.get_internal_run_history(limit=limit)]
 
     def duplicates(self) -> dict[str, object]:
         return {"groups": [group.to_dict() for group in self._read_service.get_duplicate_groups()]}
