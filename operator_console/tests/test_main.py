@@ -25,6 +25,7 @@ class _FakeService:
     def __init__(self) -> None:
         self.last_gallery_call: dict[str, Any] | None = None
         self.last_tag_suggestions_call: dict[str, Any] | None = None
+        self.last_media_file_call: dict[str, Any] | None = None
 
     def get_dashboard_summary(self) -> "_FakePayload":
         return _FakePayload(
@@ -169,6 +170,45 @@ class _FakeService:
         self.last_tag_suggestions_call = {"q": q, "limit": limit}
         base = ("city", "city night", "travel", "wildlife")
         return tuple(base[: max(1, min(50, int(limit)))])
+
+    def _ledger_payload(self, *, page: int, limit: int) -> _FakePayload:
+        return _FakePayload(
+            {
+                "total_count": 1,
+                "page": page,
+                "limit": limit,
+                "total_pages": 1,
+                "items": [
+                    {
+                        "id": "55555555-0000-0000-0000-000000000001",
+                        "current_path": "/ledger/a.jpg",
+                        "discovered_path": "/ledger/a.jpg",
+                        "size_bytes": 1024,
+                        "hash_sha256": "a" * 64,
+                        "status": "INGESTED",
+                        "discovered_at": "2026-03-01T10:00:00+00:00",
+                        "ingested_at": "2026-03-01T10:00:01+00:00",
+                        "deleted_at": None,
+                    }
+                ],
+            }
+        )
+
+    def get_media_file_by_hash_page(self, *, hash_prefix: str, page: int = 1, limit: int = 30) -> _FakePayload:
+        self.last_media_file_call = {"mode": "hash", "hash_prefix": hash_prefix, "page": page, "limit": limit}
+        return self._ledger_payload(page=page, limit=limit)
+
+    def get_media_file_history_page(self, *, path: str, page: int = 1, limit: int = 30) -> _FakePayload:
+        self.last_media_file_call = {"mode": "history", "path": path, "page": page, "limit": limit}
+        return self._ledger_payload(page=page, limit=limit)
+
+    def get_media_file_by_status_page(self, *, status, page: int = 1, limit: int = 30) -> _FakePayload:
+        self.last_media_file_call = {"mode": "status", "status": getattr(status, "value", str(status)), "page": page, "limit": limit}
+        return self._ledger_payload(page=page, limit=limit)
+
+    def get_media_file_reappearances_page(self, *, path: str, page: int = 1, limit: int = 30) -> _FakePayload:
+        self.last_media_file_call = {"mode": "reappearances", "path": path, "page": page, "limit": limit}
+        return self._ledger_payload(page=page, limit=limit)
 
     def resolve_thumbnail_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:
         if str(file_instance_id) == "aaaaaaaa-0000-0000-0000-000000000001":
@@ -452,6 +492,18 @@ def test_discover_page_rejects_invalid_sort_by() -> None:
     assert "sort_by" in response.json()["detail"]
 
 
+def test_ledger_page_renders_template() -> None:
+    client = TestClient(app)
+
+    response = client.get("/ledger")
+
+    assert response.status_code == 200
+    assert "MediaFile Ledger" in response.text
+    assert "By Hash" in response.text
+    assert "Path History" in response.text
+    assert "Reappearances" in response.text
+
+
 def test_runs_endpoint_returns_json() -> None:
     """GET /api/runs should return run history rows as JSON."""
     app.dependency_overrides[get_operator_console_service] = _FakeService
@@ -480,6 +532,92 @@ def test_runs_endpoint_returns_json() -> None:
             "regression_status": "FAIL",
         },
     ]
+
+
+def test_media_file_by_hash_endpoint_returns_paginated_shape() -> None:
+    fake = _FakeService()
+    app.dependency_overrides[get_operator_console_service] = lambda: fake
+    client = TestClient(app)
+    try:
+        response = client.get("/api/media-file/by-hash?hash_prefix=abcd&page=2&limit=10")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["page"] == 2
+    assert payload["limit"] == 10
+    assert payload["items"][0]["status"] == "INGESTED"
+    assert fake.last_media_file_call == {"mode": "hash", "hash_prefix": "abcd", "page": 2, "limit": 10}
+
+
+def test_media_file_history_endpoint_returns_paginated_shape() -> None:
+    fake = _FakeService()
+    app.dependency_overrides[get_operator_console_service] = lambda: fake
+    client = TestClient(app)
+    try:
+        response = client.get("/api/media-file/history?path=/ledger/a.jpg&page=1&limit=30")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_count"] == 1
+    assert fake.last_media_file_call == {"mode": "history", "path": "/ledger/a.jpg", "page": 1, "limit": 30}
+
+
+def test_media_file_by_status_endpoint_returns_paginated_shape() -> None:
+    fake = _FakeService()
+    app.dependency_overrides[get_operator_console_service] = lambda: fake
+    client = TestClient(app)
+    try:
+        response = client.get("/api/media-file/by-status?status=processed&page=1&limit=30")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"][0]["hash_sha256"] == "a" * 64
+    assert fake.last_media_file_call == {"mode": "status", "status": "PROCESSED", "page": 1, "limit": 30}
+
+
+def test_media_file_reappearances_endpoint_returns_paginated_shape() -> None:
+    fake = _FakeService()
+    app.dependency_overrides[get_operator_console_service] = lambda: fake
+    client = TestClient(app)
+    try:
+        response = client.get("/api/media-file/reappearances?path=/ledger/a.jpg&page=1&limit=5")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"][0]["current_path"] == "/ledger/a.jpg"
+    assert fake.last_media_file_call == {"mode": "reappearances", "path": "/ledger/a.jpg", "page": 1, "limit": 5}
+
+
+def test_media_file_endpoints_reject_invalid_inputs() -> None:
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        empty_hash = client.get("/api/media-file/by-hash?hash_prefix= ")
+        empty_path = client.get("/api/media-file/history?path=")
+        bad_status = client.get("/api/media-file/by-status?status=bad")
+        bad_page = client.get("/api/media-file/reappearances?path=/x&page=0")
+        bad_limit = client.get("/api/media-file/reappearances?path=/x&limit=999")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert empty_hash.status_code == 400
+    assert "hash_prefix" in empty_hash.json()["detail"]
+    assert empty_path.status_code == 400
+    assert "path" in empty_path.json()["detail"]
+    assert bad_status.status_code == 400
+    assert "status" in bad_status.json()["detail"]
+    assert bad_page.status_code == 400
+    assert "page" in bad_page.json()["detail"]
+    assert bad_limit.status_code == 400
+    assert "limit" in bad_limit.json()["detail"]
 
 
 def test_api_canonical_returns_paginated_shape() -> None:

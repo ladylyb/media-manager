@@ -9,6 +9,7 @@ Generated and module-oriented API reference.
 - [Persistence Planner API](api-persistence-planner.md)
 - [Persistence Apply API](api-persistence-apply.md)
 - [Persistence Services API](api-persistence-services.md)
+- [Operator Console API](api-operator-console.md)
 - [Persistence Runs and Failures API](api-persistence-runs-failures.md)
 - [Canonical Policy API](api-canonical.md)
 - [Performance API](api-performance.md)

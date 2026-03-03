@@ -16,6 +16,10 @@
 
 ::: media_manager.app.persistence.operator_console
 
+## MediaFile Ledger Queries
+
+::: media_manager.app.persistence.media_file_queries
+
 ## Operator Run Trigger
 
 ::: media_manager.app.persistence.operator_run_trigger
