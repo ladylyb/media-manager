@@ -26,6 +26,9 @@ from media_manager.app.persistence.models import (
 logger = get_logger(__name__)
 
 
+_HASH_PREFIX_LEN = 12
+
+
 @dataclass(frozen=True)
 class IngestSummary:
     files_scanned: int
@@ -59,11 +62,35 @@ def _upsert_media_file_ledger(
         select(MediaFile)
         .where(
             MediaFile.current_path == absolute_path,
+            # Deleted rows are immutable historical facts. Reappearance creates a new
+            # live ledger row rather than mutating the deleted row in place.
             MediaFile.status != MediaFileStatus.DELETED.value,
         )
         .with_for_update()
     )
     if row is None:
+        prior_deleted_count = int(
+            session.scalar(
+                select(func.count())
+                .select_from(MediaFile)
+                .where(
+                    MediaFile.current_path == absolute_path,
+                    MediaFile.status == MediaFileStatus.DELETED.value,
+                )
+            )
+            or 0
+        )
+        if prior_deleted_count > 0:
+            logger.info(
+                "Path reappeared after delete",
+                extra={
+                    "phase": "ingest",
+                    "action": "REAPPEARED_AFTER_DELETE",
+                    "filename": absolute_path,
+                    "files_count": 1,
+                    "codes_extracted": f"prior_deleted_rows={prior_deleted_count}",
+                },
+            )
         session.add(
             MediaFile(
                 discovered_path=absolute_path,
@@ -79,11 +106,36 @@ def _upsert_media_file_ledger(
         )
         return
 
+    # Preserve existing lifecycle state for live rows. Ingest refreshes ledger
+    # observation time, but it must not roll PROCESSED rows back to INGESTED.
     row.current_path = absolute_path
     row.size_bytes = size_bytes
-    row.hash_sha256 = digest
-    row.status = MediaFileStatus.INGESTED.value
-    row.ingested_at = func.now()
+    # Keep lifecycle constraint safe even if application and DB clocks drift:
+    # ingested_at must never precede discovered_at.
+    row.ingested_at = func.greatest(func.now(), row.discovered_at)
+    # Preserve discovered_at as first-seen fact for this ledger row.
+
+    if row.hash_sha256 is None:
+        row.hash_sha256 = digest
+        return
+
+    # Never overwrite a durable stored hash in Phase 13 ingest. Mismatches are
+    # observable facts for later reconciliation phases, not auto-repair here.
+    if row.hash_sha256 != digest:
+        logger.warning(
+            "Ingest hash mismatch observed for existing ledger row",
+            extra={
+                "phase": "ingest",
+                "action": "HASH_MISMATCH",
+                "filename": absolute_path,
+                "files_count": 1,
+                "file_hash": digest[:_HASH_PREFIX_LEN],
+                "codes_extracted": (
+                    f"stored_hash_prefix={row.hash_sha256[:_HASH_PREFIX_LEN]},"
+                    f"computed_hash_prefix={digest[:_HASH_PREFIX_LEN]},file_size={size_bytes}"
+                ),
+            },
+        )
 
 
 def _mark_missing_paths_deleted_for_root(
@@ -137,17 +189,35 @@ def ingest_paths_in_session(
     for candidate in files:
         if not candidate.exists() or not candidate.is_file():
             continue
-        scanned += 1
-        t_hash_start = perf_counter()
-        digest = sha256_file(candidate)
-        hash_latency_ms = (perf_counter() - t_hash_start) * 1000.0
-        if latency_samples is not None:
-            latency_samples.hash_latencies_ms.append(hash_latency_ms)
         absolute_path = str(candidate.resolve(strict=False))
+        try:
+            size_bytes = int(candidate.stat().st_size)
+            scanned += 1
+            t_hash_start = perf_counter()
+            # TODO(phase14): if ingest throughput demands it, move to a batched
+            # hash/db pipeline. Phase 13 keeps per-file hashing for correctness.
+            digest = sha256_file(candidate)
+            hash_latency_ms = (perf_counter() - t_hash_start) * 1000.0
+            if latency_samples is not None:
+                latency_samples.hash_latencies_ms.append(hash_latency_ms)
+        except OSError:
+            logger.warning(
+                "File disappeared during ingest; skipping candidate",
+                extra={
+                    "phase": "ingest",
+                    "action": "FILE_MISSING_DURING_INGEST",
+                    "filename": absolute_path,
+                    "files_count": 1,
+                },
+            )
+            continue
+
         observed_paths.add(absolute_path)
-        size_bytes = int(candidate.stat().st_size)
 
         t_db_start = perf_counter()
+        # media_file remains a pure ingest ledger. Canonical winner/duplicate
+        # decisions, including same-hash cross-path reasoning, live elsewhere.
+        # Hash mismatch reconciliation is intentionally deferred past Phase 13.
         _upsert_media_file_ledger(session, absolute_path=absolute_path, digest=digest, size_bytes=size_bytes)
 
         content = session.scalar(select(FileContent).where(FileContent.sha256_hash == digest).with_for_update())

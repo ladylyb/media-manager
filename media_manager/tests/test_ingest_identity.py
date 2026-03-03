@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from time import sleep
 
 from sqlalchemy import select
 
+import media_manager.app.persistence.ingest as ingest_module
+from media_manager.app.core.hashing import sha256_file
 from media_manager.app.persistence.discovery import process_discovery_paths_in_session
 from media_manager.app.persistence.ingest import IngestService
 from media_manager.app.persistence.models import (
@@ -151,6 +154,8 @@ def test_reappearance_after_deleted_inserts_new_row(tmp_path: Path, session_fact
         rows = session.scalars(select(MediaFile).where(MediaFile.current_path == str(target.resolve(strict=False)))).all()
         assert len(rows) == 2
         assert {row.status for row in rows} == {MediaFileStatus.DELETED.value, MediaFileStatus.INGESTED.value}
+        live = next(row for row in rows if row.status == MediaFileStatus.INGESTED.value)
+        assert live.hash_sha256 is not None
 
 
 def test_incremental_ingest_paths_does_not_mark_deleted(tmp_path: Path, session_factory) -> None:
@@ -168,3 +173,136 @@ def test_incremental_ingest_paths_does_not_mark_deleted(tmp_path: Path, session_
         assert row is not None
         assert row.status != MediaFileStatus.DELETED.value
 
+
+def test_ingest_preserves_processed_status_on_reingest(tmp_path: Path, session_factory) -> None:
+    ingest = IngestService(session_factory)
+    target = _write_file(tmp_path / "keep-processed.jpg", b"same")
+
+    ingest.ingest_paths([target])
+    with session_factory.begin() as session:
+        process_discovery_paths_in_session(session, [target])
+    ingest.ingest_paths([target])
+
+    with session_factory() as session:
+        row = session.scalar(select(MediaFile).where(MediaFile.current_path == str(target.resolve(strict=False))))
+        assert row is not None
+        assert row.status == MediaFileStatus.PROCESSED.value
+
+
+def test_ingest_fills_missing_hash_for_existing_live_row(tmp_path: Path, session_factory) -> None:
+    ingest = IngestService(session_factory)
+    target = _write_file(tmp_path / "missing-hash.jpg", b"payload")
+    expected_digest = sha256_file(target)
+    discovered_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+
+    with session_factory.begin() as session:
+        session.add(
+            MediaFile(
+                discovered_path=str(target.resolve(strict=False)),
+                current_path=str(target.resolve(strict=False)),
+                size_bytes=1,
+                hash_sha256=None,
+                discovered_at=discovered_at,
+                status=MediaFileStatus.PROCESSED.value,
+            )
+        )
+
+    ingest.ingest_paths([target])
+    with session_factory() as session:
+        row = session.scalar(select(MediaFile).where(MediaFile.current_path == str(target.resolve(strict=False))))
+        assert row is not None
+        assert row.hash_sha256 == expected_digest
+        assert row.status == MediaFileStatus.PROCESSED.value
+        assert row.discovered_at == discovered_at
+        assert row.ingested_at is not None
+
+
+def test_ingest_preserves_existing_discovered_at(tmp_path: Path, session_factory) -> None:
+    ingest = IngestService(session_factory)
+    target = _write_file(tmp_path / "discovered-at.jpg", b"payload")
+    expected_digest = sha256_file(target)
+    discovered_at = datetime(2019, 6, 1, tzinfo=timezone.utc)
+
+    with session_factory.begin() as session:
+        session.add(
+            MediaFile(
+                discovered_path=str(target.resolve(strict=False)),
+                current_path=str(target.resolve(strict=False)),
+                size_bytes=1,
+                hash_sha256=expected_digest,
+                discovered_at=discovered_at,
+                status=MediaFileStatus.INGESTED.value,
+            )
+        )
+
+    ingest.ingest_paths([target])
+    with session_factory() as session:
+        row = session.scalar(select(MediaFile).where(MediaFile.current_path == str(target.resolve(strict=False))))
+        assert row is not None
+        assert row.hash_sha256 == expected_digest
+        assert row.discovered_at == discovered_at
+        assert row.ingested_at is not None
+
+
+def test_ingest_hash_mismatch_logs_without_overwrite(tmp_path: Path, session_factory, monkeypatch) -> None:
+    ingest = IngestService(session_factory)
+    target = _write_file(tmp_path / "hash-mismatch.jpg", b"payload")
+    warning_calls: list[dict[str, str]] = []
+
+    def _capture_warning(_message: str, *, extra: dict[str, str]) -> None:
+        warning_calls.append(extra)
+
+    monkeypatch.setattr(ingest_module.logger, "warning", _capture_warning)
+
+    with session_factory.begin() as session:
+        session.add(
+            MediaFile(
+                discovered_path=str(target.resolve(strict=False)),
+                current_path=str(target.resolve(strict=False)),
+                size_bytes=1,
+                hash_sha256="0" * 64,
+                status=MediaFileStatus.INGESTED.value,
+            )
+        )
+
+    ingest.ingest_paths([target])
+
+    with session_factory() as session:
+        row = session.scalar(select(MediaFile).where(MediaFile.current_path == str(target.resolve(strict=False))))
+        assert row is not None
+        assert row.hash_sha256 == "0" * 64
+
+    mismatch_warnings = [extra for extra in warning_calls if extra.get("action") == "HASH_MISMATCH"]
+    assert len(mismatch_warnings) == 1
+    assert "file_size=7" in mismatch_warnings[0].get("codes_extracted", "")
+
+
+def test_ingest_zero_byte_file_hash_recording(tmp_path: Path, session_factory) -> None:
+    ingest = IngestService(session_factory)
+    target = _write_file(tmp_path / "empty.jpg", b"")
+
+    ingest.ingest_paths([target])
+    with session_factory() as session:
+        row = session.scalar(select(MediaFile).where(MediaFile.current_path == str(target.resolve(strict=False))))
+        assert row is not None
+        assert row.hash_sha256 == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+
+def test_ingest_file_disappears_mid_scan_is_safely_skipped(tmp_path: Path, session_factory, monkeypatch) -> None:
+    ingest = IngestService(session_factory)
+    target = _write_file(tmp_path / "vanish.jpg", b"payload")
+
+    def _vanishing_hash(path: Path, *_args, **_kwargs) -> str:  # type: ignore[no-untyped-def]
+        path.unlink()
+        raise FileNotFoundError("file disappeared")
+
+    monkeypatch.setattr(ingest_module, "sha256_file", _vanishing_hash)
+
+    summary = ingest.ingest_paths([target])
+    assert summary.files_scanned == 1
+    assert summary.new_contents == 0
+    assert summary.new_instances == 0
+
+    with session_factory() as session:
+        assert session.scalar(select(MediaFile).where(MediaFile.current_path == str(target.resolve(strict=False)))) is None
+        assert session.scalars(select(FileContent)).all() == []
