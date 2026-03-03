@@ -210,6 +210,18 @@ class _FakeService:
         self.last_media_file_call = {"mode": "reappearances", "path": path, "page": page, "limit": limit}
         return self._ledger_payload(page=page, limit=limit)
 
+    def get_media_file_analytics(self) -> _FakePayload:
+        return _FakePayload(
+            {
+                "totals": {"files_tracked": 11, "duplicate_hash_groups": 2},
+                "by_status": {"INGESTED": 6, "PROCESSED": 3, "DELETED": 2},
+                "ingested_per_day": [{"day": "2026-03-01", "count": 4}],
+                "deleted_per_day": [{"day": "2026-03-01", "count": 1}],
+                "reappearances_per_day": [{"day": "2026-03-02", "count": 2}],
+                "window": {"mode": "all_time"},
+            }
+        )
+
     def resolve_thumbnail_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:
         if str(file_instance_id) == "aaaaaaaa-0000-0000-0000-000000000001":
             return Path(__file__), "image/jpeg"
@@ -594,6 +606,22 @@ def test_media_file_reappearances_endpoint_returns_paginated_shape() -> None:
     payload = response.json()
     assert payload["items"][0]["current_path"] == "/ledger/a.jpg"
     assert fake.last_media_file_call == {"mode": "reappearances", "path": "/ledger/a.jpg", "page": 1, "limit": 5}
+
+
+def test_media_file_analytics_endpoint_returns_expected_shape() -> None:
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/api/media-file/analytics")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["totals"]["files_tracked"] == 11
+    assert payload["totals"]["duplicate_hash_groups"] == 2
+    assert payload["by_status"]["INGESTED"] == 6
+    assert payload["window"]["mode"] == "all_time"
 
 
 def test_media_file_endpoints_reject_invalid_inputs() -> None:

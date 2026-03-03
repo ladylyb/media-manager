@@ -402,6 +402,13 @@ def create_app() -> FastAPI:
             limit=parsed_limit,
         ).to_dict()
 
+    @app.get("/api/media-file/analytics")
+    def media_file_analytics(
+        service: OperatorConsoleReadService = Depends(get_operator_console_service),
+    ) -> dict[str, object]:
+        """Return all-time Phase 13 ledger analytics for dashboard/reporting views."""
+        return service.get_media_file_analytics().to_dict()
+
     @app.get("/media/{file_id}")
     def media(
         file_id: UUID,

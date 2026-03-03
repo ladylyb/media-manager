@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import case, func, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy.orm import Session, aliased, sessionmaker
 
 from media_manager.app.core.filenames import infer_media_type_from_extension
 from media_manager.app.core.perf_artifacts import BASELINE_DIR, read_performance_artifact_json, load_baseline_json
@@ -272,6 +272,44 @@ class MediaFileLedgerPage:
         }
 
 
+@dataclass(frozen=True)
+class LedgerDayCount:
+    """Day-bucketed count row for ledger analytics trends."""
+
+    day: str
+    count: int
+
+    def to_dict(self) -> dict[str, str | int]:
+        """Return a JSON-serializable mapping."""
+        return {
+            "day": self.day,
+            "count": self.count,
+        }
+
+
+@dataclass(frozen=True)
+class MediaFileLedgerAnalytics:
+    """Aggregate analytics payload for Phase 13 ledger-only reporting."""
+
+    totals: dict[str, int]
+    by_status: dict[str, int]
+    ingested_per_day: tuple[LedgerDayCount, ...]
+    deleted_per_day: tuple[LedgerDayCount, ...]
+    reappearances_per_day: tuple[LedgerDayCount, ...]
+    window: dict[str, str]
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-serializable mapping."""
+        return {
+            "totals": dict(self.totals),
+            "by_status": dict(self.by_status),
+            "ingested_per_day": [item.to_dict() for item in self.ingested_per_day],
+            "deleted_per_day": [item.to_dict() for item in self.deleted_per_day],
+            "reappearances_per_day": [item.to_dict() for item in self.reappearances_per_day],
+            "window": dict(self.window),
+        }
+
+
 class OperatorConsoleReadService:
     """Read-only service for Operator Console API endpoints."""
 
@@ -529,6 +567,27 @@ class OperatorConsoleReadService:
         with self._session_factory() as session:
             rows = get_reappearances_after_deleted(session, path)
         return self._paginate_media_file_rows(rows, page=page, limit=limit)
+
+    def get_media_file_analytics(self) -> MediaFileLedgerAnalytics:
+        """Return all-time ledger analytics for GUI reporting cards and trends."""
+        with self._session_factory() as session:
+            totals = {
+                "files_tracked": int(session.scalar(select(func.count()).select_from(MediaFile)) or 0),
+                "duplicate_hash_groups": int(self._duplicate_hash_group_count(session)),
+            }
+            by_status = self._status_distribution(session)
+            ingested_per_day = self._ingested_per_day_series(session)
+            deleted_per_day = self._deleted_per_day_series(session)
+            reappearances_per_day = self._reappearances_per_day_series(session)
+
+        return MediaFileLedgerAnalytics(
+            totals=totals,
+            by_status=by_status,
+            ingested_per_day=ingested_per_day,
+            deleted_per_day=deleted_per_day,
+            reappearances_per_day=reappearances_per_day,
+            window={"mode": "all_time"},
+        )
 
     def resolve_thumbnail_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:
         """Resolve an active image file path and media type for thumbnail streaming."""
@@ -825,6 +884,93 @@ class OperatorConsoleReadService:
     def _run_duration_ms_fallback(self, created_at: datetime, updated_at: datetime) -> float:
         delta_ms = (updated_at - created_at).total_seconds() * 1000.0
         return 0.0 if delta_ms < 0 else float(delta_ms)
+
+    def _status_distribution(self, session: Session) -> dict[str, int]:
+        rows = session.execute(
+            select(MediaFile.status, func.count(MediaFile.id))
+            .group_by(MediaFile.status)
+        ).all()
+        distribution = {
+            MediaFileStatus.INGESTED.value: 0,
+            MediaFileStatus.PROCESSED.value: 0,
+            MediaFileStatus.DELETED.value: 0,
+        }
+        for status, count in rows:
+            distribution[str(status)] = int(count)
+        return distribution
+
+    def _duplicate_hash_group_count(self, session: Session) -> int:
+        path_key = func.coalesce(MediaFile.current_path, MediaFile.discovered_path)
+        duplicate_groups = (
+            select(MediaFile.hash_sha256)
+            .where(MediaFile.hash_sha256.is_not(None))
+            .group_by(MediaFile.hash_sha256)
+            .having(func.count(func.distinct(path_key)) > 1)
+            .subquery()
+        )
+        return int(session.scalar(select(func.count()).select_from(duplicate_groups)) or 0)
+
+    def _ingested_per_day_series(self, session: Session) -> tuple[LedgerDayCount, ...]:
+        day_expr = func.date(MediaFile.discovered_at)
+        rows = session.execute(
+            select(day_expr.label("day"), func.count(MediaFile.id).label("count"))
+            .where(MediaFile.status.in_([MediaFileStatus.INGESTED.value, MediaFileStatus.PROCESSED.value]))
+            .group_by(day_expr)
+            .order_by(day_expr.asc())
+        ).all()
+        return self._rows_to_day_series(rows)
+
+    def _deleted_per_day_series(self, session: Session) -> tuple[LedgerDayCount, ...]:
+        day_expr = func.date(MediaFile.deleted_at)
+        rows = session.execute(
+            select(day_expr.label("day"), func.count(MediaFile.id).label("count"))
+            .where(
+                MediaFile.status == MediaFileStatus.DELETED.value,
+                MediaFile.deleted_at.is_not(None),
+            )
+            .group_by(day_expr)
+            .order_by(day_expr.asc())
+        ).all()
+        return self._rows_to_day_series(rows)
+
+    def _reappearances_per_day_series(self, session: Session) -> tuple[LedgerDayCount, ...]:
+        current = aliased(MediaFile)
+        prior = aliased(MediaFile)
+        day_expr = func.date(current.discovered_at)
+        # Reappearance is path-history based in the ledger. We match across both
+        # current_path and discovered_path to catch renamed rows that still carry
+        # the original discovered path after a prior DELETED tombstone.
+        path_matches = or_(
+            and_(current.current_path.is_not(None), prior.current_path == current.current_path),
+            and_(current.current_path.is_not(None), prior.discovered_path == current.current_path),
+            and_(current.discovered_path.is_not(None), prior.current_path == current.discovered_path),
+            and_(current.discovered_path.is_not(None), prior.discovered_path == current.discovered_path),
+        )
+        rows = session.execute(
+            select(day_expr.label("day"), func.count(current.id).label("count"))
+            .where(
+                current.status != MediaFileStatus.DELETED.value,
+                select(prior.id)
+                .where(
+                    prior.status == MediaFileStatus.DELETED.value,
+                    prior.deleted_at.is_not(None),
+                    prior.deleted_at < current.discovered_at,
+                    path_matches,
+                )
+                .exists(),
+            )
+            .group_by(day_expr)
+            .order_by(day_expr.asc())
+        ).all()
+        return self._rows_to_day_series(rows)
+
+    def _rows_to_day_series(self, rows: list[tuple[object, int]]) -> tuple[LedgerDayCount, ...]:
+        output: list[LedgerDayCount] = []
+        for day_value, count in rows:
+            if day_value is None:
+                continue
+            output.append(LedgerDayCount(day=str(day_value), count=int(count)))
+        return tuple(output)
 
     def _paginate_media_file_rows(self, rows: list[MediaFile], *, page: int, limit: int) -> MediaFileLedgerPage:
         bounded_page = max(1, int(page))
