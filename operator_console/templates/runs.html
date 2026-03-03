@@ -35,6 +35,16 @@
 </section>
 
 <script>
+  function envelopeData(payload) {
+    if (!payload || typeof payload !== "object") {
+      return {};
+    }
+    if (payload.data && typeof payload.data === "object") {
+      return payload.data;
+    }
+    return {};
+  }
+
   function formatRuntimeMs(value) {
     if (typeof value !== "number" || Number.isNaN(value)) {
       return "--";
@@ -110,12 +120,13 @@
 
   async function loadRunHistory() {
     try {
-      const response = await fetch("/api/runs", { headers: { Accept: "application/json" } });
+      const response = await fetch("/api/v2/runs", { headers: { Accept: "application/json" } });
       if (!response.ok) {
         throw new Error(`runs status ${response.status}`);
       }
       const payload = await response.json();
-      renderRows(payload);
+      const result = envelopeData(payload).result;
+      renderRows(Array.isArray(result) ? result : []);
       const errorNode = document.getElementById("runs-error");
       if (errorNode) {
         errorNode.textContent = "";

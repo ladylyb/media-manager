@@ -76,11 +76,13 @@ def test_cli_ingest_dry_run_json_output(tmp_path: Path, test_database_url: str, 
     assert '"would_insert": 1' in stdout
 
 
-def test_cli_ingest_json_requires_dry_run(tmp_path: Path, test_database_url: str, monkeypatch, capsys) -> None:
+def test_cli_ingest_json_output_for_execute_mode(tmp_path: Path, test_database_url: str, monkeypatch, capsys) -> None:
     monkeypatch.setenv("DATABASE_URL", test_database_url)
     root = tmp_path / "dataset"
+    _write_file(root / "a.jpg", b"a")
     root.mkdir(parents=True, exist_ok=True)
     exit_code = main(["ingest", str(root), "--json"])
-    assert exit_code == 2
-    assert "--json is only supported with ingest --dry-run." in capsys.readouterr().err
-
+    assert exit_code == 0
+    payload = capsys.readouterr().out
+    assert '"ok": true' in payload.lower()
+    assert '"files_scanned": 1' in payload

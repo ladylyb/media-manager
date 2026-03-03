@@ -2,6 +2,39 @@
 
 Read-only ledger endpoints introduced for Phase 13 GUI-first diagnostics.
 
+## v2 Service-Layer Endpoints
+
+The `/api/v2/*` family is sourced from an in-process shared service layer.
+`/api/*` v1 remains active and feature-frozen for rollback compatibility.
+
+Standard envelope:
+
+```json
+{
+  "ok": true,
+  "workflow_version": "v2-service-layer",
+  "schema_version": "string",
+  "generated_at": "iso8601",
+  "data": {},
+  "errors": []
+}
+```
+
+Available v2 endpoints:
+- `GET /api/v2/status`
+- `GET /api/v2/dashboard-summary`
+- `GET /api/v2/latest-metrics`
+- `GET /api/v2/runs?limit=50`
+- `GET /api/v2/policy`
+- `POST /api/v2/policy`
+- `POST /api/v2/run`
+- `POST /api/v2/tag-enrichment`
+
+Error mapping:
+- `400` validation/domain/state errors (`ok=false`, populated `errors[]`)
+- `500` runtime failures
+- `503` mutation concurrency saturation
+
 ## HTML Route
 
 - `GET /ledger`

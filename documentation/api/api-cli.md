@@ -7,8 +7,36 @@
 `media-manager ingest <path> --dry-run` runs read-only ingest validation and returns a would-change report.
 
 - No DB writes occur in this mode.
-- `--json` is supported only with `--dry-run`:
+- `--json` emits the standard CLI v2 envelope:
   - `media-manager ingest <path> --dry-run --json`
+  - `media-manager ingest <path> --json`
+
+## CLI JSON Contract (v2 service layer)
+
+Mutating and selected read commands support `--json` and return:
+
+```json
+{
+  "ok": true,
+  "workflow_version": "v2-service-layer",
+  "schema_version": "string",
+  "generated_at": "iso8601",
+  "data": {},
+  "errors": []
+}
+```
+
+Operator-facing commands:
+- `media-manager status --json`
+- `media-manager operator <dashboard-summary|latest-metrics|runs> --json [--limit N]`
+- `media-manager operator-run --folder-path <path> --policy-name <name> [--dry-run] --json`
+- `media-manager policy-get --json`
+- `media-manager policy-set --selected-policy <name> --version <n> [--preferred-root <path> ...] --json`
+
+Optional remote transport for supported commands:
+- `--transport local|http` (default `local`)
+- `--api http://localhost:8000` (used with `--transport http`)
+- `--timeout 30`
 
 ## Ledger Hash Audit Health Check
 

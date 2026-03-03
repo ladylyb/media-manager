@@ -53,6 +53,16 @@
   let pageSource = "load";
   const pageLimit = 30;
 
+  function envelopeData(payload) {
+    if (!payload || typeof payload !== "object") {
+      return {};
+    }
+    if (payload.data && typeof payload.data === "object") {
+      return payload.data;
+    }
+    return {};
+  }
+
   function byId(id) {
     return document.getElementById(id);
   }
@@ -265,7 +275,7 @@
     setLoading(true);
 
     try {
-      const response = await fetch(`/api/canonical?page=${currentPage}&limit=${pageLimit}`, {
+      const response = await fetch(`/api/v2/canonical?page=${currentPage}&limit=${pageLimit}`, {
         headers: { Accept: "application/json" },
       });
 
@@ -274,13 +284,14 @@
       }
 
       const payload = await response.json();
-      totalPages = typeof payload.total_pages === "number" ? payload.total_pages : 0;
-      currentPage = typeof payload.page === "number" ? payload.page : currentPage;
+      const result = envelopeData(payload).result || {};
+      totalPages = typeof result.total_pages === "number" ? result.total_pages : 0;
+      currentPage = typeof result.page === "number" ? result.page : currentPage;
 
-      if (!Array.isArray(payload.items) || payload.items.length === 0) {
+      if (!Array.isArray(result.items) || result.items.length === 0) {
         renderEmpty();
       } else {
-        renderItems(payload.items);
+        renderItems(result.items);
       }
 
       syncPageInUrl(currentPage, pageSource === "load");

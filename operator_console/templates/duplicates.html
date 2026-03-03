@@ -38,6 +38,12 @@
   let duplicateGroups = [];
   let selectedGroupId = null;
 
+  function envelopeData(payload) {
+    if (!payload || typeof payload !== "object") return {};
+    if (payload.data && typeof payload.data === "object") return payload.data;
+    return {};
+  }
+
   function byId(id) {
     return document.getElementById(id);
   }
@@ -240,13 +246,14 @@
 
   async function loadDuplicateGroups() {
     try {
-      const response = await fetch("/api/duplicates", { headers: { Accept: "application/json" } });
+      const response = await fetch("/api/v2/duplicates", { headers: { Accept: "application/json" } });
       if (!response.ok) {
         throw new Error(`duplicates status ${response.status}`);
       }
 
       const payload = await response.json();
-      duplicateGroups = Array.isArray(payload.groups) ? payload.groups : [];
+      const result = envelopeData(payload).result || {};
+      duplicateGroups = Array.isArray(result.groups) ? result.groups : [];
       selectedGroupId = duplicateGroups.length > 0 ? String(duplicateGroups[0].group_id) : null;
 
       setText("duplicate-group-count", `${duplicateGroups.length} group${duplicateGroups.length === 1 ? "" : "s"}`);

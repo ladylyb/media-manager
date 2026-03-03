@@ -13,8 +13,10 @@ import operator_console.main as main_module
 from operator_console.main import (
     app,
     get_ingest_service,
+    get_operation_services,
     get_operator_console_service,
     get_policy_settings_service,
+    get_read_services,
     get_operator_run_trigger_service,
     get_tag_enrichment_session_factory,
 )
@@ -467,6 +469,95 @@ class _FakeIngestService:
         )
 
 
+class _FakeReadServices:
+    def status(self) -> dict[str, object]:
+        return {"active_phase": "phase13"}
+
+    def dashboard_summary(self) -> dict[str, object]:
+        return {"total_files": 10}
+
+    def latest_metrics(self) -> dict[str, object]:
+        return {"ingest_time_ms": 12.5}
+
+    def runs(self, *, limit: int) -> list[dict[str, object]]:
+        _ = limit
+        return [{"run_id": "abc"}]
+
+    def canonical(self, **kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
+        _ = kwargs
+        return {"total_count": 0, "page": 1, "limit": 30, "total_pages": 0, "items": []}
+
+    def canonical_tags(self, *, q: str | None, limit: int) -> dict[str, object]:
+        _ = q, limit
+        return {"items": ["city"]}
+
+    def duplicates(self) -> dict[str, object]:
+        return {"groups": []}
+
+    def media_file_by_hash(self, *, hash_prefix: str, page: int, limit: int) -> dict[str, object]:
+        _ = hash_prefix, page, limit
+        return {"total_count": 0, "page": 1, "limit": 30, "total_pages": 0, "items": []}
+
+    def media_file_history(self, *, path: str, page: int, limit: int) -> dict[str, object]:
+        _ = path, page, limit
+        return {"total_count": 0, "page": 1, "limit": 30, "total_pages": 0, "items": []}
+
+    def media_file_by_status(self, *, status: str, page: int, limit: int) -> dict[str, object]:
+        _ = status, page, limit
+        return {"total_count": 0, "page": 1, "limit": 30, "total_pages": 0, "items": []}
+
+    def media_file_reappearances(self, *, path: str, page: int, limit: int) -> dict[str, object]:
+        _ = path, page, limit
+        return {"total_count": 0, "page": 1, "limit": 30, "total_pages": 0, "items": []}
+
+    def media_file_analytics(self) -> dict[str, object]:
+        return {"totals": {"files_tracked": 0}, "window": {"mode": "all_time"}}
+
+    def ledger_hash_audit(self, *, root_path: str | None, sample_limit: int) -> dict[str, object]:
+        _ = root_path, sample_limit
+        return {
+            "total_files": 0,
+            "missing_hash": 0,
+            "hash_mismatches": 0,
+            "deleted_rows_skipped": 0,
+            "sample_missing_hash_paths": [],
+            "sample_mismatch_paths": [],
+        }
+
+    def media_file_dry_run_audit(self, *, start: str | None, end: str | None, limit: int) -> dict[str, object]:
+        _ = start, end, limit
+        return {"coverage": "BEST_EFFORT", "method": "x", "window": {"start": None, "end": None}, "candidates": [], "limitations": []}
+
+
+class _FakeOperationServices:
+    def run(self, *, folder_path: str, policy_name: str, dry_run: bool) -> dict[str, object]:
+        _ = policy_name
+        return {"mode": "VALIDATION_ONLY" if dry_run else "EXECUTION", "run_id": "r1", "folder_path": folder_path}
+
+    def policy_get(self) -> dict[str, object]:
+        return {"canonical_priority": {"selected_policy": "FIRST_SEEN"}, "metadata": {"version": 1}}
+
+    def policy_set(
+        self,
+        *,
+        selected_policy: str,
+        preferred_roots: tuple[str, ...],
+        recanonicalization_enabled: bool,
+        version: int,
+    ) -> dict[str, object]:
+        _ = preferred_roots, recanonicalization_enabled
+        if version < 0:
+            raise ValueError("invalid version")
+        return {"canonical_priority": {"selected_policy": selected_policy}, "metadata": {"version": version + 1}}
+
+    def tag_enrichment(self, *, run_all: bool, canonical_id: str | None, batch_size: int, source: str) -> dict[str, object]:
+        _ = run_all, canonical_id, batch_size, source
+        return {"scope": "ALL", "number_of_items_processed": 2}
+
+    def media_file_validate(self, *, folder_path: str) -> dict[str, object]:
+        return {"mode": "VALIDATION_ONLY", "root_path": folder_path, "delta": {"would_insert": 0}}
+
+
 def test_dashboard_route_renders_template() -> None:
     """GET / should render the dashboard template through the base layout."""
     client = TestClient(app)
@@ -652,6 +743,58 @@ def test_runs_endpoint_returns_json() -> None:
             "regression_status": "FAIL",
         },
     ]
+
+
+def test_v2_status_endpoint_returns_cli_envelope() -> None:
+    app.dependency_overrides[get_read_services] = _FakeReadServices
+    client = TestClient(app)
+    try:
+        response = client.get("/api/v2/status")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["active_phase"] == "phase13"
+
+
+def test_v2_read_endpoints_return_cli_envelopes() -> None:
+    app.dependency_overrides[get_read_services] = _FakeReadServices
+    client = TestClient(app)
+    try:
+        summary = client.get("/api/v2/dashboard-summary")
+        metrics = client.get("/api/v2/latest-metrics")
+        runs = client.get("/api/v2/runs?limit=25")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert summary.status_code == 200
+    assert metrics.status_code == 200
+    assert runs.status_code == 200
+    assert summary.json()["data"]["result"]["total_files"] == 10
+    assert metrics.json()["data"]["result"]["ingest_time_ms"] == 12.5
+    assert runs.json()["data"]["result"][0]["run_id"] == "abc"
+
+
+def test_v2_canonical_duplicates_and_ledger_endpoints_return_service_envelopes() -> None:
+    app.dependency_overrides[get_read_services] = _FakeReadServices
+    client = TestClient(app)
+    try:
+        canonical = client.get("/api/v2/canonical?page=1&limit=30")
+        tags = client.get("/api/v2/canonical/tags?q=ci&limit=5")
+        duplicates = client.get("/api/v2/duplicates")
+        by_hash = client.get("/api/v2/media-file/by-hash?hash_prefix=abc&page=1&limit=30")
+        analytics = client.get("/api/v2/media-file/analytics")
+        audit = client.get("/api/v2/ledger/hash-audit?sample_limit=20")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert canonical.status_code == 200
+    assert tags.status_code == 200
+    assert duplicates.status_code == 200
+    assert by_hash.status_code == 200
+    assert analytics.status_code == 200
+    assert audit.status_code == 200
 
 
 def test_media_file_by_hash_endpoint_returns_paginated_shape() -> None:
@@ -1240,6 +1383,96 @@ def test_post_run_endpoint_non_dry_run_returns_execution_payload() -> None:
     assert payload["mode"] == "EXECUTION"
     assert payload["run_id"] == "33333333-3333-3333-3333-333333333333"
     assert payload["summary_metrics"]["dry_run"] is False
+
+
+def test_post_run_v2_returns_service_envelope() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/v2/run",
+            json={
+                "folder_path": "/dataset",
+                "policy_name": "PREFER_ROOT",
+                "dry_run": True,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"]["mode"] == "VALIDATION_ONLY"
+
+
+def test_post_policy_v2_returns_service_envelope() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/v2/policy",
+            json={
+                "selected_policy": "PREFER_ROOT",
+                "preferred_roots": ["/a", "/b"],
+                "recanonicalization_enabled": False,
+                "version": 7,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["data"]["result"]["metadata"]["version"] == 8
+
+
+def test_post_tag_enrichment_v2_returns_service_envelope() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/v2/tag-enrichment",
+            json={"all": True, "batch_size": 5, "source": "system"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["data"]["result"]["number_of_items_processed"] == 2
+
+
+def test_post_media_file_validate_v2_returns_service_envelope(tmp_path: Path) -> None:
+    dataset = tmp_path / "dataset"
+    dataset.mkdir(parents=True, exist_ok=True)
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/v2/media-file/validate",
+            json={"folder_path": str(dataset), "policy_name": "FIRST_SEEN"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"]["mode"] == "VALIDATION_ONLY"
+
+
+def test_v2_service_error_returns_structured_400() -> None:
+    class _BadReadServices(_FakeReadServices):
+        def dashboard_summary(self) -> dict[str, object]:
+            raise ValueError("bad input")
+
+    app.dependency_overrides[get_read_services] = _BadReadServices
+    client = TestClient(app)
+    try:
+        response = client.get("/api/v2/dashboard-summary")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert response.json()["ok"] is False
+    assert response.json()["errors"][0]["code"] == "VALIDATION_ERROR"
 
 
 def test_post_run_endpoint_returns_bad_request_for_invalid_folder() -> None:
