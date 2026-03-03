@@ -674,6 +674,49 @@ def test_operations_page_renders_template() -> None:
     assert "Run Composite" in response.text
 
 
+def test_console_v2_route_serves_spa_shell() -> None:
+    client = TestClient(app)
+
+    response = client.get("/console-v2")
+
+    assert response.status_code == 200
+    assert '<div id="root"></div>' in response.text
+    assert "/static-v2/assets/" in response.text
+
+
+def test_legacy_routes_remain_template_based_when_v2_flag_off(monkeypatch) -> None:
+    monkeypatch.setenv("MEDIA_MANAGER_UI_V2_ENABLED", "0")
+    flagged_app = main_module.create_app()
+    client = TestClient(flagged_app)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Dashboard" in response.text
+    assert "Quick Operations" in response.text
+
+
+def test_legacy_routes_cutover_to_v2_when_flag_enabled_except_admin(monkeypatch) -> None:
+    monkeypatch.setenv("MEDIA_MANAGER_UI_V2_ENABLED", "1")
+    flagged_app = main_module.create_app()
+    client = TestClient(flagged_app)
+
+    dashboard = client.get("/")
+    operations = client.get("/operations")
+    admin = client.get("/admin")
+
+    assert dashboard.status_code == 200
+    assert '<div id="root"></div>' in dashboard.text
+    assert "/static-v2/assets/" in dashboard.text
+
+    assert operations.status_code == 200
+    assert '<div id="root"></div>' in operations.text
+    assert "/static-v2/assets/" in operations.text
+
+    assert admin.status_code == 200
+    assert "Reset Database" in admin.text
+
+
 def test_dashboard_summary_endpoint_returns_json() -> None:
     """GET /api/dashboard-summary should return summary fields as JSON."""
     app.dependency_overrides[get_operator_console_service] = _FakeService
