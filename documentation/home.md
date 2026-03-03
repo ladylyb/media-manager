@@ -20,4 +20,3 @@ This documentation is organized for practical use first, with architecture and l
 
 - [Architecture](architecture/index.md)
 - [Roadmap](roadmap/index.md)
-- [Archive](archive/index.md)

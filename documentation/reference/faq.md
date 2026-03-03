@@ -14,4 +14,4 @@ Use [Troubleshooting](../operator-guide/troubleshooting.md), then [Drift Diagnos
 
 ## Where is historical/legacy documentation?
 
-Use the [Archive](../archive/index.md) section.
+Historical documentation is retained in the repository archive and excluded from the published site.
