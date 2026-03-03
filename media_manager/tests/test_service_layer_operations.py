@@ -209,3 +209,175 @@ def test_operations_catalog_contains_expected_items() -> None:
     assert "items" in catalog
     ids = [item["operation_id"] for item in catalog["items"]]
     assert ids == ["ingest", "plan", "apply", "canonical_recompute", "tag_enrichment", "operator_run"]
+
+
+def test_ingest_accepts_wrapped_quotes_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+
+    class _FakeIngestService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def validate_path(self, root: Path) -> SimpleNamespace:
+            assert root == dataset
+            return SimpleNamespace(to_dict=lambda: {"mode": "VALIDATION_ONLY", "delta": {"would_insert": 0}})
+
+    monkeypatch.setattr(operations_module, "IngestService", _FakeIngestService)
+    _install_fake_operation_run_service(monkeypatch)
+
+    services = OperationServices(session_factory=object(), cache=_FakeCache(invalidations=[]))  # type: ignore[arg-type]
+    payload = services.ingest(folder_path=f'"{dataset}"', dry_run=True)
+    assert payload["mode"] == "VALIDATION_ONLY"
+
+
+def test_ingest_accepts_mnt_uppercase_drive_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    canonical = Path("/mnt/c/Users/micro/Documents/Media-Manager-Test")
+    uppercase = Path("/mnt/C/Users/micro/Documents/Media-Manager-Test")
+
+    def _fake_exists(self: Path) -> bool:
+        return str(self) == str(canonical)
+
+    def _fake_is_dir(self: Path) -> bool:
+        return str(self) == str(canonical)
+
+    class _FakeIngestService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def validate_path(self, root: Path) -> SimpleNamespace:
+            assert root == canonical
+            return SimpleNamespace(to_dict=lambda: {"mode": "VALIDATION_ONLY", "delta": {"would_insert": 0}})
+
+    monkeypatch.setattr(Path, "exists", _fake_exists)
+    monkeypatch.setattr(Path, "is_dir", _fake_is_dir)
+    monkeypatch.setattr(operations_module, "IngestService", _FakeIngestService)
+    _install_fake_operation_run_service(monkeypatch)
+
+    services = OperationServices(session_factory=object(), cache=_FakeCache(invalidations=[]))  # type: ignore[arg-type]
+    payload = services.ingest(folder_path=str(uppercase), dry_run=True)
+    assert payload["mode"] == "VALIDATION_ONLY"
+
+
+def test_ingest_accepts_windows_drive_path_via_wsl_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    mapped = Path("/mnt/c/Users/micro/Documents/Media-Manager-Test")
+    windows = "C:\\Users\\micro\\Documents\\Media-Manager-Test"
+
+    def _fake_exists(self: Path) -> bool:
+        return str(self) == str(mapped)
+
+    def _fake_is_dir(self: Path) -> bool:
+        return str(self) == str(mapped)
+
+    class _FakeIngestService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def validate_path(self, root: Path) -> SimpleNamespace:
+            assert root == mapped
+            return SimpleNamespace(to_dict=lambda: {"mode": "VALIDATION_ONLY", "delta": {"would_insert": 0}})
+
+    monkeypatch.setattr(Path, "exists", _fake_exists)
+    monkeypatch.setattr(Path, "is_dir", _fake_is_dir)
+    monkeypatch.setattr(operations_module, "IngestService", _FakeIngestService)
+    _install_fake_operation_run_service(monkeypatch)
+
+    services = OperationServices(session_factory=object(), cache=_FakeCache(invalidations=[]))  # type: ignore[arg-type]
+    payload = services.ingest(folder_path=windows, dry_run=True)
+    assert payload["mode"] == "VALIDATION_ONLY"
+
+
+def test_ingest_rejects_nonexistent_after_normalization_with_actionable_message() -> None:
+    services = OperationServices(session_factory=object(), cache=_FakeCache(invalidations=[]))  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="Accepted examples: /mnt/c/path/to/folder"):
+        services.ingest(folder_path='"/mnt/c/does/not/exist"', dry_run=True)
+
+
+def test_plan_accepts_wrapped_quotes_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+    (dataset / "a.jpg").write_bytes(b"x")
+
+    class _FakeIngestService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def collect_files(self, root: Path) -> list[Path]:
+            assert root == dataset
+            return [root / "a.jpg"]
+
+        def ingest_paths(self, _files: list[Path], *, authoritative_root: Path | None = None):
+            assert authoritative_root == dataset
+            return SimpleNamespace()
+
+    class _FakeRunService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def create_run(self):
+            return SimpleNamespace(id=uuid4())
+
+    class _FakePlanner:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def plan_run(self, _run_id, _files, ingest_if_needed=False, strict_missing_metadata=False):
+            _ = ingest_if_needed, strict_missing_metadata
+            return SimpleNamespace(to_dict=lambda: {"scanned_count": 1, "move_actions": 0, "noop_actions": 1, "duplicate_actions": 0})
+
+    monkeypatch.setattr(operations_module, "IngestService", _FakeIngestService)
+    monkeypatch.setattr(operations_module, "RunService", _FakeRunService)
+    monkeypatch.setattr(operations_module, "PlanningService", _FakePlanner)
+    _install_fake_operation_run_service(monkeypatch)
+
+    services = OperationServices(session_factory=object(), cache=_FakeCache(invalidations=[]))  # type: ignore[arg-type]
+    payload = services.plan(folder_path=f'"{dataset}"', strict_metadata=False)
+    assert payload["operation"] == "PLAN"
+
+
+def test_media_file_validate_accepts_windows_drive_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    mapped = Path("/mnt/c/Users/micro/Documents/Media-Manager-Test")
+    windows = "C:\\Users\\micro\\Documents\\Media-Manager-Test"
+
+    def _fake_exists(self: Path) -> bool:
+        return str(self) == str(mapped)
+
+    def _fake_is_dir(self: Path) -> bool:
+        return str(self) == str(mapped)
+
+    class _FakeIngestService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def validate_path(self, root: Path) -> SimpleNamespace:
+            assert root == mapped
+            return SimpleNamespace(to_dict=lambda: {"mode": "VALIDATION_ONLY", "delta": {"would_insert": 0}})
+
+    monkeypatch.setattr(Path, "exists", _fake_exists)
+    monkeypatch.setattr(Path, "is_dir", _fake_is_dir)
+    monkeypatch.setattr(operations_module, "IngestService", _FakeIngestService)
+
+    services = OperationServices(session_factory=object(), cache=_FakeCache(invalidations=[]))  # type: ignore[arg-type]
+    payload = services.media_file_validate(folder_path=windows)
+    assert payload["mode"] == "VALIDATION_ONLY"
+
+
+def test_run_uses_resolved_folder_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+
+    class _FakeTriggerService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def trigger_run(self, command):  # type: ignore[no-untyped-def]
+            assert command.folder_path == str(dataset)
+            return SimpleNamespace(to_dict=lambda: {"mode": "VALIDATION_ONLY", "validation_report": {"delta": {"would_insert": 0}}})
+
+    monkeypatch.setattr(operations_module, "OperatorRunTriggerService", _FakeTriggerService)
+    _install_fake_operation_run_service(monkeypatch)
+
+    services = OperationServices(session_factory=object(), cache=_FakeCache(invalidations=[]))  # type: ignore[arg-type]
+    payload = services.run(folder_path=f"'{dataset}'", policy_name="FIRST_SEEN", dry_run=True)
+    assert payload["mode"] == "VALIDATION_ONLY"

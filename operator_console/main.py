@@ -297,10 +297,12 @@ def _execute_mutation(name: str, fn) -> JSONResponse:  # type: ignore[no-untyped
         result = fn()
     except Exception as exc:
         mapped = map_exception(exc)
-        LOGGER.exception(
-            "v2 mutation failed",
-            extra={"operation": name, "error_code": mapped.code, "phase": "operator_console", "action": "V2_MUTATION"},
-        )
+        log_extra = {"operation": name, "error_code": mapped.code, "phase": "operator_console", "action": "V2_MUTATION"}
+        # Expected validation/domain conflicts are logged without traceback noise.
+        if 400 <= mapped.http_status < 500:
+            LOGGER.warning("v2 mutation rejected", extra=log_extra)
+        else:
+            LOGGER.exception("v2 mutation failed", extra=log_extra)
         return _v2_error(http_status=mapped.http_status, code=mapped.code, message=mapped.message, details=mapped.details)
     finally:
         _MUTATION_SEMAPHORE.release()
