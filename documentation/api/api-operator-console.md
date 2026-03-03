@@ -25,9 +25,15 @@ Available v2 endpoints:
 - `GET /api/v2/dashboard-summary`
 - `GET /api/v2/latest-metrics`
 - `GET /api/v2/runs?limit=50`
+- `GET /api/v2/operations/catalog`
 - `GET /api/v2/policy`
 - `POST /api/v2/policy`
+- `POST /api/v2/ingest`
+- `POST /api/v2/plan`
+- `POST /api/v2/apply`
+- `POST /api/v2/canonical/recompute`
 - `POST /api/v2/run`
+- `POST /api/v2/operator-run`
 - `POST /api/v2/tag-enrichment`
 - `POST /api/v2/admin/db-reset`
 
@@ -70,6 +76,17 @@ Result payload in envelope `data.result`:
 
 - `GET /ledger`
   - Renders the MediaFile ledger explorer page.
+- `GET /operations`
+  - Renders explicit operation controls with CLI-parity semantics.
+
+### Composite Run Note
+
+`POST /api/v2/run` remains available for backward compatibility and acts as the
+legacy composite trigger (ingest + canonical recompute + plan + apply, or
+validation-only when `dry_run=true`).
+
+`POST /api/v2/operator-run` is an alias endpoint with the same payload/behavior,
+used by the refreshed Dashboard quick action.
 
 ## Ledger Endpoints
 

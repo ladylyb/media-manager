@@ -10,12 +10,24 @@
   </div>
 
   <section aria-labelledby="run-trigger-heading" class="space-y-4 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
-    <h3 id="run-trigger-heading" class="text-lg font-semibold text-slate-900">Run Trigger</h3>
-    <p class="text-xs text-slate-500">Trigger ingest, canonical recompute, plan, and optional apply from the console.</p>
+    <h3 id="run-trigger-heading" class="text-lg font-semibold text-slate-900">Quick Operations</h3>
+    <p class="text-xs text-slate-500">Choose an explicit quick action. Full CLI-parity controls are available on the Operations page.</p>
 
     <div id="run-trigger-error" class="hidden rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800"></div>
 
     <form id="run-trigger-form" class="grid grid-cols-1 gap-4 md:grid-cols-2">
+      <label class="block space-y-2 md:col-span-2">
+        <span class="text-sm font-medium text-slate-700">Quick Action</span>
+        <select
+          id="run-action-type"
+          name="action_type"
+          class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200"
+        >
+          <option value="INGEST_VALIDATE">Validate Ingest (dry-run)</option>
+          <option value="COMPOSITE_RUN">Composite Run (legacy pipeline)</option>
+        </select>
+      </label>
+
       <label class="block space-y-2 md:col-span-2">
         <span class="text-sm font-medium text-slate-700">Folder Path</span>
         <input
@@ -41,9 +53,9 @@
         </select>
       </label>
 
-      <label class="flex items-center gap-3 self-end pb-1 text-sm text-slate-700">
+      <label id="run-dry-run-wrapper" class="flex items-center gap-3 self-end pb-1 text-sm text-slate-700">
         <input id="run-dry-run" name="dry_run" type="checkbox" class="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400" />
-        Dry run (skip apply)
+        Dry run (validation-only)
       </label>
 
       <div class="md:col-span-2 flex items-center gap-3">
@@ -57,15 +69,22 @@
         <span id="run-loading-indicator" class="hidden text-sm text-slate-600">Running...</span>
       </div>
     </form>
+    <p id="run-action-help" class="text-xs text-slate-500">
+      Validate Ingest computes a read-only delta report and performs no writes.
+    </p>
+    <p class="text-xs text-slate-600">
+      Need full controls for ingest/plan/apply/recompute/tag-enrichment?
+      <a class="font-medium text-slate-900 underline" href="/operations">Open Operations</a>
+    </p>
 
     <div id="run-summary" class="hidden space-y-2 rounded-lg bg-slate-50 p-4 ring-1 ring-slate-200">
-      <h4 class="text-sm font-semibold text-slate-900">Latest Run Summary</h4>
+      <h4 class="text-sm font-semibold text-slate-900">Latest Operation Summary</h4>
       <dl class="grid grid-cols-1 gap-2 text-sm text-slate-700 md:grid-cols-2">
+        <div><dt class="font-medium">Operation</dt><dd id="run-result-operation">--</dd></div>
+        <div><dt class="font-medium">Mode</dt><dd id="run-result-mode">--</dd></div>
         <div><dt class="font-medium">Run ID</dt><dd id="run-result-run-id" class="font-mono text-xs">--</dd></div>
         <div><dt class="font-medium">Policy</dt><dd id="run-result-policy">--</dd></div>
-        <div><dt class="font-medium">Dry Run</dt><dd id="run-result-dry-run">--</dd></div>
-        <div><dt class="font-medium">Duplicates Found</dt><dd id="run-result-duplicates-found">--</dd></div>
-        <div><dt class="font-medium">Canonical Changes</dt><dd id="run-result-canonical-changes">--</dd></div>
+        <div><dt class="font-medium">Delta / Actions</dt><dd id="run-result-delta">--</dd></div>
         <div><dt class="font-medium">Files Scanned</dt><dd id="run-result-files-scanned">--</dd></div>
       </dl>
     </div>
@@ -249,12 +268,13 @@
   }
 
   function setRunControlsDisabled(disabled) {
+    const actionType = document.getElementById("run-action-type");
     const folder = document.getElementById("run-folder-path");
     const policy = document.getElementById("run-policy-name");
     const dryRun = document.getElementById("run-dry-run");
     const execute = document.getElementById("run-execute-button");
     const loading = document.getElementById("run-loading-indicator");
-    for (const node of [folder, policy, dryRun, execute]) {
+    for (const node of [actionType, folder, policy, dryRun, execute]) {
       if (node) {
         node.disabled = disabled;
       }
@@ -289,33 +309,70 @@
       summary.classList.remove("hidden");
     }
 
+    setText("run-result-operation", String(result.operation || "COMPOSITE_RUN"));
+    setText("run-result-mode", String(result.mode || "--"));
+
     if ((result.mode || "") === "VALIDATION_ONLY") {
-      const report = result.validation_report || {};
+      const report = result.validation_report || result.report || {};
       const scan = report.scan || {};
       const delta = report.delta || {};
-      setText("run-result-run-id", "VALIDATION_ONLY");
-      setText("run-result-policy", "N/A");
-      setText("run-result-dry-run", "true");
+      setText("run-result-run-id", "N/A");
+      setText("run-result-policy", String(result.policy_name || "N/A"));
       setText(
-        "run-result-duplicates-found",
+        "run-result-delta",
         String((delta.would_insert ?? 0) + (delta.would_update ?? 0) + (delta.would_mark_deleted ?? 0))
       );
-      setText("run-result-canonical-changes", "N/A");
       setText("run-result-files-scanned", String(scan.files_scanned ?? "--"));
       return;
     }
 
     const metrics = result.summary_metrics || {};
     const ingest = metrics.ingest || {};
-    const duplicatesFound = result.duplicates_found;
-    const canonicalChanges = result.canonical_changes;
 
     setText("run-result-run-id", String(result.run_id ?? "--"));
     setText("run-result-policy", String(metrics.policy_name ?? "--"));
-    setText("run-result-dry-run", String(metrics.dry_run ?? "--"));
-    setText("run-result-duplicates-found", String(duplicatesFound ?? "--"));
-    setText("run-result-canonical-changes", String(canonicalChanges ?? "--"));
+    setText("run-result-delta", String(result.duplicates_found ?? "--"));
     setText("run-result-files-scanned", String(ingest.files_scanned ?? "--"));
+  }
+
+  function syncQuickActionUi() {
+    const actionNode = document.getElementById("run-action-type");
+    const dryRunWrapper = document.getElementById("run-dry-run-wrapper");
+    const dryRunNode = document.getElementById("run-dry-run");
+    const policyNode = document.getElementById("run-policy-name");
+    const helpNode = document.getElementById("run-action-help");
+    if (!actionNode) {
+      return;
+    }
+    const action = actionNode.value;
+    if (action === "INGEST_VALIDATE") {
+      if (dryRunNode) {
+        dryRunNode.checked = true;
+        dryRunNode.disabled = true;
+      }
+      if (dryRunWrapper) {
+        dryRunWrapper.classList.add("opacity-70");
+      }
+      if (policyNode) {
+        policyNode.disabled = true;
+      }
+      if (helpNode) {
+        helpNode.textContent = "Validate Ingest computes a read-only delta report and performs no writes.";
+      }
+    } else {
+      if (dryRunNode) {
+        dryRunNode.disabled = false;
+      }
+      if (dryRunWrapper) {
+        dryRunWrapper.classList.remove("opacity-70");
+      }
+      if (policyNode) {
+        policyNode.disabled = false;
+      }
+      if (helpNode) {
+        helpNode.textContent = "Composite Run (legacy): ingest + canonical recompute + plan + apply (when dry-run is off).";
+      }
+    }
   }
 
   async function executeRunTrigger(event) {
@@ -323,18 +380,28 @@
     clearRunError();
     setRunControlsDisabled(true);
 
+    const actionTypeNode = document.getElementById("run-action-type");
     const folderPathNode = document.getElementById("run-folder-path");
     const policyNameNode = document.getElementById("run-policy-name");
     const dryRunNode = document.getElementById("run-dry-run");
-
-    const payload = {
-      folder_path: folderPathNode ? folderPathNode.value : "",
-      policy_name: policyNameNode ? policyNameNode.value : "FIRST_SEEN",
-      dry_run: dryRunNode ? dryRunNode.checked : false,
-    };
+    const actionType = actionTypeNode ? actionTypeNode.value : "INGEST_VALIDATE";
+    const endpoint = actionType === "INGEST_VALIDATE" ? "/api/v2/ingest" : "/api/v2/operator-run";
+    let payload;
+    if (actionType === "INGEST_VALIDATE") {
+      payload = {
+        folder_path: folderPathNode ? folderPathNode.value : "",
+        dry_run: true,
+      };
+    } else {
+      payload = {
+        folder_path: folderPathNode ? folderPathNode.value : "",
+        policy_name: policyNameNode ? policyNameNode.value : "FIRST_SEEN",
+        dry_run: dryRunNode ? dryRunNode.checked : false,
+      };
+    }
 
     try {
-      const response = await fetch("/api/v2/run", {
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -367,12 +434,18 @@
       showRunError(error instanceof Error ? error.message : "Run trigger failed.");
     } finally {
       setRunControlsDisabled(false);
+      syncQuickActionUi();
     }
   }
 
   document.addEventListener("DOMContentLoaded", () => {
     loadDashboardSummary();
     loadLatestMetrics();
+    const actionType = document.getElementById("run-action-type");
+    if (actionType) {
+      actionType.addEventListener("change", syncQuickActionUi);
+      syncQuickActionUi();
+    }
     const runForm = document.getElementById("run-trigger-form");
     if (runForm) {
       runForm.addEventListener("submit", executeRunTrigger);

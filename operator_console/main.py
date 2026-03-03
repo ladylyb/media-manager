@@ -164,6 +164,43 @@ class DbResetPayload(BaseModel):
     challenge_word: str | None = None
 
 
+class IngestPayload(BaseModel):
+    """Payload for ingest-only operations."""
+
+    folder_path: str
+    dry_run: bool = True
+
+
+class PlanPayload(BaseModel):
+    """Payload for planning-only operations."""
+
+    folder_path: str
+    strict_metadata: bool = False
+
+
+class ApplyPayload(BaseModel):
+    """Payload for apply-only operations."""
+
+    run_id: str
+    collision_mode: str = "rename"
+
+
+class CanonicalRecomputePayload(BaseModel):
+    """Payload for canonical recompute operations."""
+
+    policy_name: str
+    dry_run: bool = True
+    preferred_roots: list[str] = Field(default_factory=list)
+
+
+class OperatorRunPayload(BaseModel):
+    """Payload for composite legacy operator run."""
+
+    folder_path: str
+    policy_name: str
+    dry_run: bool = False
+
+
 @dataclass(frozen=True)
 class _DiscoveryQueryArgs:
     page: int
@@ -343,6 +380,11 @@ def create_app() -> FastAPI:
     def admin_page(request: Request) -> HTMLResponse:
         """Render Operator Console admin page."""
         return templates.TemplateResponse(request, "admin.html", {})
+
+    @app.get("/operations", response_class=HTMLResponse)
+    def operations_page(request: Request) -> HTMLResponse:
+        """Render explicit operation controls with CLI-parity semantics."""
+        return templates.TemplateResponse(request, "operations.html", {})
 
     @app.get("/duplicates", response_class=HTMLResponse)
     def duplicates_page(request: Request) -> HTMLResponse:
@@ -903,6 +945,70 @@ def create_app() -> FastAPI:
                 dry_run=payload.dry_run,
             ),
         )
+
+    @app.post("/api/v2/operator-run")
+    def post_operator_run_v2(
+        payload: OperatorRunPayload,
+        services: OperationServices = Depends(get_operation_services),
+    ) -> JSONResponse:
+        return _execute_mutation(
+            "operator-run",
+            lambda: services.operator_run(
+                folder_path=payload.folder_path,
+                policy_name=payload.policy_name,
+                dry_run=payload.dry_run,
+            ),
+        )
+
+    @app.post("/api/v2/ingest")
+    def post_ingest_v2(
+        payload: IngestPayload,
+        services: OperationServices = Depends(get_operation_services),
+    ) -> JSONResponse:
+        return _execute_mutation(
+            "ingest",
+            lambda: services.ingest(folder_path=payload.folder_path, dry_run=payload.dry_run),
+        )
+
+    @app.post("/api/v2/plan")
+    def post_plan_v2(
+        payload: PlanPayload,
+        services: OperationServices = Depends(get_operation_services),
+    ) -> JSONResponse:
+        return _execute_mutation(
+            "plan",
+            lambda: services.plan(folder_path=payload.folder_path, strict_metadata=payload.strict_metadata),
+        )
+
+    @app.post("/api/v2/apply")
+    def post_apply_v2(
+        payload: ApplyPayload,
+        services: OperationServices = Depends(get_operation_services),
+    ) -> JSONResponse:
+        return _execute_mutation(
+            "apply",
+            lambda: services.apply(run_id=payload.run_id, collision_mode=payload.collision_mode),
+        )
+
+    @app.post("/api/v2/canonical/recompute")
+    def post_canonical_recompute_v2(
+        payload: CanonicalRecomputePayload,
+        services: OperationServices = Depends(get_operation_services),
+    ) -> JSONResponse:
+        return _execute_mutation(
+            "canonical-recompute",
+            lambda: services.canonical_recompute(
+                policy_name=payload.policy_name,
+                dry_run=payload.dry_run,
+                preferred_roots=tuple(payload.preferred_roots),
+            ),
+        )
+
+    @app.get("/api/v2/operations/catalog")
+    def get_operations_catalog_v2(
+        services: OperationServices = Depends(get_operation_services),
+    ) -> JSONResponse:
+        return _execute_read("operations-catalog", services.operations_catalog)
 
     @app.post("/api/tag-enrichment")
     def post_tag_enrichment(
