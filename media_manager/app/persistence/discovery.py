@@ -57,19 +57,22 @@ def process_discovery_paths_in_session(session: Session, files: list[Path]) -> l
         ensure_canonical_assignment(session, instance.content_id)
         processed_paths.append(absolute_path)
 
-    if processed_paths:
+    unique_processed_paths = sorted(set(processed_paths))
+    if unique_processed_paths:
+        # Keep canonical assignment writes and INGESTED->PROCESSED transition in the
+        # same DB transaction boundary to prevent partial ledger/canonical mismatch.
         # PROCESSED only means canonical evaluation completed successfully.
         # It does not indicate canonical winner/duplicate outcome.
         session.execute(
             update(MediaFile)
             .where(
-                MediaFile.current_path.in_(processed_paths),
+                MediaFile.current_path.in_(unique_processed_paths),
                 MediaFile.status == MediaFileStatus.INGESTED.value,
             )
             .values(status=MediaFileStatus.PROCESSED.value)
         )
 
-    return processed_paths
+    return unique_processed_paths
 
 
 def process_all_discovery_in_session(session: Session) -> list[str]:

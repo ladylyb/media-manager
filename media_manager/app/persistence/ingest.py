@@ -72,7 +72,6 @@ def _upsert_media_file_ledger(
                 hash_sha256=digest,
                 discovered_at=func.now(),
                 status=MediaFileStatus.INGESTED.value,
-                canonical_id=None,
                 quarantined_at=None,
                 deleted_at=None,
                 ingested_at=func.now(),
@@ -87,10 +86,44 @@ def _upsert_media_file_ledger(
     row.ingested_at = func.now()
 
 
+def _mark_missing_paths_deleted_for_root(
+    session: Session,
+    *,
+    root: Path,
+    observed_paths: set[str],
+) -> None:
+    root_path = root.resolve(strict=False)
+    live_rows = session.scalars(
+        select(MediaFile)
+        .where(
+            MediaFile.current_path.is_not(None),
+            MediaFile.status.in_([MediaFileStatus.INGESTED.value, MediaFileStatus.PROCESSED.value]),
+        )
+        .with_for_update()
+    ).all()
+    for row in live_rows:
+        path = row.current_path
+        if path is None:
+            continue
+        path_obj = Path(path)
+        # DELETED is strictly a filesystem observation for authoritative root scans.
+        try:
+            within_root = path_obj.resolve(strict=False).is_relative_to(root_path)
+        except Exception:
+            within_root = False
+        if not within_root:
+            continue
+        if path in observed_paths:
+            continue
+        row.status = MediaFileStatus.DELETED.value
+        row.deleted_at = func.now()
+
+
 def ingest_paths_in_session(
     session: Session,
     files: list[Path],
     *,
+    authoritative_root: Path | None = None,
     latency_samples: _IngestLatencySamples | None = None,
 ) -> IngestSummary:
     t_start = perf_counter()
@@ -99,6 +132,7 @@ def ingest_paths_in_session(
     new_instances = 0
     duplicates = 0
     metadata_extracted = 0
+    observed_paths: set[str] = set()
 
     for candidate in files:
         if not candidate.exists() or not candidate.is_file():
@@ -110,6 +144,7 @@ def ingest_paths_in_session(
         if latency_samples is not None:
             latency_samples.hash_latencies_ms.append(hash_latency_ms)
         absolute_path = str(candidate.resolve(strict=False))
+        observed_paths.add(absolute_path)
         size_bytes = int(candidate.stat().st_size)
 
         t_db_start = perf_counter()
@@ -158,6 +193,9 @@ def ingest_paths_in_session(
         if latency_samples is not None:
             latency_samples.db_write_latencies_ms.append(db_write_latency_ms)
 
+    if authoritative_root is not None:
+        _mark_missing_paths_deleted_for_root(session, root=authoritative_root, observed_paths=observed_paths)
+
     duration_s = perf_counter() - t_start
     logger.info(
         "Ingest summary",
@@ -187,12 +225,19 @@ class IngestService:
         self._session_factory = session_factory
 
     def ingest_path(self, root: Path) -> IngestSummary:
-        return self.ingest_paths(self.collect_files(root))
+        files = self.collect_files(root)
+        authoritative_root = root if root.is_dir() else None
+        return self.ingest_paths(files, authoritative_root=authoritative_root)
 
-    def ingest_paths(self, files: list[Path]) -> IngestSummary:
+    def ingest_paths(self, files: list[Path], *, authoritative_root: Path | None = None) -> IngestSummary:
         latency_samples = _IngestLatencySamples(hash_latencies_ms=[], db_write_latencies_ms=[])
         with transactional_session(self._session_factory) as session:
-            summary = ingest_paths_in_session(session, files, latency_samples=latency_samples)
+            summary = ingest_paths_in_session(
+                session,
+                files,
+                authoritative_root=authoritative_root,
+                latency_samples=latency_samples,
+            )
         # Ingest is not currently run-bound, so run_id is explicitly stable as "none".
         try:
             record_ingest_metrics(run_id="none", files_scanned=summary.files_scanned, new_contents=summary.new_contents)

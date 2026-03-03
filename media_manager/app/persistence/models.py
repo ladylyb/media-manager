@@ -343,18 +343,11 @@ class MediaFile(Base):
     discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
     ingested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, default=MediaFileStatus.INGESTED.value)
-    # Reserved for a future phase. Phase 13 must not write canonical decisions here.
-    canonical_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("media_file.id", ondelete="SET NULL"),
-        nullable=True,
-    )
     quarantined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 Index("idx_media_file_hash_sha256_not_null", MediaFile.hash_sha256, postgresql_where=MediaFile.hash_sha256.is_not(None))
-Index("idx_media_file_canonical_id", MediaFile.canonical_id)
 Index("idx_media_file_status", MediaFile.status)
 
 

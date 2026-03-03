@@ -17,7 +17,7 @@ def _write_file(path: Path, payload: bytes) -> Path:
     return path
 
 
-def test_discovery_marks_ingested_rows_processed_without_writing_canonical_id(tmp_path: Path, session_factory) -> None:
+def test_discovery_marks_ingested_rows_processed(tmp_path: Path, session_factory) -> None:
     ingest = IngestService(session_factory)
     first = _write_file(tmp_path / "a.jpg", b"same")
     second = _write_file(tmp_path / "b.jpg", b"same")
@@ -31,8 +31,6 @@ def test_discovery_marks_ingested_rows_processed_without_writing_canonical_id(tm
         statuses = session.scalars(select(MediaFile.status)).all()
         assert len(statuses) == 2
         assert set(statuses) == {MediaFileStatus.PROCESSED.value}
-        canonical_ids = session.scalars(select(MediaFile.canonical_id)).all()
-        assert set(canonical_ids) == {None}
         assignments = session.scalars(select(CanonicalAssignment)).all()
         assert len(assignments) >= 1
 
@@ -49,7 +47,6 @@ def test_discovery_only_transitions_ingested_rows(tmp_path: Path, session_factor
             size_bytes=10,
             hash_sha256="1" * 64,
             status=MediaFileStatus.PROCESSED.value,
-            canonical_id=None,
         )
         session.add(non_ingested)
 
@@ -80,3 +77,22 @@ def test_discovery_failure_rolls_back_processed_transition(tmp_path: Path, sessi
         row = session.scalar(select(MediaFile).where(MediaFile.current_path == str(target.resolve(strict=False))))
         assert row is not None
         assert row.status == MediaFileStatus.INGESTED.value
+
+
+def test_discovery_rerun_is_noop_for_processed_rows(tmp_path: Path, session_factory) -> None:
+    ingest = IngestService(session_factory)
+    target = _write_file(tmp_path / "target.jpg", b"x")
+    ingest.ingest_paths([target])
+
+    with session_factory.begin() as session:
+        first = process_discovery_paths_in_session(session, [target, target])
+        assert first == [str(target.resolve(strict=False))]
+
+    with session_factory.begin() as session:
+        second = process_discovery_paths_in_session(session, [target])
+        assert second == [str(target.resolve(strict=False))]
+
+    with session_factory() as session:
+        row = session.scalar(select(MediaFile).where(MediaFile.current_path == str(target.resolve(strict=False))))
+        assert row is not None
+        assert row.status == MediaFileStatus.PROCESSED.value

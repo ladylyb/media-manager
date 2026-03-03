@@ -116,3 +116,55 @@ def test_ingest_does_not_append_canonical_assignments(tmp_path: Path, session_fa
         assignments = session.scalars(select(CanonicalAssignment)).all()
         assert assignments == []
 
+
+def test_authoritative_root_scan_marks_missing_paths_deleted(tmp_path: Path, session_factory) -> None:
+    ingest = IngestService(session_factory)
+    root = tmp_path / "dataset"
+    first = _write_file(root / "a.jpg", b"a")
+    second = _write_file(root / "b.jpg", b"b")
+
+    ingest.ingest_path(root)
+    second.unlink()
+    ingest.ingest_path(root)
+
+    with session_factory() as session:
+        rows = session.scalars(select(MediaFile).order_by(MediaFile.current_path.asc())).all()
+        by_path = {row.current_path: row for row in rows}
+        assert by_path[str(first.resolve(strict=False))].status == MediaFileStatus.INGESTED.value
+        deleted = by_path[str(second.resolve(strict=False))]
+        assert deleted.status == MediaFileStatus.DELETED.value
+        assert deleted.deleted_at is not None
+
+
+def test_reappearance_after_deleted_inserts_new_row(tmp_path: Path, session_factory) -> None:
+    ingest = IngestService(session_factory)
+    root = tmp_path / "dataset"
+    target = _write_file(root / "a.jpg", b"a")
+
+    ingest.ingest_path(root)
+    target.unlink()
+    ingest.ingest_path(root)
+    _write_file(root / "a.jpg", b"a")
+    ingest.ingest_path(root)
+
+    with session_factory() as session:
+        rows = session.scalars(select(MediaFile).where(MediaFile.current_path == str(target.resolve(strict=False)))).all()
+        assert len(rows) == 2
+        assert {row.status for row in rows} == {MediaFileStatus.DELETED.value, MediaFileStatus.INGESTED.value}
+
+
+def test_incremental_ingest_paths_does_not_mark_deleted(tmp_path: Path, session_factory) -> None:
+    ingest = IngestService(session_factory)
+    root = tmp_path / "dataset"
+    first = _write_file(root / "a.jpg", b"a")
+    second = _write_file(root / "b.jpg", b"b")
+
+    ingest.ingest_path(root)
+    second.unlink()
+    ingest.ingest_paths([first])
+
+    with session_factory() as session:
+        row = session.scalar(select(MediaFile).where(MediaFile.current_path == str(second.resolve(strict=False))))
+        assert row is not None
+        assert row.status != MediaFileStatus.DELETED.value
+

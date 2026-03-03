@@ -23,15 +23,16 @@ def test_phase13_media_file_table_columns_and_indexes_exist(db_engine) -> None:
         "discovered_at",
         "ingested_at",
         "status",
-        "canonical_id",
         "quarantined_at",
         "deleted_at",
     }.issubset(columns)
+    assert "canonical_id" not in columns
 
     indexes = {idx["name"] for idx in inspector.get_indexes("media_file")}
     assert {"idx_media_file_hash_sha256_not_null", "idx_media_file_status", "uq_media_file_current_path_live"}.issubset(
         indexes
     )
+    assert "idx_media_file_canonical_id" not in indexes
 
 
 def test_phase13_media_file_constraints_exist(db_engine) -> None:
@@ -41,17 +42,11 @@ def test_phase13_media_file_constraints_exist(db_engine) -> None:
 
     assert {
         "ck_media_file_status",
-        "ck_media_file_not_self_canonical",
         "ck_media_file_lifecycle_consistency",
         "ck_media_file_ingest_after_discovery",
     }.issubset(checks)
-    assert any(
-        fk.get("name") == "fk_media_file_canonical_id"
-        and fk.get("referred_table") == "media_file"
-        and fk.get("constrained_columns") == ["canonical_id"]
-        and fk.get("referred_columns") == ["id"]
-        for fk in fks
-    )
+    assert "ck_media_file_not_self_canonical" not in checks
+    assert all(fk.get("name") != "fk_media_file_canonical_id" for fk in fks)
 
 
 def test_phase13_media_file_status_defaults_to_ingested(db_engine) -> None:
@@ -134,17 +129,3 @@ def test_phase13_media_file_live_path_index_enforced(db_engine) -> None:
             ),
             {"path": "/tmp/a.jpg"},
         )
-
-
-def test_phase13_media_file_self_canonical_check_enforced(db_engine) -> None:
-    with db_engine.begin() as conn:
-        with pytest.raises(IntegrityError):
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO media_file (id, canonical_id)
-                    VALUES (:id, :id)
-                    """
-                ),
-                {"id": uuid.uuid4()},
-            )
