@@ -276,6 +276,22 @@
       summary.classList.remove("hidden");
     }
 
+    if ((payload.mode || "") === "VALIDATION_ONLY") {
+      const report = payload.validation_report || {};
+      const scan = report.scan || {};
+      const delta = report.delta || {};
+      setText("run-result-run-id", "VALIDATION_ONLY");
+      setText("run-result-policy", "N/A");
+      setText("run-result-dry-run", "true");
+      setText(
+        "run-result-duplicates-found",
+        String((delta.would_insert ?? 0) + (delta.would_update ?? 0) + (delta.would_mark_deleted ?? 0))
+      );
+      setText("run-result-canonical-changes", "N/A");
+      setText("run-result-files-scanned", String(scan.files_scanned ?? "--"));
+      return;
+    }
+
     const metrics = payload.summary_metrics || {};
     const ingest = metrics.ingest || {};
     const duplicatesFound = payload.duplicates_found;

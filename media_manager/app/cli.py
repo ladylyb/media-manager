@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import uuid
 from pathlib import Path
@@ -134,6 +135,33 @@ def _render_ingest_output(summary) -> None:
     print(f"  Duplicates detected: {summary.duplicates_detected}")
     print(f"  Metadata extracted: {summary.metadata_extracted}")
     print(f"  Duration (s): {summary.duration_s:.3f}")
+    print("----------------------------------------")
+
+
+def _render_ingest_validation_output(report, *, as_json: bool) -> None:
+    payload = report.to_dict()
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    scan = payload["scan"]
+    delta = payload["delta"]
+    print("----------------------------------------")
+    print("Ingest Validation (Dry Run)")
+    print(f"  Root path: {payload['root_path']}")
+    print(f"  Files scanned: {scan['files_scanned']}")
+    print(f"  Files missing during scan: {scan['files_missing_during_scan']}")
+    print("  Delta:")
+    print(f"    Would insert: {delta['would_insert']}")
+    print(f"    Would update: {delta['would_update']}")
+    print(f"    Would mark deleted: {delta['would_mark_deleted']}")
+    print(f"    Hash mismatches observed: {delta['hash_mismatch_observed']}")
+    print(f"    Reappearances after deleted: {delta['would_reappear_after_delete']}")
+    warnings = payload.get("warnings") or []
+    if warnings:
+        print("  Warnings:")
+        for warning in warnings:
+            print(f"    - {warning}")
     print("----------------------------------------")
 
 
@@ -613,7 +641,7 @@ def _apply_command(run_id_arg: str, *, collision_mode: str = "rename") -> int:
     return 0
 
 
-def _ingest_command(path_arg: str) -> int:
+def _ingest_command(path_arg: str, *, dry_run: bool, as_json: bool) -> int:
     path = Path(path_arg)
     if not path.exists():
         print(f"Path does not exist: {path}", file=sys.stderr)
@@ -622,6 +650,11 @@ def _ingest_command(path_arg: str) -> int:
     engine = create_db_engine()
     session_factory = create_session_factory(engine)
     ingest_service = IngestService(session_factory)
+    if dry_run:
+        report = ingest_service.validate_path(path)
+        _render_ingest_validation_output(report, as_json=as_json)
+        return 0
+
     summary = ingest_service.ingest_path(path)
     _render_ingest_output(summary)
     return 0
@@ -701,6 +734,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     ingest_parser = subparsers.add_parser("ingest", help="Ingest files into logical content/instance tables.")
     ingest_parser.add_argument("path", help="File or directory path to ingest.")
+    ingest_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Read-only validate mode. Computes ingest delta without DB writes.",
+    )
+    ingest_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit validation payload as JSON (only for --dry-run).",
+    )
     apply_parser = subparsers.add_parser("apply", help="Apply an existing planned run.")
     apply_parser.add_argument("run_id", help="Run identifier to apply.")
     apply_parser.add_argument(
@@ -858,7 +901,10 @@ def main(argv: list[str] | None = None) -> int:
             preferred_roots=args.preferred_root,
         )
     if args.command == "ingest":
-        return _ingest_command(args.path)
+        if args.json and not args.dry_run:
+            print("--json is only supported with ingest --dry-run.", file=sys.stderr)
+            return 2
+        return _ingest_command(args.path, dry_run=args.dry_run, as_json=args.json)
     if args.command == "apply":
         return _apply_command(args.run_id, collision_mode=args.collision_mode)
     if args.command == "canonical" and args.canonical_command == "recompute":

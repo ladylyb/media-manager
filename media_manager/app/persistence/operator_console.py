@@ -5,7 +5,7 @@ from __future__ import annotations
 import mimetypes
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -27,7 +27,9 @@ from media_manager.app.persistence.media_file_queries import (
     get_rows_by_status,
 )
 from media_manager.app.persistence.models import (
+    ApplyAuditRun,
     CanonicalAssignment,
+    CanonicalRecomputeRun,
     FileInstance,
     FileInstanceStatus,
     MediaFile,
@@ -310,6 +312,50 @@ class MediaFileLedgerAnalytics:
         }
 
 
+@dataclass(frozen=True)
+class DryRunAuditCandidate:
+    """Best-effort candidate for historical dry-run side-effect analysis."""
+
+    started_at: str
+    ended_at: str
+    inferred_run_id: str | None
+    inferred_folder_path: str | None
+    estimated_ledger_rows_touched: int
+    confidence: str
+    signals: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "started_at": self.started_at,
+            "ended_at": self.ended_at,
+            "inferred_run_id": self.inferred_run_id,
+            "inferred_folder_path": self.inferred_folder_path,
+            "estimated_ledger_rows_touched": self.estimated_ledger_rows_touched,
+            "confidence": self.confidence,
+            "signals": list(self.signals),
+        }
+
+
+@dataclass(frozen=True)
+class DryRunSideEffectAudit:
+    """Report-only payload for heuristic historical dry-run side effects."""
+
+    coverage: str
+    method: str
+    window: dict[str, str | None]
+    candidates: tuple[DryRunAuditCandidate, ...]
+    limitations: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "coverage": self.coverage,
+            "method": self.method,
+            "window": dict(self.window),
+            "candidates": [candidate.to_dict() for candidate in self.candidates],
+            "limitations": list(self.limitations),
+        }
+
+
 class OperatorConsoleReadService:
     """Read-only service for Operator Console API endpoints."""
 
@@ -589,6 +635,112 @@ class OperatorConsoleReadService:
             window={"mode": "all_time"},
         )
 
+    def get_dry_run_side_effect_audit(
+        self,
+        *,
+        start: str | None = None,
+        end: str | None = None,
+        limit: int = 50,
+    ) -> DryRunSideEffectAudit:
+        """
+        Return heuristic candidates for historical dry-run side effects.
+
+        Exact retrospective attribution is not possible with current schema
+        because historical dry_run intent is not durably stored on runs.
+        """
+        start_at = self._parse_optional_iso(start)
+        end_at = self._parse_optional_iso(end)
+        bounded_limit = min(200, max(1, int(limit)))
+        if start_at is not None and end_at is not None and start_at > end_at:
+            raise ValueError("start must be <= end.")
+
+        with self._session_factory() as session:
+            run_stmt = (
+                select(Run)
+                .order_by(Run.created_at.desc(), Run.id.desc())
+                .limit(bounded_limit * 5)
+            )
+            if start_at is not None:
+                run_stmt = run_stmt.where(Run.created_at >= start_at)
+            if end_at is not None:
+                run_stmt = run_stmt.where(Run.created_at <= end_at)
+            runs = session.scalars(run_stmt).all()
+            if not runs:
+                return DryRunSideEffectAudit(
+                    coverage="BEST_EFFORT",
+                    method="Heuristic correlation over run timestamps and recompute/apply evidence.",
+                    window={"start": start, "end": end},
+                    candidates=(),
+                    limitations=self._dry_run_audit_limitations(),
+                )
+
+            run_ids = [run.id for run in runs]
+            apply_run_ids = set(
+                session.scalars(select(ApplyAuditRun.run_id).where(ApplyAuditRun.run_id.in_(run_ids))).all()
+            )
+            recompute_rows = session.execute(
+                select(CanonicalRecomputeRun)
+                .where(CanonicalRecomputeRun.mode == "DRY_RUN")
+                .order_by(CanonicalRecomputeRun.started_at.asc())
+            ).scalars().all()
+
+            candidates: list[DryRunAuditCandidate] = []
+            for run in runs:
+                if run.id in apply_run_ids:
+                    continue
+                window_start = run.created_at
+                window_end = run.updated_at if run.updated_at >= run.created_at else run.created_at
+                matched_recompute = [
+                    row
+                    for row in recompute_rows
+                    if row.started_at >= (window_start - timedelta(minutes=5))
+                    and row.started_at <= (window_end + timedelta(minutes=5))
+                ]
+                if not matched_recompute:
+                    continue
+
+                touched = int(
+                    session.scalar(
+                        select(func.count())
+                        .select_from(MediaFile)
+                        .where(
+                            MediaFile.ingested_at.is_not(None),
+                            MediaFile.ingested_at >= window_start,
+                            MediaFile.ingested_at <= (window_end + timedelta(minutes=5)),
+                        )
+                    )
+                    or 0
+                )
+                signals = [
+                    "run_without_apply_audit",
+                    "nearby_canonical_recompute_dry_run",
+                ]
+                confidence = "LOW"
+                if touched > 0:
+                    signals.append("ledger_ingested_at_activity_in_window")
+                    confidence = "MEDIUM"
+                candidates.append(
+                    DryRunAuditCandidate(
+                        started_at=window_start.isoformat(),
+                        ended_at=window_end.isoformat(),
+                        inferred_run_id=str(run.id),
+                        inferred_folder_path=None,
+                        estimated_ledger_rows_touched=touched,
+                        confidence=confidence,
+                        signals=tuple(signals),
+                    )
+                )
+                if len(candidates) >= bounded_limit:
+                    break
+
+        return DryRunSideEffectAudit(
+            coverage="BEST_EFFORT",
+            method="Heuristic correlation over run timestamps and recompute/apply evidence.",
+            window={"start": start, "end": end},
+            candidates=tuple(candidates),
+            limitations=self._dry_run_audit_limitations(),
+        )
+
     def resolve_thumbnail_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:
         """Resolve an active image file path and media type for thumbnail streaming."""
         with self._session_factory() as session:
@@ -718,6 +870,26 @@ class OperatorConsoleReadService:
         if media_type == "VID":
             return "video"
         return None
+
+    def _parse_optional_iso(self, value: str | None) -> datetime | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if normalized.endswith("Z"):
+            normalized = normalized[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed
+
+    def _dry_run_audit_limitations(self) -> tuple[str, ...]:
+        return (
+            "Historical run rows do not persist a dry_run flag, so audit candidates are inferred heuristically.",
+            "Folder path is not durably stored on runs, so inferred_folder_path is null for historical rows.",
+            "Estimated ledger activity uses ingested_at window correlation and is not a guaranteed causal mapping.",
+        )
 
     def _count_total_files(self, session: Session) -> int:
         value = session.scalar(

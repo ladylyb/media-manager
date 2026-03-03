@@ -20,6 +20,7 @@ from media_manager.app.core.errors import (
 )
 from media_manager.app.observability import mount_metrics_endpoint
 from media_manager.app.persistence.base import create_db_engine, create_session_factory
+from media_manager.app.persistence.ingest import IngestService
 from media_manager.app.persistence.operator_console import OperatorConsoleReadService
 from media_manager.app.persistence.operator_run_trigger import (
     OperatorRunTriggerService,
@@ -65,6 +66,14 @@ def get_tag_enrichment_session_factory():
     return create_session_factory(engine)
 
 
+@lru_cache(maxsize=1)
+def get_ingest_service() -> IngestService:
+    """Build and cache ingest service for validation-only API mode."""
+    engine = create_db_engine()
+    session_factory = create_session_factory(engine)
+    return IngestService(session_factory)
+
+
 class PolicyUpdatePayload(BaseModel):
     """Structured update payload for operator policy settings."""
 
@@ -80,6 +89,13 @@ class RunTriggerPayload(BaseModel):
     folder_path: str
     policy_name: str
     dry_run: bool = False
+
+
+class MediaFileValidatePayload(BaseModel):
+    """Validation payload for read-only ingest reconciliation checks."""
+
+    folder_path: str
+    policy_name: str | None = None
 
 
 class TagEnrichmentPayload(BaseModel):
@@ -408,6 +424,34 @@ def create_app() -> FastAPI:
     ) -> dict[str, object]:
         """Return all-time Phase 13 ledger analytics for dashboard/reporting views."""
         return service.get_media_file_analytics().to_dict()
+
+    @app.get("/api/media-file/dry-run-audit")
+    def media_file_dry_run_audit(
+        start: str | None = Query(default=None),
+        end: str | None = Query(default=None),
+        limit: int = 50,
+        service: OperatorConsoleReadService = Depends(get_operator_console_service),
+    ) -> dict[str, object]:
+        """Return best-effort historical dry-run side-effect candidates."""
+        if limit < 1 or limit > 200:
+            raise HTTPException(status_code=400, detail="limit must be within [1, 200].")
+        try:
+            return service.get_dry_run_side_effect_audit(start=start, end=end, limit=limit).to_dict()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/media-file/validate")
+    def post_media_file_validate(
+        payload: MediaFileValidatePayload,
+        ingest_service: IngestService = Depends(get_ingest_service),
+    ) -> dict[str, object]:
+        """Run read-only ingest validation and return would-change delta report."""
+        folder = Path(payload.folder_path)
+        if not folder.exists():
+            raise HTTPException(status_code=400, detail=f"Folder path does not exist: {folder}")
+        if not folder.is_dir():
+            raise HTTPException(status_code=400, detail=f"Folder path must be a directory: {folder}")
+        return ingest_service.validate_path(folder).to_dict()
 
     @app.get("/media/{file_id}")
     def media(
