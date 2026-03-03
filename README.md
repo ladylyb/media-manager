@@ -10,6 +10,17 @@ This project is licensed under the **Creative Commons Attribution-NonCommercial-
 - Commercial use is prohibited without explicit permission from the author.
 - Modifications and derivative works are not permitted without explicit permission from the author.
 
+## Environment Configuration
+
+Use `.env.sample` as the runtime configuration template.
+
+```bash
+cp .env.sample .env
+```
+
+Set at least `DATABASE_URL` (and `TEST_DATABASE_URL` for tests/tooling).  
+Full variable reference: `documentation/reference/environment-variables.md`.
+
 ## Observability & Metrics (Phase 11)
 
 ### Overview

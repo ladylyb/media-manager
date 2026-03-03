@@ -7,6 +7,13 @@ This guide covers profiling and tuning for metadata pre-extraction and planner m
 1. `DATABASE_URL` must point to PostgreSQL.
 2. Schema migrations must be at head.
 3. Optional: install `psutil` for CPU/RSS/IO metrics.
+4. Optional tuning envs can be set in `.env`:
+   - `METADATA_UPSERT_BATCH_SIZE` (default `1000`, clamped to `1..50000`)
+   - `CANONICAL_READ_CACHE_ENABLED` (default `false`)
+   - `CANONICAL_READ_CACHE_TTL_SECONDS` (default `30`)
+   - `MEDIA_MANAGER_ALLOW_PLANNER_MV_READS` (default `false`, experimental/safety-sensitive)
+
+See [Environment Variables](../reference/environment-variables.md) for accepted values and defaults.
 
 ## Synthetic Dataset Generation
 

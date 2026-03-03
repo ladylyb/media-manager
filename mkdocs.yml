@@ -54,11 +54,13 @@ nav:
   - Reference:
       - Overview: reference/index.md
       - Data Dictionary: reference/data-dictionary.md
+      - Environment Variables: reference/environment-variables.md
       - FAQ: reference/faq.md
       - Known Limitations: reference/known-limitations.md
   - API:
       - Overview: api/index.md
       - CLI: api/api-cli.md
+      - Operator Console: api/api-operator-console.md
       - Core:
           - Core Overview: api/api-core.md
           - Metadata: api/api-core-metadata.md
