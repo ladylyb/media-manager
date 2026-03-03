@@ -1,0 +1,22 @@
+name: Operator Console Guards
+
+on:
+  pull_request:
+  push:
+    branches:
+      - develop
+
+jobs:
+  operator-console-guards:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Enforce subtree guard for gui_upstream
+        run: bash tools/ci/check_gui_upstream_subtree_guard.sh
+
+      - name: Enforce gui_app v2 contract adapter keys
+        run: bash tools/ci/check_gui_app_v2_contract.sh
