@@ -14,6 +14,8 @@ from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session, aliased, sessionmaker
 
 from media_manager.app.core.filenames import infer_media_type_from_extension
+from media_manager.app.core.hashing import sha256_file
+from media_manager.app.core.logging_config import get_logger
 from media_manager.app.core.perf_artifacts import BASELINE_DIR, read_performance_artifact_json, load_baseline_json
 from media_manager.app.core.perf_comparator import compare_to_baseline
 from media_manager.app.persistence.discovery_query import (
@@ -42,6 +44,7 @@ from media_manager.app.persistence.models import (
 
 PERF_RUN_DIR = Path("artifacts/perf/runs")
 _WINDOWS_DRIVE_PATH_RE = re.compile(r"^([A-Za-z]):[\\/](.*)$")
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -353,6 +356,28 @@ class DryRunSideEffectAudit:
             "window": dict(self.window),
             "candidates": [candidate.to_dict() for candidate in self.candidates],
             "limitations": list(self.limitations),
+        }
+
+
+@dataclass(frozen=True)
+class LedgerHashAuditResult:
+    """Read-only ledger hash audit payload for API/CLI/GUI health checks."""
+
+    total_files: int
+    missing_hash: int
+    hash_mismatches: int
+    deleted_rows_skipped: int
+    sample_missing_hash_paths: tuple[str, ...]
+    sample_mismatch_paths: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "total_files": self.total_files,
+            "missing_hash": self.missing_hash,
+            "hash_mismatches": self.hash_mismatches,
+            "deleted_rows_skipped": self.deleted_rows_skipped,
+            "sample_missing_hash_paths": list(self.sample_missing_hash_paths),
+            "sample_mismatch_paths": list(self.sample_mismatch_paths),
         }
 
 
@@ -739,6 +764,99 @@ class OperatorConsoleReadService:
             window={"start": start, "end": end},
             candidates=tuple(candidates),
             limitations=self._dry_run_audit_limitations(),
+        )
+
+    def get_ledger_hash_audit(
+        self,
+        *,
+        root_path: str | None = None,
+        sample_limit: int = 20,
+    ) -> LedgerHashAuditResult:
+        """Audit media_file hash completeness and drift without mutating ledger rows."""
+        normalized_root: str | None = None
+        if root_path is not None:
+            normalized_root = root_path.strip()
+            if not normalized_root:
+                raise ValueError("root_path must not be empty when provided.")
+            normalized_root = normalized_root.rstrip("/")
+        bounded_sample_limit = min(200, max(1, int(sample_limit)))
+
+        missing_samples: list[str] = []
+        mismatch_samples: list[str] = []
+        missing_hash = 0
+        hash_mismatches = 0
+        total_files = 0
+        deleted_rows_skipped = 0
+
+        with self._session_factory() as session:
+            path_key = func.coalesce(MediaFile.current_path, MediaFile.discovered_path).label("path_key")
+            stmt = select(MediaFile.status, MediaFile.hash_sha256, path_key)
+            if normalized_root is not None:
+                stmt = stmt.where(or_(path_key == normalized_root, path_key.like(f"{normalized_root}/%")))
+            stmt = stmt.order_by(path_key.asc())
+            rows = session.execute(stmt).all()
+
+        for status, stored_hash, scoped_path in rows:
+            path_value = str(scoped_path) if scoped_path is not None else ""
+            if status == MediaFileStatus.DELETED.value:
+                deleted_rows_skipped += 1
+                continue
+            total_files += 1
+            if not stored_hash:
+                missing_hash += 1
+                if len(missing_samples) < bounded_sample_limit:
+                    missing_samples.append(path_value)
+                continue
+
+            resolved_path = self._resolve_existing_instance_path(path_value)
+            if resolved_path is None:
+                logger.warning(
+                    "Ledger hash audit skipped unreadable path",
+                    extra={
+                        "phase": "ledger_audit",
+                        "action": "HASH_AUDIT_PATH_UNREADABLE",
+                        "filename": path_value,
+                        "files_count": 1,
+                    },
+                )
+                continue
+            try:
+                computed_hash = sha256_file(resolved_path)
+            except OSError:
+                logger.warning(
+                    "Ledger hash audit skipped path due to filesystem read error",
+                    extra={
+                        "phase": "ledger_audit",
+                        "action": "HASH_AUDIT_PATH_READ_ERROR",
+                        "filename": path_value,
+                        "files_count": 1,
+                    },
+                )
+                continue
+            if str(stored_hash).lower() != computed_hash:
+                hash_mismatches += 1
+                if len(mismatch_samples) < bounded_sample_limit:
+                    mismatch_samples.append(path_value)
+
+        logger.info(
+            "Ledger hash audit completed",
+            extra={
+                "phase": "ledger_audit",
+                "action": "HASH_AUDIT",
+                "files_count": total_files,
+                "codes_extracted": (
+                    f"missing_hash={missing_hash},hash_mismatches={hash_mismatches},"
+                    f"deleted_rows_skipped={deleted_rows_skipped},root_path={normalized_root or 'ALL'}"
+                ),
+            },
+        )
+        return LedgerHashAuditResult(
+            total_files=total_files,
+            missing_hash=missing_hash,
+            hash_mismatches=hash_mismatches,
+            deleted_rows_skipped=deleted_rows_skipped,
+            sample_missing_hash_paths=tuple(missing_samples),
+            sample_mismatch_paths=tuple(mismatch_samples),
         )
 
     def resolve_thumbnail_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:
