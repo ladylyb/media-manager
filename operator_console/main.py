@@ -37,6 +37,7 @@ from media_manager.app.persistence.tag_enrichment import (
     run_tag_enrichment,
 )
 from media_manager.app.service_layer import (
+    AdminServices,
     OperationServices,
     ReadServices,
     ServiceCache,
@@ -115,6 +116,12 @@ def get_operation_services() -> OperationServices:
     return OperationServices(session_factory=get_service_session_factory(), cache=get_service_cache())
 
 
+@lru_cache(maxsize=1)
+def get_admin_services() -> AdminServices:
+    """Build admin service-layer adapter."""
+    return AdminServices(session_factory=get_service_session_factory())
+
+
 class PolicyUpdatePayload(BaseModel):
     """Structured update payload for operator policy settings."""
 
@@ -148,6 +155,13 @@ class TagEnrichmentPayload(BaseModel):
     canonical_id: str | None = None
     batch_size: int = 100
     source: str = TagSource.SYSTEM.value
+
+
+class DbResetPayload(BaseModel):
+    """Payload for safe development database reset operations."""
+
+    dry_run: bool = True
+    challenge_word: str | None = None
 
 
 @dataclass(frozen=True)
@@ -324,6 +338,11 @@ def create_app() -> FastAPI:
     def policy_page(request: Request) -> HTMLResponse:
         """Render the Operator Console policy management page."""
         return templates.TemplateResponse(request, "policy.html", {})
+
+    @app.get("/admin", response_class=HTMLResponse)
+    def admin_page(request: Request) -> HTMLResponse:
+        """Render Operator Console admin page."""
+        return templates.TemplateResponse(request, "admin.html", {})
 
     @app.get("/duplicates", response_class=HTMLResponse)
     def duplicates_page(request: Request) -> HTMLResponse:
@@ -934,6 +953,24 @@ def create_app() -> FastAPI:
                 batch_size=int(payload.batch_size),
                 source=payload.source,
             ),
+        )
+
+    @app.post("/api/v2/admin/db-reset")
+    @app.post("/api/admin/db-reset")
+    def post_db_reset(
+        payload: DbResetPayload,
+        services: AdminServices = Depends(get_admin_services),
+    ) -> JSONResponse:
+        """
+        Perform safe, idempotent data reset for dev/test environments.
+
+        - `dry_run=true`: list affected tables only.
+        - `dry_run=false`: requires exact challenge_word.
+        - Always preserves alembic migration state (does not truncate alembic_version).
+        """
+        return _execute_mutation(
+            "db-reset",
+            lambda: services.db_reset(dry_run=bool(payload.dry_run), challenge_word=payload.challenge_word),
         )
 
     return app

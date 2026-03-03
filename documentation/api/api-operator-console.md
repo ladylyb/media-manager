@@ -29,11 +29,42 @@ Available v2 endpoints:
 - `POST /api/v2/policy`
 - `POST /api/v2/run`
 - `POST /api/v2/tag-enrichment`
+- `POST /api/v2/admin/db-reset`
 
 Error mapping:
 - `400` validation/domain/state errors (`ok=false`, populated `errors[]`)
 - `500` runtime failures
 - `503` mutation concurrency saturation
+
+### `POST /api/v2/admin/db-reset`
+### `POST /api/admin/db-reset` (alias)
+
+Safe dev/test data reset endpoint (destructive). Truncates app data tables only, preserving schema and Alembic migration state.
+
+Request:
+
+```json
+{
+  "dry_run": true,
+  "challenge_word": "media-manager"
+}
+```
+
+Rules:
+- `dry_run=true`: preview only, no data deletion.
+- `dry_run=false`: `challenge_word` must match exactly.
+- hard blocked unless `MEDIA_MANAGER_ENV` is `dev` or `test`.
+
+Result payload in envelope `data.result`:
+
+```json
+{
+  "success": true,
+  "dry_run": true,
+  "affected_tables": ["media_file", "file_instances"],
+  "message": "Dry-run only. No data deleted."
+}
+```
 
 ## HTML Route
 

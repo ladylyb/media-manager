@@ -577,6 +577,59 @@ def _health_check_command(
     return 0
 
 
+def _db_reset_command(
+    *,
+    dry_run: bool,
+    challenge_word: str | None,
+    api: str,
+    timeout: int,
+    as_json: bool,
+) -> int:
+    if not dry_run and not (challenge_word or "").strip():
+        print("--challenge-word is required unless --dry-run is set.", file=sys.stderr)
+        return 2
+    try:
+        _, response_payload = _http_call_json(
+            method="POST",
+            api_base=api,
+            path="/api/v2/admin/db-reset",
+            timeout=timeout,
+            body={
+                "dry_run": bool(dry_run),
+                "challenge_word": (challenge_word.strip() if challenge_word else None),
+            },
+        )
+    except Exception as exc:
+        print(f"DB reset API request failed: {exc}", file=sys.stderr)
+        return 2
+
+    if as_json:
+        print(json.dumps(response_payload, indent=2, sort_keys=True))
+    else:
+        result: dict[str, object] = {}
+        if isinstance(response_payload.get("data"), dict):
+            candidate = (response_payload.get("data") or {}).get("result")
+            if isinstance(candidate, dict):
+                result = candidate
+        print("----------------------------------------")
+        print("Database Reset")
+        print(f"  Success: {result.get('success', False) if result else False}")
+        print(f"  Dry run: {result.get('dry_run', False) if result else False}")
+        tables = result.get("affected_tables") if isinstance(result, dict) else []
+        table_list = tables if isinstance(tables, list) else []
+        print(f"  Affected tables: {len(table_list)}")
+        for name in table_list:
+            print(f"    - {name}")
+        print(f"  Message: {result.get('message', '--') if result else '--'}")
+        print("----------------------------------------")
+    if response_payload.get("ok") is not True:
+        return 1
+    result = (response_payload.get("data") or {}).get("result") if isinstance(response_payload.get("data"), dict) else {}
+    if isinstance(result, dict) and result.get("success") is False:
+        return 1
+    return 0
+
+
 def _status_command(*, as_json: bool, transport: str, api_base: str, timeout: int) -> int:
     if transport == "http":
         try:
@@ -1844,6 +1897,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=20,
         help="Sample path cap for the audit response.",
     )
+    db_reset_parser = subparsers.add_parser(
+        "db-reset",
+        help="Reset application data tables in dev/test via admin REST endpoint.",
+    )
+    db_reset_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview affected tables without deleting data.",
+    )
+    db_reset_parser.add_argument(
+        "--challenge-word",
+        help="Required exact confirmation word for destructive reset.",
+    )
+    db_reset_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON envelope from API response.",
+    )
 
     return parser
 
@@ -2019,6 +2090,14 @@ def main(argv: list[str] | None = None) -> int:
             api=args.api,
             timeout=args.timeout,
             sample_limit=args.sample_limit,
+        )
+    if args.command == "db-reset":
+        return _db_reset_command(
+            dry_run=args.dry_run,
+            challenge_word=args.challenge_word,
+            api=args.api,
+            timeout=args.timeout,
+            as_json=args.json,
         )
 
     parser.print_help()

@@ -9,9 +9,11 @@ from uuid import UUID
 from fastapi.testclient import TestClient
 
 from media_manager.app.core.errors import PolicySettingsVersionConflictError
+from media_manager.app.service_layer.errors import ServiceLayerException
 import operator_console.main as main_module
 from operator_console.main import (
     app,
+    get_admin_services,
     get_ingest_service,
     get_operation_services,
     get_operator_console_service,
@@ -556,6 +558,18 @@ class _FakeOperationServices:
 
     def media_file_validate(self, *, folder_path: str) -> dict[str, object]:
         return {"mode": "VALIDATION_ONLY", "root_path": folder_path, "delta": {"would_insert": 0}}
+
+
+class _FakeAdminServices:
+    def db_reset(self, *, dry_run: bool, challenge_word: str | None) -> dict[str, object]:
+        if not dry_run and challenge_word != "media-manager":
+            raise ValueError("challenge_word is incorrect.")
+        return {
+            "success": True,
+            "dry_run": bool(dry_run),
+            "affected_tables": ["media_file", "file_instances"],
+            "message": "Dry-run only. No data deleted." if dry_run else "Database reset completed.",
+        }
 
 
 def test_dashboard_route_renders_template() -> None:
@@ -1278,6 +1292,14 @@ def test_policy_page_renders_template() -> None:
     assert "Recanonicalization" in response.text
 
 
+def test_admin_page_renders_template() -> None:
+    client = TestClient(app)
+    response = client.get("/admin")
+    assert response.status_code == 200
+    assert "Reset Database" in response.text
+    assert "Dry-Run Preview" in response.text
+
+
 def test_get_policy_endpoint_returns_structured_json() -> None:
     """GET /api/policy should return structured policy payload."""
     app.dependency_overrides[get_policy_settings_service] = _FakePolicyService
@@ -1562,3 +1584,66 @@ def test_post_tag_enrichment_endpoint_internal_error(monkeypatch) -> None:
 
     assert response.status_code == 500
     assert "pipeline exploded" in response.json()["detail"]
+
+
+def test_post_db_reset_v2_dry_run_returns_envelope() -> None:
+    app.dependency_overrides[get_admin_services] = _FakeAdminServices
+    client = TestClient(app)
+    try:
+        response = client.post("/api/v2/admin/db-reset", json={"dry_run": True})
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["data"]["result"]["dry_run"] is True
+    assert payload["data"]["result"]["affected_tables"] == ["media_file", "file_instances"]
+
+
+def test_post_db_reset_v2_requires_correct_challenge() -> None:
+    app.dependency_overrides[get_admin_services] = _FakeAdminServices
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/v2/admin/db-reset",
+            json={"dry_run": False, "challenge_word": "wrong"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["ok"] is False
+
+
+def test_post_db_reset_alias_path_parity() -> None:
+    app.dependency_overrides[get_admin_services] = _FakeAdminServices
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/admin/db-reset",
+            json={"dry_run": False, "challenge_word": "media-manager"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["data"]["result"]["success"] is True
+
+
+def test_post_db_reset_v2_env_forbidden_returns_403() -> None:
+    class _ForbiddenAdminServices:
+        def db_reset(self, *, dry_run: bool, challenge_word: str | None) -> dict[str, object]:
+            _ = dry_run, challenge_word
+            raise ServiceLayerException(code="FORBIDDEN_ENV", message="forbidden", http_status=403)
+
+    app.dependency_overrides[get_admin_services] = _ForbiddenAdminServices
+    client = TestClient(app)
+    try:
+        response = client.post("/api/v2/admin/db-reset", json={"dry_run": True})
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 403
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["errors"][0]["code"] == "FORBIDDEN_ENV"

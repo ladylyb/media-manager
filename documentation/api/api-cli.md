@@ -50,3 +50,22 @@ Exit codes:
 - `0`: no missing hashes or mismatches
 - `1`: missing hashes and/or mismatches found
 - `2`: invalid CLI args or API/transport failure
+
+## Database Reset (Dev/Test Only)
+
+`media-manager db-reset` calls the admin REST endpoint to preview or perform a destructive data reset.
+
+Examples:
+- `media-manager db-reset --dry-run`
+- `media-manager db-reset --challenge-word media-manager`
+- `media-manager db-reset --dry-run --json`
+
+Safety:
+- hard-blocked unless `MEDIA_MANAGER_ENV` is `dev` or `test`
+- `--challenge-word` required unless `--dry-run`
+- truncates data tables only; does not modify Alembic migration state
+
+Exit codes:
+- `0`: success
+- `1`: semantic failure from API response
+- `2`: invalid CLI args or transport/parse failure
