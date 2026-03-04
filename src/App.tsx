@@ -8,7 +8,7 @@ import DashboardPage from "@/pages/DashboardPage";
 import OperationsPage from "@/pages/OperationsPage";
 import RunsPage from "@/pages/RunsPage";
 import LedgerPage from "@/pages/LedgerPage";
-import DiscoverPage from "@/pages/DiscoverPage";
+
 import DuplicatesPage from "@/pages/DuplicatesPage";
 import PolicyPage from "@/pages/PolicyPage";
 import AdminPage from "@/pages/AdminPage";
@@ -29,7 +29,7 @@ const App = () => (
             <Route path="/operations" element={<OperationsPage />} />
             <Route path="/runs" element={<RunsPage />} />
             <Route path="/ledger" element={<LedgerPage />} />
-            <Route path="/discover" element={<DiscoverPage />} />
+            
             <Route path="/duplicates" element={<DuplicatesPage />} />
             <Route path="/policy" element={<PolicyPage />} />
             <Route path="/admin" element={<AdminPage />} />
