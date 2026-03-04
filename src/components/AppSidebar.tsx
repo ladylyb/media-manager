@@ -1,5 +1,5 @@
 import {
-  LayoutDashboard, Cog, PlayCircle, BookOpen, Search, Copy, Shield, Settings, Image
+  LayoutDashboard, Cog, PlayCircle, BookOpen, Copy, Shield, Settings, Image
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
@@ -25,9 +25,8 @@ const mainNav = [
 ];
 
 const mediaNav = [
-  { title: "Discover", url: "/discover", icon: Search },
-  { title: "Duplicates", url: "/duplicates", icon: Copy },
   { title: "Gallery", url: "/gallery", icon: Image },
+  { title: "Duplicates", url: "/duplicates", icon: Copy },
 ];
 
 const systemNav = [
