@@ -10,6 +10,11 @@ This project is licensed under the **Creative Commons Attribution-NonCommercial-
 - Commercial use is prohibited without explicit permission from the author.
 - Modifications and derivative works are not permitted without explicit permission from the author.
 
+## Contributing
+
+Contribution workflow and PR standards are documented in [CONTRIBUTING.md](CONTRIBUTING.md).
+Always review runtime invariants in [AGENTS.md](AGENTS.md) before making changes.
+
 ## Environment Configuration
 
 Use `.env.sample` as the runtime configuration template.

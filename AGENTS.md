@@ -9,6 +9,13 @@ This file is the single source of truth for agent operating instructions in this
   - Purpose: documentation-specific handling notes.
   - Precedence: this root `AGENTS.md` remains authoritative if any conflict exists.
 
+## Contribution Workflow
+
+- `CONTRIBUTING.md`
+  - Scope: human and agent contribution process (branching, PR, review, merge).
+  - Purpose: operational workflow guidance.
+  - Precedence: this root `AGENTS.md` remains authoritative for runtime invariants and safety constraints.
+
 ---
 
 This repository is developed using agent-driven workflows.
