@@ -2,7 +2,7 @@
 name = "media-manager"
 version = "0.1.0"
 description = "Deterministic persistence foundation for media manager"
-readme = "documentation/README.md"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "SQLAlchemy>=2.0,<3.0",
