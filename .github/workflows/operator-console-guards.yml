@@ -23,3 +23,6 @@ jobs:
 
       - name: Enforce gui_app v2 contract adapter keys
         run: bash tools/ci/check_gui_app_v2_contract.sh
+
+      - name: Enforce gui sync boundary
+        run: bash tools/ci/check_gui_sync_boundary.sh

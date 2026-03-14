@@ -153,6 +153,8 @@ Execution contract:
 
 - `operator_console/gui_app/` is the supported GUI integration layer and uses the shared API client under `src/lib/api/`.
 - `operator_console/gui_upstream/` is an upstream snapshot only and may not reflect the live repository contract.
+- lovable-driven upstream changes are expected to be selectively adapted into `gui_app`, not merged as a second runtime truth.
+- the current `gui_app` API client, endpoint adapters, types, and admin flows are repository-owned integration code and should be treated as canonical unless intentionally redesigned alongside backend changes.
 - `tools/e2e_workflow_sanity.sh` is the supported API-client smoke harness for workflow verification.
 - `media-manager-benchmark-worker` is the supported benchmark execution process for queued admin benchmarks.
 

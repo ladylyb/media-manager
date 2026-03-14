@@ -9,6 +9,7 @@ This folder:
 - `operator_console/gui_app/` is the supported runtime client integration layer.
 - all operational actions must go through `src/lib/api/client.ts` and `src/lib/api/endpoints.ts`
 - local Python service or persistence imports are out of bounds for the GUI
+- lovable upstream changes are reference input only and must be manually adapted to the live `/api/*` contract
 
 ## Quick Start
 
@@ -61,4 +62,9 @@ src/
 
 ## Sync Strategy
 
-See [SYNC.md](./SYNC.md) for subtree update workflow and rules.
+See [SYNC.md](./SYNC.md) for the subtree refresh workflow and selective-adaptation rules.
+
+Practical rule:
+- treat `gui_upstream` as a design/reference snapshot
+- treat `gui_app` as the canonical runtime client
+- never replace the API client, endpoint adapters, types, or admin flows wholesale from upstream
