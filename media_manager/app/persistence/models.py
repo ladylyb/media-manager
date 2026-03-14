@@ -116,12 +116,28 @@ class OperationRunType(StrEnum):
     CANONICAL_RECOMPUTE = "CANONICAL_RECOMPUTE"
     TAG_ENRICHMENT = "TAG_ENRICHMENT"
     DB_RESET = "DB_RESET"
+    BENCHMARK_METADATA = "BENCHMARK_METADATA"
+    BENCHMARK_DISCOVERY = "BENCHMARK_DISCOVERY"
 
 
 class OperationRunStatus(StrEnum):
     STARTED = "STARTED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+
+
+class BenchmarkRunStatus(StrEnum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCEL_REQUESTED = "CANCEL_REQUESTED"
+    CANCELLED = "CANCELLED"
+
+
+class BenchmarkRunType(StrEnum):
+    METADATA = "METADATA"
+    DISCOVERY = "DISCOVERY"
 
 
 class Run(Base):
@@ -200,6 +216,49 @@ class OperationRun(Base):
 Index("idx_operation_runs_started_at_desc", OperationRun.started_at.desc())
 Index("idx_operation_runs_operation_type", OperationRun.operation_type)
 Index("idx_operation_runs_status", OperationRun.status)
+
+
+class BenchmarkRun(Base):
+    __tablename__ = "benchmark_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    operation_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("operation_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    benchmark_type: Mapped[BenchmarkRunType] = mapped_column(
+        Enum(BenchmarkRunType, name="benchmark_run_type", native_enum=True),
+        nullable=False,
+    )
+    status: Mapped[BenchmarkRunStatus] = mapped_column(
+        Enum(BenchmarkRunStatus, name="benchmark_run_status", native_enum=True),
+        nullable=False,
+        default=BenchmarkRunStatus.QUEUED,
+    )
+    parameters: Mapped[dict[str, object]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
+    report_payload: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    summary_payload: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    cleanup_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cleanup_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    queued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+Index("idx_benchmark_runs_status", BenchmarkRun.status)
+Index("idx_benchmark_runs_type", BenchmarkRun.benchmark_type)
+Index("idx_benchmark_runs_queued_at", BenchmarkRun.queued_at.desc())
 
 
 class FailureEvent(Base):

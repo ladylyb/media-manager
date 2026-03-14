@@ -43,6 +43,11 @@ def test_canonical_api_route_inventory_and_v1_removal() -> None:
         "/api/admin/observability/operation-runs",
         "/api/admin/observability/failures",
         "/api/admin/observability/metrics-series",
+        "/api/admin/benchmarks/metadata",
+        "/api/admin/benchmarks/discovery",
+        "/api/admin/benchmarks/runs",
+        "/api/admin/benchmarks/runs/{operation_run_id}",
+        "/api/admin/benchmarks/runs/{operation_run_id}/cancel",
     }
 
     assert expected_canonical_paths.issubset(route_paths)
@@ -2322,6 +2327,29 @@ def test_admin_observability_metrics_series_returns_curated_series() -> None:
     payload = response.json()["data"]["result"]
     assert payload["series"]["operation_volume"][0]["value"] == 4
     assert payload["series"]["latency_ms_avg"][0]["value"] == 88.5
+
+
+def test_admin_benchmark_queue_and_reads_use_envelope() -> None:
+    app.dependency_overrides[get_admin_services] = _FakeAdminServices
+    client = TestClient(app)
+    try:
+        queued = client.post(
+            "/api/admin/benchmarks/metadata",
+            json={"items": 1000, "batch_size": 250, "challenge_word": "media-manager"},
+        )
+        listing = client.get("/api/admin/benchmarks/runs")
+        detail = client.get("/api/admin/benchmarks/runs/aaaaaaaa-1111-1111-1111-111111111111")
+        cancel = client.post("/api/admin/benchmarks/runs/aaaaaaaa-1111-1111-1111-111111111111/cancel")
+    finally:
+        app.dependency_overrides.clear()
+    assert queued.status_code == 200
+    assert queued.json()["data"]["result"]["queued"] is True
+    assert listing.status_code == 200
+    assert listing.json()["data"]["result"][0]["benchmark_type"] == "METADATA"
+    assert detail.status_code == 200
+    assert detail.json()["data"]["result"]["summary_payload"]["throughput_files_per_s"] == 1000.0
+    assert cancel.status_code == 200
+    assert cancel.json()["data"]["result"]["status"] == "CANCEL_REQUESTED"
 
 
 def test_main_entrypoint_starts_uvicorn(monkeypatch) -> None:

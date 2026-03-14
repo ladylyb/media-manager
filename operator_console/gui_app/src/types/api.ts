@@ -194,6 +194,29 @@ export interface ObservabilityMetricsSeries {
   };
 }
 
+export interface BenchmarkRun {
+  benchmark_run_id: string;
+  operation_run_id: string;
+  benchmark_type: "METADATA" | "DISCOVERY" | string;
+  status: "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCEL_REQUESTED" | "CANCELLED" | string;
+  parameters: Record<string, unknown>;
+  report_payload?: Record<string, unknown> | null;
+  summary_payload?: Record<string, unknown> | null;
+  cleanup_status?: string | null;
+  cleanup_error?: string | null;
+  error_message?: string | null;
+  queued_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  cancel_requested_at?: string | null;
+}
+
+export interface BenchmarkQueueResult {
+  queued: boolean;
+  operation_run_id: string;
+  benchmark: BenchmarkRun;
+}
+
 // Pagination
 export interface PaginatedResponse<T> {
   items: T[];

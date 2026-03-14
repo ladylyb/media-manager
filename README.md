@@ -109,12 +109,19 @@ uvicorn operator_console.main:app --reload
 
 The console also exposes `/metrics` for Prometheus. To force the React v2 shell on the main console routes, set `MEDIA_MANAGER_UI_V2_ENABLED=true`. The v2 shell is also available directly at `/console-v2`.
 
-To enable the new observability links in the Admin UI, configure:
+To enable the new observability links and benchmark queueing in the Admin UI, configure:
 
 ```bash
 MEDIA_MANAGER_METRICS_ENABLED=true
 MEDIA_MANAGER_PROMETHEUS_URL=http://127.0.0.1:9090
 MEDIA_MANAGER_GRAFANA_URL=http://127.0.0.1:3000
+MEDIA_MANAGER_BENCHMARKS_ENABLED=true
+```
+
+Then start the benchmark worker in a separate process when benchmarking is needed:
+
+```bash
+media-manager-benchmark-worker
 ```
 
 ### Run a first plan/apply cycle
@@ -177,6 +184,7 @@ Operator-facing entry points:
 - `/api/policy`
 - `/api/run`
 - `/api/admin/observability/summary`
+- `/api/admin/benchmarks/runs`
 - `/metrics`
 
 Use these docs for operational details instead of relying on the README for endpoint-by-endpoint behavior:
@@ -184,6 +192,9 @@ Use these docs for operational details instead of relying on the README for endp
 - [Operator Guide](documentation/operator-guide/index.md)
 - [Operator Console API](documentation/api/api-operator-console.md)
 - [Observability guide](documentation/operator-guide/observability.md)
+
+Internal note:
+- The supported benchmark interface is the admin API plus `media-manager-benchmark-worker`. The old `tools/perf/*` scripts have been removed.
 
 ## Project structure
 

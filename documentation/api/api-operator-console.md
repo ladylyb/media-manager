@@ -44,6 +44,11 @@ Available canonical endpoints:
 - `GET /api/admin/observability/operation-runs`
 - `GET /api/admin/observability/failures`
 - `GET /api/admin/observability/metrics-series`
+- `POST /api/admin/benchmarks/metadata`
+- `POST /api/admin/benchmarks/discovery`
+- `GET /api/admin/benchmarks/runs`
+- `GET /api/admin/benchmarks/runs/{operation_run_id}`
+- `POST /api/admin/benchmarks/runs/{operation_run_id}/cancel`
 - `POST /api/admin/db-reset`
 
 Error mapping:
@@ -116,6 +121,27 @@ Query params:
 This endpoint intentionally exposes a fixed allowlist of curated series rather
 than arbitrary Prometheus queries.
 
+### Benchmark Endpoints
+
+Benchmarks are admin-only and are supported only in `dev` and `test`.
+
+Supported operations:
+
+- `POST /api/admin/benchmarks/metadata`
+- `POST /api/admin/benchmarks/discovery`
+- `GET /api/admin/benchmarks/runs`
+- `GET /api/admin/benchmarks/runs/{operation_run_id}`
+- `POST /api/admin/benchmarks/runs/{operation_run_id}/cancel`
+
+Execution contract:
+
+- requires `MEDIA_MANAGER_BENCHMARKS_ENABLED=true`
+- queue requests require the admin challenge word
+- creates durable `operation_runs` and benchmark records before execution
+- executes in the separate `media-manager-benchmark-worker` process
+- never performs filesystem mutation
+- operates only on synthetic benchmark-tagged DB data and records cleanup results durably
+
 ## Binary And HTML Routes
 
 - `GET /ledger`
@@ -128,6 +154,7 @@ than arbitrary Prometheus queries.
 - `operator_console/gui_app/` is the supported GUI integration layer and uses the shared API client under `src/lib/api/`.
 - `operator_console/gui_upstream/` is an upstream snapshot only and may not reflect the live repository contract.
 - `tools/e2e_workflow_sanity.sh` is the supported API-client smoke harness for workflow verification.
+- `media-manager-benchmark-worker` is the supported benchmark execution process for queued admin benchmarks.
 
 ### Composite Run Note
 
