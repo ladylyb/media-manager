@@ -176,20 +176,20 @@ class ReadServices:
         runs_by_status: dict[str, int] = {}
         runs_by_type: dict[str, int] = {}
         last_success_by_type: dict[str, str | None] = {
-            "INGEST": None,
-            "PLAN": None,
-            "APPLY": None,
-            "TAG_ENRICHMENT": None,
-            "DB_RESET": None,
-            "BENCHMARK_METADATA": None,
-            "BENCHMARK_DISCOVERY": None,
+            operation_type.value: None for operation_type in OperationRunType
         }
+        completed_runs = sorted(
+            (row for row in recent_runs if row.status == OperationRunStatus.COMPLETED),
+            key=lambda row: row.completed_at or row.started_at,
+            reverse=True,
+        )
         for row in recent_runs:
             runs_by_status[row.status.value] = runs_by_status.get(row.status.value, 0) + 1
             runs_by_type[row.operation_type.value] = runs_by_type.get(row.operation_type.value, 0) + 1
-            if row.status == OperationRunStatus.COMPLETED and row.operation_type.value in last_success_by_type:
-                if last_success_by_type[row.operation_type.value] is None:
-                    last_success_by_type[row.operation_type.value] = row.completed_at.isoformat() if row.completed_at else None
+        for row in completed_runs:
+            if last_success_by_type[row.operation_type.value] is None:
+                completed_at = row.completed_at or row.started_at
+                last_success_by_type[row.operation_type.value] = completed_at.isoformat()
 
         payload = {
             "metrics_enabled": (os.getenv("MEDIA_MANAGER_METRICS_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}),
