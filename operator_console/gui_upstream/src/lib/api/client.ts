@@ -1,6 +1,6 @@
 import type { ApiEnvelope } from "@/types/api";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api/v2";
 
 export class ApiClientError extends Error {
   constructor(

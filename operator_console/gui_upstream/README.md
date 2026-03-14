@@ -1,12 +1,6 @@
-# Media Manager Operator Console Upstream Snapshot
+# Media Manager Operator Console
 
-Immutable upstream snapshot for the Media Manager operator console. Built with React + Vite + TypeScript + Tailwind CSS.
-
-This directory is not the supported runtime integration layer for this repository.
-It may contain stale request shapes or API assumptions from upstream.
-
-Supported runtime/API integration happens in:
-- `operator_console/gui_app/`
+Production-quality frontend for the Media Manager pipeline. Built with React + Vite + TypeScript + Tailwind CSS.
 
 ## Quick Start
 
@@ -19,7 +13,7 @@ npm run dev
 
 | Variable | Default | Description |
 |---|---|---|
-| `VITE_API_BASE_URL` | `/api` | Base URL for the FastAPI backend |
+| `VITE_API_BASE_URL` | `/api/v2` | Base URL for the FastAPI backend |
 
 ## Production Build for FastAPI
 
@@ -34,7 +28,7 @@ Copy the `dist/` folder contents to your FastAPI static files directory.
 ```
 src/
 ├── components/       # Reusable UI primitives
-├── lib/api/          # Upstream snapshot only; not the supported repo contract
+├── lib/api/          # Typed API client + endpoint functions
 ├── pages/            # Route-level page components
 └── types/            # TypeScript interfaces for API payloads
 ```
