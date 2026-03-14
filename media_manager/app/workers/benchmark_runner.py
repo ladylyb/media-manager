@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from datetime import timedelta
 from uuid import UUID
 
 from media_manager.app.core.config import load_environment
@@ -28,6 +29,12 @@ def run_once() -> bool:
     operation_runs = OperationRunService(session_factory)
     operation_run_id: UUID | None = None
     try:
+        stale_after_s = max(1.0, float(os.getenv("MEDIA_MANAGER_BENCHMARK_STALE_AFTER_SECONDS", "900")))
+        for abandoned in benchmark_runs.abandon_stale_running(stale_after=timedelta(seconds=stale_after_s)):
+            operation_runs.fail(
+                UUID(abandoned.operation_run_id),
+                error_message="Benchmark worker stopped before completion; benchmark run marked failed.",
+            )
         claimed = benchmark_runs.claim_next()
         if claimed is None:
             return False

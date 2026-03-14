@@ -292,9 +292,11 @@ def run_discovery_benchmark(
     cleanup_status = "COMPLETED"
     cleanup_error: str | None = None
     scenarios: list[dict[str, object]] = []
+    seeded = False
     try:
         with session_factory.begin() as session:
             _seed_discovery_rows(session, items=items, run_token=run_token)
+        seeded = True
 
         svc = DiscoveryQueryService(session_factory)
         benchmark_scenarios = [
@@ -332,13 +334,19 @@ def run_discovery_benchmark(
                     "returned_items": len(page.items),
                 }
             )
-
-        with session_factory.begin() as session:
-            _cleanup_discovery_rows(session, run_token=run_token)
     except Exception as exc:
         cleanup_status = "FAILED"
         cleanup_error = str(exc)
         raise
+    finally:
+        if seeded:
+            try:
+                with session_factory.begin() as session:
+                    _cleanup_discovery_rows(session, run_token=run_token)
+            except Exception as cleanup_exc:
+                cleanup_status = "FAILED"
+                cleanup_error = str(cleanup_exc)
+                raise RuntimeError(f"Discovery benchmark cleanup failed: {cleanup_exc}") from cleanup_exc
 
     report = {
         "benchmark_type": "DISCOVERY",

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from media_manager.app.persistence.base import transactional_session
@@ -98,7 +98,13 @@ class BenchmarkRunStore:
         with transactional_session(self._session_factory) as session:
             stmt = (
                 select(BenchmarkRun)
-                .where(BenchmarkRun.status.in_((BenchmarkRunStatus.QUEUED, BenchmarkRunStatus.CANCEL_REQUESTED)))
+                .where(
+                    (BenchmarkRun.status == BenchmarkRunStatus.QUEUED)
+                    | and_(
+                        BenchmarkRun.status == BenchmarkRunStatus.CANCEL_REQUESTED,
+                        BenchmarkRun.started_at.is_(None),
+                    )
+                )
                 .order_by(BenchmarkRun.queued_at.asc(), BenchmarkRun.id.asc())
                 .with_for_update(skip_locked=True)
                 .limit(1)
@@ -117,6 +123,30 @@ class BenchmarkRunStore:
             row.updated_at = _now_utc()
             session.flush()
             return self._to_snapshot(row)
+
+    def abandon_stale_running(self, *, stale_after: timedelta) -> list[BenchmarkRunSnapshot]:
+        cutoff = _now_utc() - stale_after
+        with transactional_session(self._session_factory) as session:
+            rows = session.scalars(
+                select(BenchmarkRun)
+                .where(
+                    BenchmarkRun.status.in_((BenchmarkRunStatus.RUNNING, BenchmarkRunStatus.CANCEL_REQUESTED)),
+                    BenchmarkRun.started_at.is_not(None),
+                    BenchmarkRun.completed_at.is_(None),
+                    BenchmarkRun.started_at < cutoff,
+                )
+                .with_for_update(skip_locked=True)
+            ).all()
+            snapshots: list[BenchmarkRunSnapshot] = []
+            for row in rows:
+                row.status = BenchmarkRunStatus.FAILED
+                row.error_message = "Benchmark worker stopped before completion; marked failed at stale boundary."
+                row.cleanup_status = "ABANDONED"
+                row.completed_at = _now_utc()
+                row.updated_at = _now_utc()
+                session.flush()
+                snapshots.append(self._to_snapshot(row))
+            return snapshots
 
     def complete(
         self,
