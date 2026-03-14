@@ -1,0 +1,38 @@
+# Documentation Workflow
+
+## Local Commands
+
+Install docs dependencies:
+
+```bash
+pip install -e ".[docs]"
+```
+
+Serve docs locally:
+
+```bash
+mkdocs serve
+```
+
+Run strict build:
+
+```bash
+mkdocs build --strict
+```
+
+## Contribution Rules
+
+- Keep conceptual docs under `documentation/architecture/` or `documentation/guides/`.
+- Keep API docs under `documentation/api/` using `mkdocstrings` directives where applicable.
+- Keep roadmap material under `documentation/roadmap/`; retain historical docs only via frozen refs.
+- Ensure `mkdocs build --strict` passes before opening a PR.
+- Keep legacy/historical docs out of `develop`; retain them via `archive/legacy-freeze-*` branch and `legacy-freeze-*` tag.
+- Run `bash tools/docs/check_no_legacy_links.sh` before opening a PR.
+- Run `bash tools/docs/check_orphan_docs.sh` before opening a PR.
+
+## API Docstring Conventions
+
+- Use triple-double-quoted docstrings on modules, public classes, and public functions.
+- Start docstrings with a one-line summary, then add details only when needed.
+- Prefer explicit parameter and return type hints so rendered API signatures are clear.
+- Keep runtime behavior details accurate; if behavior changes, update docstrings in the same PR.

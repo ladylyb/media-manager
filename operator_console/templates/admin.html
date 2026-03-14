@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+
+{% block title %}Admin{% endblock %}
+
+{% block content %}
+<section class="space-y-6">
+  <div class="space-y-2">
+    <h2 class="text-3xl font-semibold tracking-tight">Admin</h2>
+    <p class="text-sm text-slate-600">Development/test maintenance actions for this environment.</p>
+  </div>
+
+  <section class="space-y-4 rounded-xl border border-rose-200 bg-rose-50 p-5">
+    <h3 class="text-lg font-semibold text-rose-900">Reset Database</h3>
+    <p class="text-sm text-rose-800">
+      Destructive operation. This truncates application data tables only. Schema and Alembic migration state are preserved.
+      Allowed only in <code>dev</code>/<code>test</code> environments.
+    </p>
+
+    <div id="admin-error" class="hidden rounded border border-rose-200 bg-white px-3 py-2 text-sm text-rose-700"></div>
+    <div id="admin-success" class="hidden rounded border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-700"></div>
+
+    <div class="flex flex-wrap items-center gap-3">
+      <button
+        id="admin-dry-run"
+        type="button"
+        class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
+      >
+        Dry-Run Preview
+      </button>
+      <span id="admin-preview-status" class="text-sm text-slate-700">Run dry-run first.</span>
+    </div>
+
+    <div class="rounded-lg bg-white p-4 ring-1 ring-slate-200">
+      <p class="text-sm font-semibold text-slate-900">Affected Tables</p>
+      <ul id="admin-affected-tables" class="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">
+        <li>No preview yet.</li>
+      </ul>
+    </div>
+
+    <label class="block space-y-2">
+      <span class="text-sm font-medium text-slate-900">Type challenge word to confirm</span>
+      <input
+        id="admin-challenge-word"
+        type="text"
+        placeholder="media-manager"
+        class="w-full max-w-md rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200"
+      />
+      <span class="text-xs text-slate-600">Must match exactly: <code>media-manager</code></span>
+    </label>
+
+    <button
+      id="admin-reset-confirm"
+      type="button"
+      disabled
+      class="rounded-lg bg-rose-700 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-rose-300"
+      title="Run dry-run first, then enter exact challenge word."
+    >
+      Reset Database
+    </button>
+  </section>
+</section>
+
+<script>
+  const REQUIRED_CHALLENGE_WORD = "media-manager";
+  let dryRunCompleted = false;
+  let latestAffectedTables = [];
+
+  function byId(id) {
+    return document.getElementById(id);
+  }
+
+  function setText(id, value) {
+    const node = byId(id);
+    if (node) node.textContent = value;
+  }
+
+  function clearMessages() {
+    const error = byId("admin-error");
+    const success = byId("admin-success");
+    if (error) {
+      error.classList.add("hidden");
+      error.textContent = "";
+    }
+    if (success) {
+      success.classList.add("hidden");
+      success.textContent = "";
+    }
+  }
+
+  function showError(message) {
+    const node = byId("admin-error");
+    if (!node) return;
+    node.textContent = message;
+    node.classList.remove("hidden");
+  }
+
+  function showSuccess(message) {
+    const node = byId("admin-success");
+    if (!node) return;
+    node.textContent = message;
+    node.classList.remove("hidden");
+  }
+
+  function renderAffectedTables(items) {
+    const node = byId("admin-affected-tables");
+    if (!node) return;
+    node.innerHTML = "";
+    if (!Array.isArray(items) || items.length === 0) {
+      const li = document.createElement("li");
+      li.textContent = "No tables listed.";
+      node.appendChild(li);
+      return;
+    }
+    for (const name of items) {
+      const li = document.createElement("li");
+      li.textContent = String(name);
+      node.appendChild(li);
+    }
+  }
+
+  function updateResetButtonState() {
+    const challenge = byId("admin-challenge-word");
+    const resetButton = byId("admin-reset-confirm");
+    if (!challenge || !resetButton) return;
+    const matches = challenge.value === REQUIRED_CHALLENGE_WORD;
+    resetButton.disabled = !(dryRunCompleted && matches);
+  }
+
+  async function callDbReset(payload) {
+    const response = await fetch("/api/v2/admin/db-reset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const envelope = await response.json().catch(() => ({}));
+    if (!response.ok || envelope.ok !== true) {
+      const firstError = Array.isArray(envelope.errors) && envelope.errors.length ? envelope.errors[0] : null;
+      const message = firstError && typeof firstError.message === "string"
+        ? firstError.message
+        : `Request failed (${response.status})`;
+      throw new Error(message);
+    }
+    return envelope.data && envelope.data.result ? envelope.data.result : {};
+  }
+
+  async function runDryRun() {
+    clearMessages();
+    try {
+      const result = await callDbReset({ dry_run: true });
+      latestAffectedTables = Array.isArray(result.affected_tables) ? result.affected_tables : [];
+      renderAffectedTables(latestAffectedTables);
+      dryRunCompleted = true;
+      updateResetButtonState();
+      setText("admin-preview-status", "Dry-run complete. Review affected tables.");
+      showSuccess(result.message || "Dry-run complete.");
+    } catch (error) {
+      dryRunCompleted = false;
+      updateResetButtonState();
+      showError(error instanceof Error ? error.message : "Dry-run failed.");
+    }
+  }
+
+  async function runReset() {
+    clearMessages();
+    const challenge = byId("admin-challenge-word");
+    const value = challenge ? challenge.value : "";
+    try {
+      const result = await callDbReset({ dry_run: false, challenge_word: value });
+      latestAffectedTables = Array.isArray(result.affected_tables) ? result.affected_tables : latestAffectedTables;
+      renderAffectedTables(latestAffectedTables);
+      showSuccess(result.message || "Database reset completed.");
+      setText("admin-preview-status", "Reset complete.");
+    } catch (error) {
+      showError(error instanceof Error ? error.message : "Reset failed.");
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    const dryRunButton = byId("admin-dry-run");
+    const resetButton = byId("admin-reset-confirm");
+    const challenge = byId("admin-challenge-word");
+    if (dryRunButton) dryRunButton.addEventListener("click", runDryRun);
+    if (resetButton) resetButton.addEventListener("click", runReset);
+    if (challenge) challenge.addEventListener("input", updateResetButtonState);
+    updateResetButtonState();
+  });
+</script>
+{% endblock %}

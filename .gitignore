@@ -33,6 +33,7 @@ build/
 dist/
 *.egg-info/
 .eggs/
+site/
 
 # IDEs
 .idea/
@@ -66,3 +67,4 @@ media-manager.db-wal
 
 # Benchmark artifacts
 artifacts/perf/
+artifacts/

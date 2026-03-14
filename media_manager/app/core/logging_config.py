@@ -50,6 +50,18 @@ class _StructuredDefaultsFilter(logging.Filter):
             record.cache_hits = "-"
         if not hasattr(record, "cache_misses"):
             record.cache_misses = "-"
+        if not hasattr(record, "content_id"):
+            record.content_id = "-"
+        if not hasattr(record, "canonical_instance_id"):
+            record.canonical_instance_id = "-"
+        if not hasattr(record, "policy_name"):
+            record.policy_name = "-"
+        if not hasattr(record, "policy_version"):
+            record.policy_version = "-"
+        if not hasattr(record, "recompute_mode"):
+            record.recompute_mode = "-"
+        if not hasattr(record, "sequence_no"):
+            record.sequence_no = "-"
         return True
 
 
@@ -73,7 +85,10 @@ def configure_logging() -> None:
             "moves=%(moves)s duplicates=%(duplicates)s noop=%(noop)s "
             "applied=%(applied)s errors=%(errors)s "
             "duration_s=%(duration_s)s files_count=%(files_count)s batch_size=%(batch_size)s "
-            "cache_hits=%(cache_hits)s cache_misses=%(cache_misses)s %(message)s"
+            "cache_hits=%(cache_hits)s cache_misses=%(cache_misses)s "
+            "content_id=%(content_id)s canonical_instance_id=%(canonical_instance_id)s "
+            "policy_name=%(policy_name)s policy_version=%(policy_version)s "
+            "recompute_mode=%(recompute_mode)s sequence_no=%(sequence_no)s %(message)s"
         ),
     )
     root_logger = logging.getLogger()
@@ -88,7 +103,10 @@ def configure_logging() -> None:
         "moves=%(moves)s duplicates=%(duplicates)s noop=%(noop)s "
         "applied=%(applied)s errors=%(errors)s "
         "duration_s=%(duration_s)s files_count=%(files_count)s batch_size=%(batch_size)s "
-        "cache_hits=%(cache_hits)s cache_misses=%(cache_misses)s %(message)s",
+        "cache_hits=%(cache_hits)s cache_misses=%(cache_misses)s "
+        "content_id=%(content_id)s canonical_instance_id=%(canonical_instance_id)s "
+        "policy_name=%(policy_name)s policy_version=%(policy_version)s "
+        "recompute_mode=%(recompute_mode)s sequence_no=%(sequence_no)s %(message)s",
         defaults={
             "run_id": "-",
             "phase": "-",
@@ -110,6 +128,12 @@ def configure_logging() -> None:
             "batch_size": "-",
             "cache_hits": "-",
             "cache_misses": "-",
+            "content_id": "-",
+            "canonical_instance_id": "-",
+            "policy_name": "-",
+            "policy_version": "-",
+            "recompute_mode": "-",
+            "sequence_no": "-",
         },
     )
     for handler in root_logger.handlers:

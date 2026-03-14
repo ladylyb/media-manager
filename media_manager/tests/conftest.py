@@ -54,7 +54,46 @@ def clean_tables(db_engine: Engine) -> None:
             text(
                 "TRUNCATE TABLE media_metadata, metadata_codes, planned_actions, "
                 "apply_audit_items, apply_audit_runs, "
+                "canonical_recompute_items, canonical_recompute_runs, canonical_assignments, "
+                "tag_enrichment_items, tag_enrichment_runs, "
+                "operation_runs, "
+                "media_file, "
+                "canonical_tags, tags, "
+                "operator_policy_settings, "
                 "file_instances, file_contents, failure_events, files, content_objects, runs "
+                "RESTART IDENTITY CASCADE"
+            )
+        )
+        conn.execute(
+            text(
+                "TRUNCATE TABLE "
+                "legacy_3nf.canonical_candidate, "
+                "legacy_3nf.deletion_audit_candidate_instance, "
+                "legacy_3nf.deletion_audit_candidate, "
+                "legacy_3nf.deletion_audit_run, "
+                "legacy_3nf.duplicate_evidence, "
+                "legacy_3nf.action_event, "
+                "legacy_3nf.media_attributes, "
+                "legacy_3nf.file_instance, "
+                "legacy_3nf.content_identity, "
+                "legacy_3nf.scan_batch, "
+                "legacy_3nf.import_failure_events, "
+                "legacy_3nf.import_runs "
+                "RESTART IDENTITY CASCADE"
+            )
+        )
+        conn.execute(
+            text(
+                "TRUNCATE TABLE "
+                "legacy_raw._tmp_deletion_audit_import, "
+                "legacy_raw.deletion_audit_candidate_files, "
+                "legacy_raw.deletion_audit_candidates, "
+                "legacy_raw.deletion_audit_runs, "
+                "legacy_raw.duplicate_candidates, "
+                "legacy_raw._file_actions_old, "
+                "legacy_raw.file_actions, "
+                "legacy_raw.files, "
+                "legacy_raw.scans "
                 "RESTART IDENTITY CASCADE"
             )
         )

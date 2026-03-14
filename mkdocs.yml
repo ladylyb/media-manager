@@ -1,0 +1,89 @@
+site_name: Media Manager Documentation
+site_description: Deterministic media management engine documentation
+repo_url: https://github.com/ladylyb/media-manager
+edit_uri: edit/develop/
+docs_dir: documentation
+strict: true
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: false
+            show_root_heading: true
+            docstring_style: google
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+
+nav:
+  - Home: home.md
+  - Getting Started:
+      - Overview: getting-started/index.md
+      - Installation: getting-started/install.md
+      - Quickstart: getting-started/quickstart.md
+      - First Run: getting-started/first-run.md
+  - Guides:
+      - Overview: guides/index.md
+      - Ingest Workflow: guides/ingest-workflow.md
+      - Plan Workflow: guides/plan-workflow.md
+      - Apply Workflow: guides/apply-workflow.md
+      - Documentation Workflow: guides/documentation-workflow.md
+  - Examples:
+      - Overview: examples/index.md
+      - Ingest to Apply End-to-End: examples/example-ingest-plan-apply.md
+      - Recovery After Interrupted Apply: examples/example-recovery-interrupted-apply.md
+  - Operator Guide:
+      - Overview: operator-guide/index.md
+      - Resume and Recovery: operator-guide/resume-and-recovery.md
+      - Troubleshooting: operator-guide/troubleshooting.md
+      - Observability: operator-guide/observability.md
+      - Drift Diagnosis: operator-guide/drift-diagnosis.md
+      - Incident Response: operator-guide/incident-response.md
+  - Reference:
+      - Overview: reference/index.md
+      - Data Dictionary: reference/data-dictionary.md
+      - Environment Variables: reference/environment-variables.md
+      - FAQ: reference/faq.md
+      - Known Limitations: reference/known-limitations.md
+  - API:
+      - Overview: api/index.md
+      - CLI: api/api-cli.md
+      - Operator Console: api/api-operator-console.md
+      - Core:
+          - Core Overview: api/api-core.md
+          - Metadata: api/api-core-metadata.md
+          - Paths and Naming: api/api-core-paths.md
+      - Persistence Planner: api/api-persistence-planner.md
+      - Persistence Apply: api/api-persistence-apply.md
+      - Persistence Services: api/api-persistence-services.md
+      - Runs and Failures: api/api-persistence-runs-failures.md
+      - Canonical Policy: api/api-canonical.md
+      - Performance: api/api-performance.md
+  - Architecture:
+      - Overview: architecture/index.md
+      - Invariants: architecture/invariants.md
+      - Run Lifecycle: architecture/run-lifecycle.md
+      - ADR:
+          - ADR Index: architecture/adr/index.md
+          - ADR-0001 Runtime Invariants: architecture/adr/0001-runtime-invariants-hard-constraints.md
+          - ADR-0002 Planner/Apply Separation: architecture/adr/0002-planner-apply-separation-durable-gating.md
+      - State Machine: STATE_MACHINE.md
+      - Architecture Guardrails: ARCHITECTURE_GUARDRAILS.md
+  - Contributing:
+      - Overview: contributing/index.md
+      - Documentation Governance: contributing/docs-governance.md
+      - Legacy Freeze Manifest: contributing/legacy-freeze-manifest-20260303.md
+  - Roadmap:
+      - Documentation Roadmap: roadmap/index.md

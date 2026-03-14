@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from media_manager.app.core.config import resolve_required_metadata_codes
@@ -19,12 +19,15 @@ from media_manager.app.core.filenames import generate_canonical_filename, infer_
 from media_manager.app.core.logging_config import get_logger
 from media_manager.app.core.metadata_cache import MetadataCache
 from media_manager.app.core.state_machine import RunState, validate_transition
+from media_manager.app.observability import record_planner_metrics, record_planner_stage_duration
 from media_manager.app.persistence.base import transactional_session
+from media_manager.app.persistence.decision_intelligence import build_decision_traces, write_decision_trace_artifact
+from media_manager.app.persistence.discovery import process_all_discovery_in_session, process_discovery_paths_in_session
 from media_manager.app.persistence.ingest import ingest_paths_in_session
 from media_manager.app.persistence.models import (
+    CanonicalAssignment,
     FailureEvent,
     FailurePhase,
-    FileContent,
     FileInstance,
     FileInstanceStatus,
     MediaMetadata,
@@ -36,6 +39,7 @@ from media_manager.app.persistence.models import (
 )
 
 logger = get_logger(__name__)
+PLANNER_TRACE_VERSION = "phase10.v1"
 
 
 @dataclass(frozen=True)
@@ -114,26 +118,37 @@ class PlanningService:
                 skipped_inactive_instances = 0
                 skipped_missing_metadata_count = 0
                 total_required_codes_missing = 0
+                load_candidates_duration_s = 0.0
+                action_generation_duration_s = 0.0
+                persist_actions_duration_s = 0.0
                 resolved_required_codes = (
                     {code.upper() for code in required_metadata_codes}
                     if required_metadata_codes is not None
                     else resolve_required_metadata_codes()
                 )
 
-                rows = self._load_candidate_instances(session, input_paths)
+                t_load_candidates = perf_counter()
                 if input_paths and ingest_if_needed:
                     ingest_paths_in_session(session, sorted(input_paths, key=lambda p: p.resolve(strict=False).as_posix()))
-                    self._ensure_canonical_instances(session)
-                    rows = self._load_candidate_instances(session, input_paths)
+                if input_paths:
+                    process_discovery_paths_in_session(
+                        session,
+                        sorted(input_paths, key=lambda p: p.resolve(strict=False).as_posix()),
+                    )
+                else:
+                    process_all_discovery_in_session(session)
+                rows = self._load_candidate_instances(session, input_paths)
                 base_root = self._determine_base_root([Path(row.absolute_path) for row in rows])
+                load_candidates_duration_s = perf_counter() - t_load_candidates
 
+                t_action_generation = perf_counter()
                 for instance in rows:
                     if instance.status != FileInstanceStatus.ACTIVE.value:
                         skipped_inactive_instances += 1
                         skipped_count += 1
                         continue
                     canonical_instances_processed += 1
-                    action, missing_required_count = self._plan_single_instance(
+                    action, missing_required_count, persist_flush_duration_s = self._plan_single_instance(
                         session,
                         run,
                         instance,
@@ -142,6 +157,7 @@ class PlanningService:
                         resolved_required_codes,
                         strict_missing_metadata,
                     )
+                    persist_actions_duration_s += persist_flush_duration_s
                     total_required_codes_missing += missing_required_count
                     if action == PlannedActionType.RENAME.value:
                         scanned_count += 1
@@ -160,6 +176,24 @@ class PlanningService:
                         skipped_missing_metadata_count += 1
                     else:
                         skipped_count += 1
+                action_generation_duration_s = perf_counter() - t_action_generation
+
+                decision_traces = build_decision_traces(
+                    session,
+                    rows,
+                    planner_version=PLANNER_TRACE_VERSION,
+                )
+                trace_path = write_decision_trace_artifact(run_id=run.id, traces=decision_traces)
+                logger.info(
+                    "Decision trace artifact written",
+                    extra={
+                        "run_id": str(run.id),
+                        "phase": "plan",
+                        "action_type": "TRACE",
+                        "path": str(trace_path),
+                        "trace_entries": len(decision_traces),
+                    },
+                )
 
                 summary = PlanningSummary(
                     run_id=run.id,
@@ -219,6 +253,35 @@ class PlanningService:
                         "summary": summary.to_dict(),
                     },
                 )
+                generated_actions = summary.move_actions + summary.noop_actions + summary.duplicate_actions
+                metadata_lookup_duration_s = self._metadata_lookup_db_time_s + self._metadata_lookup_cache_time_s
+                try:
+                    record_planner_metrics(run_id=str(run.id), actions_generated=generated_actions)
+                    record_planner_stage_duration(
+                        run_id=str(run.id),
+                        stage="load_candidates",
+                        duration_s=load_candidates_duration_s,
+                    )
+                    record_planner_stage_duration(
+                        run_id=str(run.id),
+                        stage="metadata_lookup",
+                        duration_s=metadata_lookup_duration_s,
+                    )
+                    record_planner_stage_duration(
+                        run_id=str(run.id),
+                        stage="action_generation",
+                        duration_s=action_generation_duration_s,
+                    )
+                    record_planner_stage_duration(
+                        run_id=str(run.id),
+                        stage="persist_actions",
+                        duration_s=persist_actions_duration_s,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Observability metric emission failed",
+                        extra={"run_id": str(run.id), "phase": "plan", "action_type": "METRICS"},
+                    )
                 return summary
         except Exception as exc:
             logger.exception("Plan failed", extra={"run_id": str(run_id), "phase": "plan", "action_type": ""})
@@ -245,9 +308,29 @@ class PlanningService:
             raise PlanningStateError(f"Planning is only allowed from CREATED. Current state: {run.state.value}")
 
     def _load_candidate_instances(self, session: Session, input_paths: list[Path] | None) -> list[FileInstance]:
+        latest_assignments = (
+            select(
+                CanonicalAssignment.content_id.label("content_id"),
+                CanonicalAssignment.canonical_instance_id.label("canonical_instance_id"),
+                func.row_number()
+                .over(
+                    partition_by=CanonicalAssignment.content_id,
+                    order_by=(
+                        CanonicalAssignment.assigned_at.desc(),
+                        CanonicalAssignment.assignment_id.desc(),
+                    ),
+                )
+                .label("rn"),
+            )
+            .subquery()
+        )
         stmt = (
             select(FileInstance)
-            .join(FileContent, FileContent.canonical_file_instance_id == FileInstance.file_instance_id)
+            .join(
+                latest_assignments,
+                (latest_assignments.c.canonical_instance_id == FileInstance.file_instance_id)
+                & (latest_assignments.c.rn == 1),
+            )
             .order_by(FileInstance.absolute_path.asc(), FileInstance.file_instance_id.asc())
         )
         if input_paths:
@@ -256,26 +339,6 @@ class PlanningService:
                 return []
             stmt = stmt.where(FileInstance.absolute_path.in_(normalized))
         return session.scalars(stmt).all()
-
-    def _ensure_canonical_instances(self, session: Session) -> None:
-        session.execute(
-            text(
-                """
-                WITH canonical AS (
-                    SELECT DISTINCT ON (fi.content_id)
-                        fi.content_id,
-                        fi.file_instance_id
-                    FROM file_instances fi
-                    ORDER BY fi.content_id, fi.first_seen_at ASC, fi.file_instance_id ASC
-                )
-                UPDATE file_contents fc
-                SET canonical_file_instance_id = canonical.file_instance_id
-                FROM canonical
-                WHERE fc.content_id = canonical.content_id
-                  AND fc.canonical_file_instance_id IS NULL
-                """
-            )
-        )
 
     def _determine_base_root(self, input_paths: list[Path]) -> Path:
         if not input_paths:
@@ -412,7 +475,7 @@ class PlanningService:
         reserved_paths: set[str],
         required_metadata_codes: set[str],
         strict_missing_metadata: bool,
-    ) -> tuple[str, int]:
+    ) -> tuple[str, int, float]:
         source = Path(instance.absolute_path)
         source_path = str(source.resolve(strict=False))
         existing_for_file = self._get_existing_plan_for_file(
@@ -421,7 +484,7 @@ class PlanningService:
         if existing_for_file is not None:
             if existing_for_file.target_path:
                 reserved_paths.add(str(Path(existing_for_file.target_path).resolve(strict=False)))
-            return existing_for_file.action_type, 0
+            return existing_for_file.action_type, 0, 0.0
 
         metadata_map = self._load_metadata_by_content_id(session, instance.content_id)
         present_codes = {code.upper() for code in metadata_map.keys()}
@@ -441,22 +504,23 @@ class PlanningService:
                     "action": "SKIPPED",
                     "content_id": str(instance.content_id),
                     "file_instance_id": str(instance.file_instance_id),
+                    "canonical_instance_id": str(instance.file_instance_id),
                     "missing_codes": missing_required,
                     "strict_missing_metadata": strict_missing_metadata,
                     "codes_extracted": ",".join(sorted(metadata_map.keys())),
                 },
             )
-            return "SKIPPED_MISSING_METADATA", len(missing_required)
+            return "SKIPPED_MISSING_METADATA", len(missing_required), 0.0
 
         owner = metadata_map.get("OWNER")
         context = metadata_map.get("CONTEXT")
         taken_dt_raw = metadata_map.get("TAKEN_DT")
         if not owner or not context or not taken_dt_raw:
-            return "SKIPPED_MISSING_METADATA", 0
+            return "SKIPPED_MISSING_METADATA", 0, 0.0
 
         media_type = infer_media_type_from_extension(source)
         if media_type is None:
-            return "SKIPPED_UNSUPPORTED_MIME", 0
+            return "SKIPPED_UNSUPPORTED_MIME", 0, 0.0
 
         taken_datetime = datetime.fromisoformat(taken_dt_raw)
         canonical_filename = generate_canonical_filename(
@@ -501,6 +565,7 @@ class PlanningService:
             source_path=source_path,
             target_path=planned_target_path,
         )
+        persist_flush_duration_s = 0.0
         if existing_plan is None:
             plan = PlannedAction(
                 run_id=run.id,
@@ -510,8 +575,10 @@ class PlanningService:
                 target_path=planned_target_path,
             )
             session.add(plan)
+            t_flush = perf_counter()
             session.flush()
-        return action_type, 0
+            persist_flush_duration_s = perf_counter() - t_flush
+        return action_type, 0, persist_flush_duration_s
 
     def _record_planning_failure(self, run_id: uuid.UUID, code: str, message: str) -> None:
         with transactional_session(self._session_factory) as session:

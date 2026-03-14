@@ -8,7 +8,14 @@ from sqlalchemy import delete, select, text, update
 from media_manager.app.core.errors import MissingRequiredMetadataError
 from media_manager.app.persistence.apply import ApplyService
 from media_manager.app.persistence.ingest import IngestService
-from media_manager.app.persistence.models import FileContent, FileInstance, MediaMetadata, MetadataCode, PlannedAction
+from media_manager.app.persistence.models import (
+    CanonicalAssignment,
+    FileContent,
+    FileInstance,
+    MediaMetadata,
+    MetadataCode,
+    PlannedAction,
+)
 from media_manager.app.persistence.planner import PlanningService
 from media_manager.app.persistence.runs import RunService
 
@@ -37,15 +44,26 @@ def _final_paths(root: Path) -> list[str]:
 
 def _canonical_by_hash(session_factory) -> dict[str, str]:
     with session_factory() as session:
-        rows = (
-            session.execute(
-                select(FileContent.sha256_hash, FileInstance.absolute_path)
-                .join(FileInstance, FileInstance.file_instance_id == FileContent.canonical_file_instance_id)
-                .order_by(FileContent.sha256_hash.asc())
+        rows = session.execute(
+            select(
+                FileContent.content_id,
+                FileContent.sha256_hash,
+                CanonicalAssignment.canonical_instance_id,
+                FileInstance.absolute_path,
+                CanonicalAssignment.assigned_at,
+                CanonicalAssignment.assignment_id,
             )
-            .all()
-        )
-    return {sha: path for sha, path in rows}
+            .join(CanonicalAssignment, CanonicalAssignment.content_id == FileContent.content_id)
+            .join(FileInstance, FileInstance.file_instance_id == CanonicalAssignment.canonical_instance_id)
+            .order_by(FileContent.content_id.asc(), CanonicalAssignment.assigned_at.desc(), CanonicalAssignment.assignment_id.desc())
+        ).all()
+
+    by_content: dict[str, tuple[str, str]] = {}
+    for content_id, sha, _instance_id, path, _assigned_at, _assignment_id in rows:
+        key = str(content_id)
+        if key not in by_content:
+            by_content[key] = (sha, path)
+    return {sha: path for sha, path in by_content.values()}
 
 
 def _truncate_all(session_factory) -> None:
@@ -53,7 +71,9 @@ def _truncate_all(session_factory) -> None:
         session.execute(
             text(
                 "TRUNCATE TABLE media_metadata, metadata_codes, planned_actions, "
-                "apply_audit_items, apply_audit_runs, file_instances, file_contents, "
+                "apply_audit_items, apply_audit_runs, "
+                "canonical_recompute_items, canonical_recompute_runs, canonical_assignments, "
+                "file_instances, file_contents, "
                 "failure_events, files, content_objects, runs RESTART IDENTITY CASCADE"
             )
         )
@@ -227,3 +247,27 @@ def test_phase8_deterministic_replay_and_canonical_assignment(tmp_path: Path, se
     norm_first = sorted(Path(p).name for p in canon_first.values())
     norm_second = sorted(Path(p).name for p in canon_second.values())
     assert norm_first == norm_second
+
+
+def test_phase8_unreadable_canonical_skips_duplicate_group_consistently(
+    tmp_path: Path,
+    session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import media_manager.app.persistence.apply as apply_module
+
+    monkeypatch.setattr(apply_module, "is_canonical_readable", lambda _path: False)
+
+    root = tmp_path / "dataset-unreadable"
+    files = _build_dataset(root, total_files=20)
+    ingest = IngestService(session_factory)
+    planner = PlanningService(session_factory)
+    run_service = RunService(session_factory)
+    apply_service = ApplyService(session_factory)
+
+    ingest.ingest_paths(files)
+    run = run_service.create_run()
+    planner.plan_run(run.id, files, ingest_if_needed=False)
+
+    summary = apply_service.apply_run(run.id, collision_mode="rename")
+    assert summary.skipped_count >= 1
