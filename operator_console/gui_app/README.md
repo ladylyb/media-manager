@@ -1,12 +1,14 @@
 # Media Manager Operator Console v2 (Integration Layer)
 
-Editable integration layer for the Lovable-generated operator console. Built with React + Vite + TypeScript + Tailwind CSS.
+Supported integration layer for the operator console. Built with React + Vite + TypeScript + Tailwind CSS.
 
-Upstream source-of-truth is tracked at:
+Upstream source snapshot is tracked at:
 - `operator_console/gui_upstream/` (git subtree, do not edit directly)
 
 This folder:
-- `operator_console/gui_app/` is where compatibility fixes and contract mappings live.
+- `operator_console/gui_app/` is the supported runtime client integration layer.
+- all operational actions must go through `src/lib/api/client.ts` and `src/lib/api/endpoints.ts`
+- local Python service or persistence imports are out of bounds for the GUI
 
 ## Quick Start
 
@@ -19,7 +21,7 @@ npm run dev
 
 | Variable | Default | Description |
 |---|---|---|
-| `VITE_API_BASE_URL` | `/api/v2` | Base URL for the FastAPI backend |
+| `VITE_API_BASE_URL` | `/api` | Base URL for the FastAPI backend |
 
 ## Production Build for FastAPI
 
@@ -38,7 +40,7 @@ Serve via FastAPI route:
 ```
 src/
 ├── components/       # Reusable UI primitives
-├── lib/api/          # Typed API client + endpoint functions
+├── lib/api/          # Supported shared API client + endpoint functions
 ├── pages/            # Route-level page components
 └── types/            # TypeScript interfaces for API payloads
 ```

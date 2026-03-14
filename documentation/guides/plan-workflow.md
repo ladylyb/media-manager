@@ -2,25 +2,29 @@
 
 Planning computes deterministic actions without filesystem mutation.
 
-## Command
+## Request
 
 ```bash
-media-manager plan /path/to/media
+curl -X POST http://127.0.0.1:8000/api/plan \
+  -H 'Content-Type: application/json' \
+  -d '{"folder_path":"/path/to/media","strict_metadata":false}'
 ```
 
 Optional strict metadata mode:
 
 ```bash
-media-manager plan /path/to/media --strict-metadata
+curl -X POST http://127.0.0.1:8000/api/plan \
+  -H 'Content-Type: application/json' \
+  -d '{"folder_path":"/path/to/media","strict_metadata":true}'
 ```
 
 ## Output Contract
 
-- Grouped action sections (`MOVE`, `DUPLICATE`, `NOOP`)
-- Summary counters
-- Durable `Run ID`
+- `ok=true`
+- `data.result.summary`
+- durable `data.result.run_id`
 
 ## Important
 
-- Keep the `Run ID`; it is required for `apply`.
+- Keep the `run_id`; it is required for `apply`.
 - Planning is expected to be deterministic for identical durable inputs.

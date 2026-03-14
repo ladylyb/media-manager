@@ -1,4 +1,4 @@
-"""Shared service-layer contracts for CLI and API adapters."""
+"""Shared service-layer contracts for API controllers and legacy adapters."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ def iso_now() -> str:
 
 @dataclass(frozen=True)
 class ServiceError:
-    """Structured error payload shared by CLI/API envelopes."""
+    """Structured error payload shared by API envelopes and legacy shims."""
 
     code: str
     message: str

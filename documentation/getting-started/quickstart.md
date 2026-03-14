@@ -1,6 +1,6 @@
 # Quickstart
 
-This walkthrough gets you from install to a completed deterministic run.
+This walkthrough gets you from install to a completed deterministic run through the REST API.
 
 ## 1. Prepare Environment
 
@@ -17,7 +17,7 @@ DATABASE_URL='postgresql+psycopg://user:password@localhost:5432/media_manager'
 TEST_DATABASE_URL='postgresql+psycopg://user:password@localhost:5432/media_manager_test'
 ```
 
-`media-manager` loads repo `.env` automatically.  
+`media-manager-api` loads repo `.env` automatically.  
 For all variables and defaults, see [Environment Variables](../reference/environment-variables.md).
 
 ## 2. Select Input Path
@@ -30,39 +30,40 @@ Example:
 INPUT_PATH=/path/to/media
 ```
 
-## 3. Ingest and Plan
+## 3. Start The API
 
 ```bash
-media-manager plan "$INPUT_PATH"
+media-manager-api
 ```
 
-Expected output sections:
-
-- `MOVE`
-- `DUPLICATE`
-- `NOOP`
-- `Summary`
-- `Run ID: <uuid>`
-
-Save the emitted `Run ID` for apply.
-
-## 4. Apply Planned Actions
+## 4. Plan
 
 ```bash
-media-manager apply <RUN_ID>
+curl -X POST http://127.0.0.1:8000/api/plan \
+  -H 'Content-Type: application/json' \
+  -d "{\"folder_path\":\"$INPUT_PATH\",\"strict_metadata\":false}"
 ```
 
-Expected output sections:
+Expected response:
 
-- `MOVE`
-- `DUPLICATE`
-- `NOOP`
-- `Summary`
+- `ok: true`
+- `data.result.run_id`
+- `data.result.summary`
 
-## 5. Verify
+Save the emitted `run_id` for apply.
+
+## 5. Apply Planned Actions
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/apply \
+  -H 'Content-Type: application/json' \
+  -d '{"run_id":"<RUN_ID>","collision_mode":"rename"}'
+```
+
+## 6. Verify
 
 - Filesystem changes should match planned actions.
-- Run summary should show no unexpected errors.
+- API response should show no unexpected errors.
 - If interrupted, rerun with the same `RUN_ID` and inspect results.
 
 ## Next

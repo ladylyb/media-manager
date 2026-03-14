@@ -2,22 +2,26 @@
 
 Apply consumes planned state and executes gated filesystem operations.
 
-## Command
+## Request
 
 ```bash
-media-manager apply <RUN_ID>
+curl -X POST http://127.0.0.1:8000/api/apply \
+  -H 'Content-Type: application/json' \
+  -d '{"run_id":"<RUN_ID>","collision_mode":"rename"}'
 ```
 
 Optional collision handling:
 
 ```bash
-media-manager apply <RUN_ID> --collision-mode rename
+curl -X POST http://127.0.0.1:8000/api/apply \
+  -H 'Content-Type: application/json' \
+  -d '{"run_id":"<RUN_ID>","collision_mode":"skip"}'
 ```
 
 ## Output Contract
 
-- Grouped action sections
-- Summary counters including errors
+- `ok=true`
+- `data.result.summary`, including error counts
 
 ## Safety Notes
 

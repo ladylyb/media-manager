@@ -275,7 +275,7 @@
     setLoading(true);
 
     try {
-      const response = await fetch(`/api/v2/canonical?page=${currentPage}&limit=${pageLimit}`, {
+      const response = await fetch(`/api/canonical?page=${currentPage}&limit=${pageLimit}`, {
         headers: { Accept: "application/json" },
       });
 

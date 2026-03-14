@@ -171,7 +171,7 @@
   }
 
   async function loadPolicy() {
-    const response = await fetch("/api/v2/policy", {
+    const response = await fetch("/api/policy", {
       headers: { Accept: "application/json" },
     });
     if (!response.ok) {
@@ -195,7 +195,7 @@
       version: currentVersion,
     };
 
-    const response = await fetch("/api/v2/policy", {
+    const response = await fetch("/api/policy", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

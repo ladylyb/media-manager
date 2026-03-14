@@ -3,12 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
 import media_manager.app.service_layer.operations as operations_module
+from media_manager.app.persistence.apply import ApplySummary
+from media_manager.app.persistence.canonicalization import RecomputeMode, RecomputeSummary
 from media_manager.app.persistence.ingest import IngestSummary
+from media_manager.app.persistence.planner import PlanningSummary
 from media_manager.app.service_layer.operations import OperationServices
 
 
@@ -209,6 +212,153 @@ def test_operations_catalog_contains_expected_items() -> None:
     assert "items" in catalog
     ids = [item["operation_id"] for item in catalog["items"]]
     assert ids == ["ingest", "plan", "apply", "canonical_recompute", "tag_enrichment", "operator_run"]
+    assert catalog["items"][-1]["label"] == "Composite Run (Compatibility)"
+
+
+def test_run_dry_run_is_validation_only_and_skips_mutators(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+    target = dataset / "a.jpg"
+    target.write_bytes(b"x")
+
+    class _FakeIngestService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        @staticmethod
+        def collect_files(root: Path) -> list[Path]:
+            assert root == dataset
+            return [target]
+
+        def validate_paths(self, files: list[Path], *, authoritative_root: Path | None = None):
+            assert files == [target]
+            assert authoritative_root == dataset
+            return SimpleNamespace(to_dict=lambda: {"mode": "VALIDATION_ONLY", "scan": {"files_scanned": 1}})
+
+    class _ForbiddenRunService:
+        def __init__(self, _session_factory) -> None:
+            raise AssertionError("RunService must not be constructed for dry-run validation mode")
+
+    class _ForbiddenPlanner:
+        def __init__(self, _session_factory) -> None:
+            raise AssertionError("PlanningService must not be constructed for dry-run validation mode")
+
+    class _ForbiddenApplyService:
+        def __init__(self, _session_factory) -> None:
+            raise AssertionError("ApplyService must not be constructed for dry-run validation mode")
+
+    monkeypatch.setattr(operations_module, "IngestService", _FakeIngestService)
+    monkeypatch.setattr(operations_module, "RunService", _ForbiddenRunService)
+    monkeypatch.setattr(operations_module, "PlanningService", _ForbiddenPlanner)
+    monkeypatch.setattr(operations_module, "ApplyService", _ForbiddenApplyService)
+    _install_fake_operation_run_service(monkeypatch)
+
+    services = OperationServices(session_factory=object(), cache=_FakeCache(invalidations=[]))  # type: ignore[arg-type]
+    payload = services.run(folder_path=str(dataset), policy_name="FIRST_SEEN", dry_run=True)
+
+    assert payload["mode"] == "VALIDATION_ONLY"
+    assert payload["validation_report"]["scan"]["files_scanned"] == 1
+
+
+def test_run_execution_flows_through_service_layer_and_links_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+    target = dataset / "a.jpg"
+    target.write_bytes(b"x")
+    run_id = uuid4()
+    linked_ids: list[UUID] = []
+
+    class _TrackingOperationRunService(_FakeOperationRunService):
+        def link_run(self, operation_run_id, *, linked_run_id):  # type: ignore[no-untyped-def]
+            _ = operation_run_id
+            linked_ids.append(linked_run_id)
+
+    class _FakeIngestService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        @staticmethod
+        def collect_files(root: Path) -> list[Path]:
+            assert root == dataset
+            return [target]
+
+        def ingest_paths(self, files: list[Path]) -> IngestSummary:
+            assert files == [target]
+            return IngestSummary(1, 1, 1, 0, 1, 0.1)
+
+    class _FakeRunService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def create_run(self):
+            return SimpleNamespace(id=run_id)
+
+    class _FakePlanner:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def plan_run(self, planned_run_id, files, ingest_if_needed=False):
+            assert planned_run_id == run_id
+            assert files == [target]
+            assert ingest_if_needed is False
+            return PlanningSummary(run_id, 1, 1, 0, 1, 0, 0)
+
+    class _FakeApplyService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def apply_run(self, applied_run_id) -> ApplySummary:
+            assert applied_run_id == run_id
+            return ApplySummary(
+                applied_count=1,
+                skipped_count=0,
+                duplicates_count=0,
+                noop_count=0,
+                errors_count=0,
+                moves_count=1,
+            )
+
+    def _fake_build_policy(name: str):
+        return SimpleNamespace(name=name, version="v1")
+
+    def _fake_recompute(_session_factory, *, policy, context, mode):  # type: ignore[no-untyped-def]
+        assert policy.name == "PREFER_ROOT"
+        assert context.preferred_roots == ()
+        assert mode == RecomputeMode.APPLY
+        return RecomputeSummary(
+            run_id=uuid4(),
+            scanned_count=1,
+            changed_count=2,
+            failed_count=0,
+            applied_count=2,
+            status="COMPLETED",
+            changed_content_ids=(),
+            failed_content_ids=(),
+        )
+
+    monkeypatch.setattr(operations_module, "OperationRunService", _TrackingOperationRunService)
+    monkeypatch.setattr(operations_module, "IngestService", _FakeIngestService)
+    monkeypatch.setattr(operations_module, "RunService", _FakeRunService)
+    monkeypatch.setattr(operations_module, "PlanningService", _FakePlanner)
+    monkeypatch.setattr(operations_module, "ApplyService", _FakeApplyService)
+    monkeypatch.setattr(operations_module, "build_canonical_policy", _fake_build_policy)
+    monkeypatch.setattr(operations_module, "recompute_canonical_assignments", _fake_recompute)
+
+    cache = _FakeCache(invalidations=[])
+    services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
+    payload = services.run(folder_path=str(dataset), policy_name="PREFER_ROOT", dry_run=False)
+
+    assert payload["mode"] == "EXECUTION"
+    assert payload["run_id"] == str(run_id)
+    assert payload["duplicates_found"] == 0
+    assert payload["canonical_changes"] == 2
+    assert payload["summary_metrics"]["policy_name"] == "PREFER_ROOT"
+    assert payload["summary_metrics"]["apply"]["moves_count"] == 1
+    assert linked_ids == [run_id]
+    assert any(
+        {"dashboard_summary", "latest_metrics", "status"}.issubset(set(invalidated))
+        for invalidated in cache.invalidations
+    )
 
 
 def test_ingest_accepts_wrapped_quotes_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -367,15 +517,21 @@ def test_run_uses_resolved_folder_path(tmp_path: Path, monkeypatch: pytest.Monke
     dataset = tmp_path / "dataset"
     dataset.mkdir()
 
-    class _FakeTriggerService:
+    class _FakeIngestService:
         def __init__(self, _session_factory) -> None:
             pass
 
-        def trigger_run(self, command):  # type: ignore[no-untyped-def]
-            assert command.folder_path == str(dataset)
+        @staticmethod
+        def collect_files(root: Path) -> list[Path]:
+            assert root == dataset
+            return []
+
+        def validate_paths(self, files: list[Path], *, authoritative_root: Path | None = None):
+            assert files == []
+            assert authoritative_root == dataset
             return SimpleNamespace(to_dict=lambda: {"mode": "VALIDATION_ONLY", "validation_report": {"delta": {"would_insert": 0}}})
 
-    monkeypatch.setattr(operations_module, "OperatorRunTriggerService", _FakeTriggerService)
+    monkeypatch.setattr(operations_module, "IngestService", _FakeIngestService)
     _install_fake_operation_run_service(monkeypatch)
 
     services = OperationServices(session_factory=object(), cache=_FakeCache(invalidations=[]))  # type: ignore[arg-type]

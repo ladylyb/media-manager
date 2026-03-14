@@ -1,4 +1,9 @@
-"""CLI orchestration helpers for Phase 9 performance governance commands."""
+"""Internal legacy perf helpers for benchmarking only.
+
+This module is not part of the supported application interface. It remains only
+for narrow internal benchmarking tasks and may import persistence internals
+directly.
+"""
 
 from __future__ import annotations
 

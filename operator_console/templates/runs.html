@@ -151,7 +151,7 @@
     if (!Number.isNaN(parsedLimit) && parsedLimit >= 1 && parsedLimit <= 200) {
       params.set("limit", String(parsedLimit));
     }
-    const endpoint = params.toString() ? `/api/v2/runs?${params.toString()}` : "/api/v2/runs";
+    const endpoint = params.toString() ? `/api/runs?${params.toString()}` : "/api/runs";
     try {
       const response = await fetch(endpoint, { headers: { Accept: "application/json" } });
       if (!response.ok) {

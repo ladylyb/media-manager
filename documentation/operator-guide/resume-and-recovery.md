@@ -9,7 +9,9 @@ Use this guide when a run is interrupted or partially applied.
 3. Re-run apply for the same run:
 
 ```bash
-media-manager apply <RUN_ID>
+curl -X POST http://127.0.0.1:8000/api/apply \
+  -H 'Content-Type: application/json' \
+  -d '{"run_id":"<RUN_ID>","collision_mode":"rename"}'
 ```
 
 4. Compare output summary against expected action counts.
@@ -25,6 +27,6 @@ media-manager apply <RUN_ID>
 
 | Symptom | Immediate Action | Next Step |
 | --- | --- | --- |
-| Apply interrupted once | Re-run `apply` for same `run_id` | Compare summary counters with prior run |
-| Apply errors persist | Capture stderr + run context | Follow incident response |
+| Apply interrupted once | Re-run `POST /api/apply` for same `run_id` | Compare summary counters with prior run |
+| Apply errors persist | Capture response payload and logs | Follow incident response |
 | Filesystem state appears inconsistent | Pause further applies on same dataset | Run drift diagnosis |

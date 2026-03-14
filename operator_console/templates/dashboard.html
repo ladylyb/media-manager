@@ -11,7 +11,7 @@
 
   <section aria-labelledby="run-trigger-heading" class="space-y-4 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
     <h3 id="run-trigger-heading" class="text-lg font-semibold text-slate-900">Quick Operations</h3>
-    <p class="text-xs text-slate-500">Choose an explicit quick action. Full CLI-parity controls are available on the Operations page.</p>
+    <p class="text-xs text-slate-500">Choose an explicit quick action. Full API-backed controls are available on the Operations page.</p>
 
     <div id="run-trigger-error" class="hidden rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800"></div>
 
@@ -24,7 +24,7 @@
           class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-200"
         >
           <option value="INGEST_VALIDATE">Validate Ingest (dry-run)</option>
-          <option value="COMPOSITE_RUN">Composite Run (legacy pipeline)</option>
+          <option value="COMPOSITE_RUN">Composite Run (compatibility workflow)</option>
         </select>
       </label>
 
@@ -224,7 +224,7 @@
 
   async function loadDashboardSummary() {
     try {
-      const response = await fetch("/api/v2/dashboard-summary", {
+      const response = await fetch("/api/dashboard-summary", {
         headers: { Accept: "application/json" },
       });
       if (!response.ok) {
@@ -246,7 +246,7 @@
 
   async function loadLatestMetrics() {
     try {
-      const response = await fetch("/api/v2/latest-metrics", {
+      const response = await fetch("/api/latest-metrics", {
         headers: { Accept: "application/json" },
       });
       if (!response.ok) {
@@ -370,7 +370,7 @@
         policyNode.disabled = false;
       }
       if (helpNode) {
-        helpNode.textContent = "Composite Run (legacy): ingest + canonical recompute + plan + apply (when dry-run is off).";
+        helpNode.textContent = "Composite Run (compatibility workflow): ingest + canonical recompute + plan + apply (when dry-run is off).";
       }
     }
   }
@@ -385,7 +385,7 @@
     const policyNameNode = document.getElementById("run-policy-name");
     const dryRunNode = document.getElementById("run-dry-run");
     const actionType = actionTypeNode ? actionTypeNode.value : "INGEST_VALIDATE";
-    const endpoint = actionType === "INGEST_VALIDATE" ? "/api/v2/ingest" : "/api/v2/operator-run";
+    const endpoint = actionType === "INGEST_VALIDATE" ? "/api/ingest" : "/api/run";
     let payload;
     if (actionType === "INGEST_VALIDATE") {
       payload = {

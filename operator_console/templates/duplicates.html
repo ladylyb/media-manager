@@ -246,7 +246,7 @@
 
   async function loadDuplicateGroups() {
     try {
-      const response = await fetch("/api/v2/duplicates", { headers: { Accept: "application/json" } });
+      const response = await fetch("/api/duplicates", { headers: { Accept: "application/json" } });
       if (!response.ok) {
         throw new Error(`duplicates status ${response.status}`);
       }

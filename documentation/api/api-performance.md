@@ -4,7 +4,11 @@
 
 ::: media_manager.app.core.perf
 
-## Perf CLI
+## Legacy Perf Tooling
+
+This section is internal legacy benchmarking support only. It is not a
+supported operator/admin interface and should not be treated as part of the
+application surface.
 
 ::: media_manager.app.core.perf_cli
 

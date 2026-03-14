@@ -7,7 +7,8 @@ This project uses a two-layer model:
 - Treat as immutable upstream snapshot.
 
 2. `operator_console/gui_app/`
-- Editable integration layer for API contract alignment and runtime routing needs.
+- Supported runtime integration layer for API contract alignment and runtime routing needs.
+- The only first-party GUI layer that should track this repo's live `/api/*` contract.
 
 ## Update Process
 
@@ -18,6 +19,7 @@ git subtree pull --prefix operator_console/gui_upstream lovable-gui main
 ```
 
 2. Review upstream changes and selectively copy/adapt into `gui_app`.
+Only copy what is needed to preserve the supported `gui_app` runtime contract.
 
 3. Re-run frontend build:
 ```bash
@@ -31,5 +33,6 @@ npm run build
 ## Rules
 
 - Do not edit `gui_upstream` files directly.
-- Preserve existing `/api/v2/*` contracts; adapt in frontend.
-- Keep admin legacy route fallback intact during dual-run rollout.
+- Preserve the canonical `/api/*` contracts in `gui_app`; do not normalize `gui_upstream`.
+- Keep all operational calls in `gui_app` routed through `src/lib/api/client.ts`.
+- Treat `gui_upstream` as reference material only, not a second deployable integration layer.

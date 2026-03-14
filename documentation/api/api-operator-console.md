@@ -1,11 +1,13 @@
 # Operator Console API
 
-Read-only ledger endpoints introduced for Phase 13 GUI-first diagnostics.
+HTTP API reference for the supported application interface.
 
-## v2 Service-Layer Endpoints
+The operator console GUI and first-party automation in this repository are expected to consume these endpoints over HTTP. They are clients of the API, not alternate logic layers.
 
-The `/api/v2/*` family is sourced from an in-process shared service layer.
-`/api/*` v1 remains active and feature-frozen for rollback compatibility.
+## Canonical Service-Layer Endpoints
+
+The `/api/*` family is the supported application surface and is sourced from an in-process shared service layer.
+`/api/v1/*` has been removed.
 
 Standard envelope:
 
@@ -20,32 +22,32 @@ Standard envelope:
 }
 ```
 
-Available v2 endpoints:
-- `GET /api/v2/status`
-- `GET /api/v2/dashboard-summary`
-- `GET /api/v2/latest-metrics`
-- `GET /api/v2/runs?limit=50&operation_type=INGEST&status=COMPLETED`
-- `GET /api/v2/operation-runs?limit=50&operation_type=PLAN&status=FAILED`
-- `GET /api/v2/internal-runs?limit=50`
-- `GET /api/v2/operations/catalog`
-- `GET /api/v2/policy`
-- `POST /api/v2/policy`
-- `POST /api/v2/ingest`
-- `POST /api/v2/plan`
-- `POST /api/v2/apply`
-- `POST /api/v2/canonical/recompute`
-- `POST /api/v2/run`
-- `POST /api/v2/operator-run`
-- `POST /api/v2/tag-enrichment`
-- `POST /api/v2/admin/db-reset`
+Available canonical endpoints:
+- `GET /api/status`
+- `GET /api/dashboard-summary`
+- `GET /api/latest-metrics`
+- `GET /api/runs?limit=50&operation_type=INGEST&status=COMPLETED`
+- `GET /api/operation-runs?limit=50&operation_type=PLAN&status=FAILED`
+- `GET /api/internal-runs?limit=50`
+- `GET /api/operations/catalog`
+- `GET /api/policy`
+- `POST /api/policy`
+- `POST /api/ingest`
+- `POST /api/plan`
+- `POST /api/apply`
+- `POST /api/canonical/recompute`
+- `POST /api/run`
+- `POST /api/tag-enrichment`
+- `POST /api/media-file/validate`
+- `GET /api/admin/hash-audit`
+- `POST /api/admin/db-reset`
 
 Error mapping:
 - `400` validation/domain/state errors (`ok=false`, populated `errors[]`)
 - `500` runtime failures
 - `503` mutation concurrency saturation
 
-### `POST /api/v2/admin/db-reset`
-### `POST /api/admin/db-reset` (alias)
+### `POST /api/admin/db-reset`
 
 Safe dev/test data reset endpoint (destructive). Truncates app data tables only, preserving schema and Alembic migration state.
 
@@ -76,25 +78,26 @@ Result payload in envelope `data.result`:
 }
 ```
 
-## HTML Route
+## Binary And HTML Routes
 
 - `GET /ledger`
   - Renders the MediaFile ledger explorer page.
 - `GET /operations`
-  - Renders explicit operation controls with CLI-parity semantics.
+  - Renders explicit operation controls for the API-backed workflows.
+
+## First-Party Client Notes
+
+- `operator_console/gui_app/` is the supported GUI integration layer and uses the shared API client under `src/lib/api/`.
+- `operator_console/gui_upstream/` is an upstream snapshot only and may not reflect the live repository contract.
+- `tools/e2e_workflow_sanity.sh` is the supported API-client smoke harness for workflow verification.
 
 ### Composite Run Note
 
-`POST /api/v2/run` remains available for backward compatibility and acts as the
-legacy composite trigger (ingest + canonical recompute + plan + apply, or
-validation-only when `dry_run=true`).
-
-`POST /api/v2/operator-run` is an alias endpoint with the same payload/behavior,
-used by the refreshed Dashboard quick action.
+`POST /api/run` is the canonical composite compatibility trigger (ingest + canonical recompute + plan + apply, or validation-only when `dry_run=true`).
 
 ## Unified Run History
 
-`GET /api/v2/runs` is now backed by the unified `operation_runs` log and is the
+`GET /api/runs` is now backed by the unified `operation_runs` log and is the
 default operator-facing history feed.
 
 Supported filters:
@@ -103,7 +106,7 @@ Supported filters:
 - `status` (`STARTED|COMPLETED|FAILED`)
 
 Each row includes:
-- `operation_run_id` (primary history id for GUI/CLI operations)
+- `operation_run_id` (primary history id for GUI and automation operations)
 - `operation_type`
 - `status`
 - `started_at`
@@ -113,12 +116,12 @@ Each row includes:
 - `context`
 - `error_message`
 
-`GET /api/v2/internal-runs` remains available for legacy planner/apply lifecycle
+`GET /api/internal-runs` remains available for planner/apply lifecycle
 records from the original `runs` table.
 
 ## Ledger Endpoints
 
-All endpoints return paginated envelopes:
+Canonical ledger endpoints return paginated envelopes:
 
 ```json
 {
@@ -170,8 +173,7 @@ Query params:
 - `page` (default `1`)
 - `limit` (default `30`, max `100`)
 
-### `GET /api/v1/ledger/hash-audit`
-### `GET /api/media-file/hash-audit` (alias)
+### `GET /api/admin/hash-audit`
 
 Run a read-only ledger hash health audit (Phase 13 compliant; no row mutation).
 
@@ -283,9 +285,10 @@ Response fields:
 - `candidates[]`: inferred windows with `confidence` (`LOW|MEDIUM`)
 - `limitations[]`: explicit uncertainty caveats
 
-### `POST /api/run` dry-run behavior
+### `POST /api/run` compatibility behavior
 
-`POST /api/run` now returns a validation-only payload when `dry_run=true`:
+`POST /api/run` remains a feature-frozen compatibility alias. It returns a
+validation-only payload when `dry_run=true`:
 
 ## Environment Variables
 

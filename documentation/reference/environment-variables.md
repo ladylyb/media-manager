@@ -12,6 +12,24 @@ Defaults below reflect runtime code defaults, not shell defaults.
 - Default in code: none (required)
 - Example: `postgresql+psycopg://postgres:password@localhost:5432/media_manager`
 
+### `MEDIA_MANAGER_API_HOST`
+- Purpose: Bind host for the packaged `media-manager-api` launcher.
+- Format: Host or IP string
+- Default in code: `127.0.0.1`
+- Example: `127.0.0.1`
+
+### `MEDIA_MANAGER_API_PORT`
+- Purpose: Bind port for the packaged `media-manager-api` launcher.
+- Format: Integer port
+- Default in code: `8000`
+- Example: `8000`
+
+### `MEDIA_MANAGER_API_RELOAD`
+- Purpose: Enable Uvicorn reload mode for the packaged `media-manager-api` launcher.
+- Truthy values: `1`, `true`, `yes`, `on`
+- Default in code: `false`
+- Example: `false`
+
 ### `TEST_DATABASE_URL`
 - Purpose: Dedicated PostgreSQL URL for pytest fixtures and audit tooling.
 - Format: `postgresql+psycopg://<user>:<password>@<host>:<port>/<db>`
@@ -96,7 +114,7 @@ Defaults below reflect runtime code defaults, not shell defaults.
 - Purpose: Feature-flag cutover from legacy Jinja operator console routes to React v2 shell.
 - Truthy values: `1`, `true`, `yes`, `on`
 - Default in code: `false`
-- Safety note: when enabled, legacy HTML routes (`/`, `/operations`, `/runs`, `/ledger`, `/discover`, `/duplicates`, `/gallery`, `/policy`) serve v2 shell; `/admin` remains legacy fallback.
+- Safety note: when enabled, operator-facing HTML routes including `/admin` serve the React v2 shell.
 - Example: `false`
 
 ## Admin Safety Controls

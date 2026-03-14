@@ -2,7 +2,7 @@
 
 This module is intentionally fail-open:
 - If prometheus_client is unavailable, all helpers become no-ops.
-- Metrics setup errors never block planner/apply/CLI execution paths.
+- Metrics setup errors never block planner/apply/API execution paths.
 """
 
 from __future__ import annotations

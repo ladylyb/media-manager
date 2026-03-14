@@ -127,7 +127,7 @@
   }
 
   async function callDbReset(payload) {
-    const response = await fetch("/api/v2/admin/db-reset", {
+    const response = await fetch("/api/admin/db-reset", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(payload),

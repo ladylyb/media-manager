@@ -20,6 +20,6 @@
 
 ::: media_manager.app.persistence.media_file_queries
 
-## Operator Run Trigger
+## Legacy Operator Run Trigger
 
 ::: media_manager.app.persistence.operator_run_trigger

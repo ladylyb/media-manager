@@ -1,4 +1,4 @@
-"""Mutating/validation façade for Operator Console and CLI adapters."""
+"""Mutating/validation façade for API controllers and compatibility adapters."""
 
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ from media_manager.app.persistence.canonicalization import RecomputeMode, recomp
 from media_manager.app.persistence.ingest import IngestService
 from media_manager.app.persistence.operation_runs import OperationRunService
 from media_manager.app.persistence.planner import PlanningService
-from media_manager.app.persistence.operator_run_trigger import OperatorRunTriggerService, RunTriggerCommand
 from media_manager.app.persistence.policy_settings import PolicySettingsService, UpdatePolicySettingsCommand
 from media_manager.app.persistence.models import OperationRunStatus, OperationRunType, TagSource
 from media_manager.app.persistence.runs import RunService
@@ -238,9 +237,7 @@ class OperationServices:
             context={"folder_path": str(folder), "policy_name": policy_name, "dry_run": bool(dry_run)},
         )
         try:
-            result = OperatorRunTriggerService(self.session_factory).trigger_run(
-                RunTriggerCommand(folder_path=str(folder), policy_name=policy_name, dry_run=dry_run)
-            ).to_dict()
+            result = self._run_composite(folder=folder, policy_name=policy_name, dry_run=dry_run)
             linked_run_id = result.get("run_id")
             if isinstance(linked_run_id, str):
                 try:
@@ -253,6 +250,61 @@ class OperationServices:
         except Exception as exc:
             self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))
             raise
+
+    def _run_composite(self, *, folder: Path, policy_name: str, dry_run: bool) -> dict[str, object]:
+        ingest_service = IngestService(self.session_factory)
+        files = IngestService.collect_files(folder)
+        if dry_run:
+            validation_report = ingest_service.validate_paths(files, authoritative_root=folder)
+            return {
+                "mode": "VALIDATION_ONLY",
+                "validation_report": validation_report.to_dict(),
+            }
+
+        policy = build_canonical_policy(policy_name)
+        ingest_summary = ingest_service.ingest_paths(files)
+        run = RunService(self.session_factory).create_run()
+        recompute_summary = recompute_canonical_assignments(
+            self.session_factory,
+            policy=policy,
+            context=CanonicalContext(),
+            mode=RecomputeMode.APPLY,
+        )
+        plan_summary = PlanningService(self.session_factory).plan_run(run.id, files, ingest_if_needed=False)
+        apply_summary = ApplyService(self.session_factory).apply_run(run.id)
+
+        return {
+            "mode": "EXECUTION",
+            "run_id": str(run.id),
+            "summary_metrics": {
+                "ingest": {
+                    "files_scanned": ingest_summary.files_scanned,
+                    "new_contents": ingest_summary.new_contents,
+                    "new_instances": ingest_summary.new_instances,
+                    "duplicates_detected": ingest_summary.duplicates_detected,
+                    "metadata_extracted": ingest_summary.metadata_extracted,
+                },
+                "plan": {
+                    "scanned_count": plan_summary.scanned_count,
+                    "move_actions": plan_summary.move_actions,
+                    "duplicate_actions": plan_summary.duplicate_actions,
+                    "noop_actions": plan_summary.noop_actions,
+                    "skipped_count": plan_summary.skipped_count,
+                },
+                "apply": {
+                    "applied_count": apply_summary.applied_count,
+                    "moves_count": apply_summary.moves_count,
+                    "duplicates_count": apply_summary.duplicates_count,
+                    "noop_count": apply_summary.noop_count,
+                    "errors_count": apply_summary.errors_count,
+                    "skipped_count": apply_summary.skipped_count,
+                },
+                "dry_run": dry_run,
+                "policy_name": policy_name.strip().upper(),
+            },
+            "duplicates_found": plan_summary.duplicate_actions,
+            "canonical_changes": recompute_summary.changed_count,
+        }
 
     def operations_catalog(self) -> dict[str, object]:
         return {
@@ -299,7 +351,7 @@ class OperationServices:
                 },
                 {
                     "operation_id": "operator_run",
-                    "label": "Composite Run (Legacy)",
+                    "label": "Composite Run (Compatibility)",
                     "mutates_state": True,
                     "supports_dry_run": True,
                     "defaults": {"dry_run": True},
@@ -341,6 +393,14 @@ class OperationServices:
             },
         )
         try:
+            if run_all == (canonical_id is not None):
+                raise ValueError("Specify exactly one of all=true or canonical_id.")
+            if int(batch_size) <= 0:
+                raise ValueError("batch_size must be > 0.")
+            try:
+                source_value = TagSource(source)
+            except Exception as exc:
+                raise ValueError(f"Invalid source: {source}") from exc
             canonical_uuid: UUID | None = None
             if canonical_id is not None:
                 canonical_uuid = UUID(canonical_id)
@@ -350,7 +410,7 @@ class OperationServices:
                     scope=EnrichmentScope.ALL if run_all else EnrichmentScope.SINGLE,
                     canonical_id=canonical_uuid,
                     batch_size=batch_size,
-                    source=TagSource(source),
+                    source=source_value,
                 ),
             )
             self._op_runs().complete(UUID(run_log.operation_run_id))
