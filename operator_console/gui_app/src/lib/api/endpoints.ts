@@ -232,7 +232,7 @@ export const getAnalytics = async () => {
 };
 
 export const getHashAudit = async (params: { sample_limit?: number; root_path?: string }) => {
-  const envelope = await apiGet<Record<string, unknown>>("/ledger/hash-audit", params as Record<string, string | number>);
+  const envelope = await apiGet<Record<string, unknown>>("/admin/hash-audit", params as Record<string, string | number>);
   const payload = envelope.data;
   const missing = Array.isArray(payload.sample_missing_hash_paths) ? payload.sample_missing_hash_paths : [];
   const mismatches = Array.isArray(payload.sample_mismatch_paths) ? payload.sample_mismatch_paths : [];

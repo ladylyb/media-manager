@@ -2,7 +2,7 @@
 
 `media-manager` is a deterministic, failure-sensitive media management engine for planning and applying file organization work with durable state boundaries. It is built around explicit `plan` and `apply` phases so that planning stays side-effect free, while filesystem mutation happens only after durable database gating.
 
-The project is designed for restart safety, idempotent operations, and operator visibility. It includes a Python CLI, a FastAPI-backed operator console, structured documentation, and observability hooks for production-style workflows.
+The project is designed for restart safety, idempotent operations, and operator visibility. It is built around a FastAPI-backed application service, an HTTP-first operator console, structured documentation, and observability hooks for production-style workflows.
 
 ## Key capabilities
 
@@ -10,7 +10,7 @@ The project is designed for restart safety, idempotent operations, and operator 
 - Restart-safe apply execution with explicit durable state transitions.
 - Canonical persistence and policy-driven canonicalization workflows.
 - Drift detection, structured failure recording, and operator-focused observability.
-- Multiple interfaces: CLI, operator console, and HTTP API endpoints.
+- HTTP-first operation model for the operator console, admin tooling, and automation clients.
 - Performance and Prometheus metrics support for planner, apply, ingest, and cache behavior.
 
 ## Why this project is different
@@ -38,30 +38,21 @@ Deeper architecture material lives in [documentation/architecture/](documentatio
 
 ## Interfaces
 
-### CLI
+### HTTP API
 
-The primary entrypoint is the `media-manager` CLI. Core first-run commands are:
+The REST API is the only supported application interface. The FastAPI app exposes service-layer endpoints under `/api/*` for status, runs, policy, plan/apply triggers, audit operations, and administrative workflows. Metrics can also be mounted at `/metrics`.
 
-- `media-manager plan <path>`
-- `media-manager apply <run-id>`
-
-The CLI also exposes ingest, canonical recompute, policy, observability, operator, and performance workflows. See the [CLI reference](documentation/api/api-cli.md).
+See [API Documentation](documentation/api/index.md) for the module-oriented reference and the [API-only transition notes](documentation/architecture/api-only-transition.md) for migration details.
 
 ### Operator Console
 
-The operator console is served by FastAPI and includes a React v2 shell for dashboard, runs, policy, ledger, duplicates, and admin flows. It is intended for operational visibility and controlled execution rather than replacing the system safety model.
+The operator console is served by FastAPI and includes a React v2 shell for dashboard, runs, policy, ledger, duplicates, and admin flows. It is an HTTP client of the `/api/*` service surface, intended for operational visibility and controlled execution rather than replacing the system safety model.
 
 Relevant docs:
 
 - [Operator Console API](documentation/api/api-operator-console.md)
 - [Operator Guide](documentation/operator-guide/index.md)
 - [GUI integration notes](operator_console/gui_app/README.md)
-
-### HTTP API
-
-The FastAPI app exposes service-layer endpoints under `/api/v2/*` for status, runs, policy, plan/apply triggers, and operator workflows. Metrics can also be mounted at `/metrics`.
-
-See [API Documentation](documentation/api/index.md) for the module-oriented reference.
 
 ## Quick start
 
@@ -82,7 +73,7 @@ pip install -e ".[dev]"
 Optional extras:
 
 ```bash
-pip install -e ".[docs,operator_console]"
+pip install -e ".[docs]"
 ```
 
 ### Configure the environment
@@ -102,33 +93,43 @@ TEST_DATABASE_URL='postgresql+psycopg://user:password@localhost:5432/media_manag
 
 `DATABASE_URL` is required for runtime operation. Full variable reference: [documentation/reference/environment-variables.md](documentation/reference/environment-variables.md).
 
-### Run a first plan/apply cycle
+### Start the API service
 
-Choose a file or directory containing media files:
-
-```bash
-media-manager plan /path/to/media
-```
-
-Expected output includes grouped action sections such as `MOVE`, `DUPLICATE`, and `NOOP`, plus a final `Run ID`.
-
-Apply the planned run:
+Use the packaged API launcher:
 
 ```bash
-media-manager apply <RUN_ID>
+media-manager-api
 ```
 
-`apply` consumes the previously planned durable state. It does not plan new work on the fly.
-
-### Start the operator console
-
-After installing the `operator_console` extra, you can run the FastAPI app with Uvicorn:
+Or run Uvicorn directly:
 
 ```bash
 uvicorn operator_console.main:app --reload
 ```
 
 The console also exposes `/metrics` when metrics are mounted. To force the React v2 shell on the main console routes, set `MEDIA_MANAGER_UI_V2_ENABLED=true`. The v2 shell is also available directly at `/console-v2`.
+
+### Run a first plan/apply cycle
+
+Choose a file or directory containing media files, then call the API:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/plan \
+  -H 'Content-Type: application/json' \
+  -d '{"folder_path":"/path/to/media","strict_metadata":false}'
+```
+
+The response includes a durable `run_id` inside `data.result.run_id`.
+
+Apply the planned run:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/apply \
+  -H 'Content-Type: application/json' \
+  -d '{"run_id":"<RUN_ID>","collision_mode":"rename"}'
+```
+
+`apply` consumes previously planned durable state. It does not plan new work on the fly.
 
 ## Example workflow
 
@@ -137,11 +138,16 @@ source .venv/bin/activate
 cp .env.sample .env
 # Edit .env with PostgreSQL connection details first.
 
-media-manager plan /data/inbox
-# Review MOVE / DUPLICATE / NOOP output and note the emitted Run ID.
+media-manager-api &
+# Review the API response and note data.result.run_id from the plan request.
 
-media-manager apply 11111111-1111-1111-1111-111111111111
-# Confirm the apply summary and inspect any skipped or errored actions.
+curl -X POST http://127.0.0.1:8000/api/plan \
+  -H 'Content-Type: application/json' \
+  -d '{"folder_path":"/data/inbox","strict_metadata":false}'
+
+curl -X POST http://127.0.0.1:8000/api/apply \
+  -H 'Content-Type: application/json' \
+  -d '{"run_id":"11111111-1111-1111-1111-111111111111","collision_mode":"rename"}'
 ```
 
 Success on a first run means:
@@ -154,14 +160,14 @@ For more guided walkthroughs, start with [Quickstart](documentation/getting-star
 
 ## Operator console and API
 
-The operator console and API are for monitoring, policy control, run triggering, diagnostics, and administrative workflows. They are not a shortcut around the runtime invariants; they sit on top of the same safety model.
+The operator console and API are for monitoring, policy control, run triggering, diagnostics, and administrative workflows. The console, admin scripts, and automation act as HTTP clients of the same `/api/*` service surface. They are not a shortcut around the runtime invariants; they sit on top of the same safety model.
 
 Operator-facing entry points:
 
-- `/api/v2/status`
-- `/api/v2/runs`
-- `/api/v2/policy`
-- `/api/v2/operator-run`
+- `/api/status`
+- `/api/runs`
+- `/api/policy`
+- `/api/run`
 - `/metrics`
 
 Use these docs for operational details instead of relying on the README for endpoint-by-endpoint behavior:
@@ -174,7 +180,7 @@ Use these docs for operational details instead of relying on the README for endp
 
 ```text
 media-manager/
-├── media_manager/        # Core application, CLI, persistence, planner, apply, tests
+├── media_manager/        # Core application, persistence, planner, apply, tests
 ├── operator_console/     # FastAPI app and React operator console integration
 ├── documentation/        # User, operator, API, architecture, and reference docs
 ├── migrations/           # Alembic migrations
@@ -246,6 +252,6 @@ Review the full license text before reuse, redistribution, or contribution plann
 
 ## Status and roadmap
 
-The project already has a substantial CLI, persistence, operator-console, and documentation surface area, and the current work is focused on hardening workflows, operator playbooks, and documentation quality rather than introducing a brand-new skeleton.
+The project already has a substantial persistence, operator-console, and documentation surface area, and the current work is focused on hardening API-first workflows, operator playbooks, and documentation quality rather than introducing a brand-new skeleton.
 
 For current documentation priorities, see the [Documentation Roadmap](documentation/roadmap/index.md).

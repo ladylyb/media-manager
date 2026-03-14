@@ -425,7 +425,7 @@
     params.set("sample_limit", "20");
 
     try {
-      const response = await fetch(`/api/v2/ledger/hash-audit?${params.toString()}`, {
+      const response = await fetch(`/api/admin/hash-audit?${params.toString()}`, {
         headers: { Accept: "application/json" },
       });
       if (!response.ok) {
@@ -446,7 +446,7 @@
   async function loadAnalytics() {
     clearAnalyticsError();
     try {
-      const response = await fetch("/api/v2/media-file/analytics", { headers: { Accept: "application/json" } });
+      const response = await fetch("/api/media-file/analytics", { headers: { Accept: "application/json" } });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.detail || `status ${response.status}`);
@@ -480,18 +480,18 @@
 
     if (state.mode === "hash") {
       params.set("hash_prefix", state.input.trim());
-      return `/api/v2/media-file/by-hash?${params.toString()}`;
+      return `/api/media-file/by-hash?${params.toString()}`;
     }
     if (state.mode === "history") {
       params.set("path", state.input.trim());
-      return `/api/v2/media-file/history?${params.toString()}`;
+      return `/api/media-file/history?${params.toString()}`;
     }
     if (state.mode === "status") {
       params.set("status", state.status);
-      return `/api/v2/media-file/by-status?${params.toString()}`;
+      return `/api/media-file/by-status?${params.toString()}`;
     }
     params.set("path", state.input.trim());
-    return `/api/v2/media-file/reappearances?${params.toString()}`;
+    return `/api/media-file/reappearances?${params.toString()}`;
   }
 
   async function loadRows(pushState = true) {

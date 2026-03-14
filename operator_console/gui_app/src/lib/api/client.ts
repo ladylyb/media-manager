@@ -1,6 +1,6 @@
 import type { ApiEnvelope } from "@/types/api";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api/v2";
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 
 export class ApiClientError extends Error {
   constructor(
@@ -34,7 +34,7 @@ async function parseEnvelope<T>(response: Response): Promise<ApiEnvelope<T>> {
     );
   }
 
-  // Most v2 endpoints wrap payload as { data: { result: ... } }.
+  // Most canonical /api endpoints wrap payload as { data: { result: ... } }.
   // Status uses { data: ... } directly.
   const maybeWrapped = envelope.data as Record<string, unknown> | null;
   if (maybeWrapped && typeof maybeWrapped === "object" && "result" in maybeWrapped) {

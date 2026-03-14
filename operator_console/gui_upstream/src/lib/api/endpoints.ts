@@ -35,7 +35,7 @@ export const getReappearances = (params?: { page?: number; page_size?: number })
   apiGet<PaginatedResponse<MediaFileRecord>>("/media-file/reappearances", params as Record<string, string | number>);
 export const getAnalytics = () => apiGet<AnalyticsSummary>("/media-file/analytics");
 export const getHashAudit = (params: { sample_limit?: number; root_path?: string }) =>
-  apiGet<HashAuditResult[]>("/ledger/hash-audit", params as Record<string, string | number>);
+  apiGet<HashAuditResult[]>("/admin/hash-audit", params as Record<string, string | number>);
 export const getDryRunAudit = () => apiGet<Record<string, unknown>>("/media-file/dry-run-audit");
 
 // Policy

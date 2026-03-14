@@ -31,6 +31,7 @@ desktop.ini
 # Distribution / packaging
 build/
 dist/
+node_modules/
 *.egg-info/
 .eggs/
 site/

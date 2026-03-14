@@ -6,24 +6,29 @@ This page defines what a successful first run looks like.
 
 - Database is reachable.
 - Input path exists and contains at least one file.
-- You can execute `media-manager` from your virtualenv.
+- The API server is running locally.
 
 ## Execute
 
 ```bash
-media-manager plan /path/to/media
-media-manager apply <RUN_ID_FROM_PLAN>
+curl -X POST http://127.0.0.1:8000/api/plan \
+  -H 'Content-Type: application/json' \
+  -d '{"folder_path":"/path/to/media","strict_metadata":false}'
+
+curl -X POST http://127.0.0.1:8000/api/apply \
+  -H 'Content-Type: application/json' \
+  -d '{"run_id":"<RUN_ID_FROM_PLAN>","collision_mode":"rename"}'
 ```
 
 ## Success Criteria
 
-- `plan` prints grouped actions and a `Run ID`.
-- `apply` completes and prints summary counters.
-- No non-zero exit code.
+- `plan` returns `ok=true` and a durable `run_id`.
+- `apply` completes and returns summary counters.
+- No unexpected 4xx/5xx response.
 - No unexpected filesystem mutations outside planned targets.
 
 ## If It Fails
 
-- Re-run the same command and capture stderr.
+- Re-run the same API call and capture the error payload.
 - Confirm path and database configuration.
 - Use [Resume and Recovery](../operator-guide/resume-and-recovery.md).

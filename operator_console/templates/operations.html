@@ -6,7 +6,7 @@
 <section class="space-y-8">
   <div class="space-y-2">
     <h2 class="text-3xl font-semibold tracking-tight">Operations</h2>
-    <p class="text-sm text-slate-600">Explicit operation controls aligned with CLI semantics. Dry-run defaults are enabled where supported.</p>
+    <p class="text-sm text-slate-600">Explicit operation controls aligned with the supported API workflows. Dry-run defaults are enabled where supported.</p>
   </div>
 
   <div id="operations-global-error" class="hidden rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800"></div>
@@ -82,8 +82,8 @@
     </article>
 
     <article class="space-y-3 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
-      <h3 class="text-lg font-semibold text-slate-900">Composite Run (Legacy)</h3>
-      <p class="text-xs text-slate-500">Legacy combined flow: ingest + canonical recompute + plan + apply.</p>
+      <h3 class="text-lg font-semibold text-slate-900">Composite Run (Compatibility)</h3>
+      <p class="text-xs text-slate-500">Compatibility combined flow: ingest + canonical recompute + plan + apply.</p>
       <form id="op-composite" class="space-y-3">
         <input name="folder_path" placeholder="/absolute/path" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" required />
         <select name="policy_name" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
@@ -162,7 +162,7 @@
       ingestForm.addEventListener("submit", (event) => {
         event.preventDefault();
         const form = new FormData(ingestForm);
-        postOperation("Ingest", "/api/v2/ingest", {
+        postOperation("Ingest", "/api/ingest", {
           folder_path: String(form.get("folder_path") || ""),
           dry_run: Boolean(form.get("dry_run")),
         });
@@ -174,7 +174,7 @@
       planForm.addEventListener("submit", (event) => {
         event.preventDefault();
         const form = new FormData(planForm);
-        postOperation("Plan", "/api/v2/plan", {
+        postOperation("Plan", "/api/plan", {
           folder_path: String(form.get("folder_path") || ""),
           strict_metadata: Boolean(form.get("strict_metadata")),
         });
@@ -186,7 +186,7 @@
       applyForm.addEventListener("submit", (event) => {
         event.preventDefault();
         const form = new FormData(applyForm);
-        postOperation("Apply", "/api/v2/apply", {
+        postOperation("Apply", "/api/apply", {
           run_id: String(form.get("run_id") || ""),
           collision_mode: String(form.get("collision_mode") || "rename"),
         });
@@ -199,7 +199,7 @@
         event.preventDefault();
         const form = new FormData(canonicalForm);
         const preferredRaw = String(form.get("preferred_roots") || "");
-        postOperation("Canonical Recompute", "/api/v2/canonical/recompute", {
+        postOperation("Canonical Recompute", "/api/canonical/recompute", {
           policy_name: String(form.get("policy_name") || "FIRST_SEEN"),
           dry_run: Boolean(form.get("dry_run")),
           preferred_roots: preferredRaw
@@ -217,7 +217,7 @@
         const form = new FormData(tagForm);
         const runAll = Boolean(form.get("all"));
         const canonicalId = String(form.get("canonical_id") || "").trim();
-        postOperation("Tag Enrichment", "/api/v2/tag-enrichment", {
+        postOperation("Tag Enrichment", "/api/tag-enrichment", {
           all: runAll,
           canonical_id: canonicalId.length > 0 ? canonicalId : null,
           batch_size: Number(form.get("batch_size") || 100),
@@ -231,7 +231,7 @@
       compositeForm.addEventListener("submit", (event) => {
         event.preventDefault();
         const form = new FormData(compositeForm);
-        postOperation("Composite Run", "/api/v2/operator-run", {
+        postOperation("Composite Run", "/api/run", {
           folder_path: String(form.get("folder_path") || ""),
           policy_name: String(form.get("policy_name") || "FIRST_SEEN"),
           dry_run: Boolean(form.get("dry_run")),

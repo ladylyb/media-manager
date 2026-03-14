@@ -12,31 +12,16 @@ import time
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from media_manager.app.core.errors import (
-    MediaManagerError,
-    PolicySettingsValidationError,
-    PolicySettingsVersionConflictError,
-)
 from media_manager.app.observability import mount_metrics_endpoint
 from media_manager.app.persistence.base import create_db_engine, create_session_factory
-from media_manager.app.persistence.ingest import IngestService
 from media_manager.app.persistence.operator_console import OperatorConsoleReadService
-from media_manager.app.persistence.operator_run_trigger import (
-    OperatorRunTriggerService,
-    RunTriggerCommand,
-)
-from media_manager.app.persistence.policy_settings import PolicySettingsService, UpdatePolicySettingsCommand
-from media_manager.app.persistence.models import MediaFileStatus, TagSource
-from media_manager.app.persistence.tag_enrichment import (
-    EnrichmentScope,
-    TagEnrichmentCommand,
-    run_tag_enrichment,
-)
+from media_manager.app.persistence.models import TagSource
 from media_manager.app.service_layer import (
     AdminServices,
     OperationServices,
@@ -60,37 +45,6 @@ def get_operator_console_service() -> OperatorConsoleReadService:
     engine = create_db_engine()
     session_factory = create_session_factory(engine)
     return OperatorConsoleReadService(session_factory)
-
-
-@lru_cache(maxsize=1)
-def get_policy_settings_service() -> PolicySettingsService:
-    """Build and cache the policy settings persistence service."""
-    engine = create_db_engine()
-    session_factory = create_session_factory(engine)
-    return PolicySettingsService(session_factory)
-
-
-@lru_cache(maxsize=1)
-def get_operator_run_trigger_service() -> OperatorRunTriggerService:
-    """Build and cache the operator run trigger service."""
-    engine = create_db_engine()
-    session_factory = create_session_factory(engine)
-    return OperatorRunTriggerService(session_factory)
-
-
-@lru_cache(maxsize=1)
-def get_tag_enrichment_session_factory():
-    """Build and cache session factory for manual tag enrichment trigger API."""
-    engine = create_db_engine()
-    return create_session_factory(engine)
-
-
-@lru_cache(maxsize=1)
-def get_ingest_service() -> IngestService:
-    """Build and cache ingest service for validation-only API mode."""
-    engine = create_db_engine()
-    session_factory = create_session_factory(engine)
-    return IngestService(session_factory)
 
 
 @lru_cache(maxsize=1)
@@ -195,14 +149,6 @@ class CanonicalRecomputePayload(BaseModel):
     preferred_roots: list[str] = Field(default_factory=list)
 
 
-class OperatorRunPayload(BaseModel):
-    """Payload for composite legacy operator run."""
-
-    folder_path: str
-    policy_name: str
-    dry_run: bool = False
-
-
 @dataclass(frozen=True)
 class _DiscoveryQueryArgs:
     page: int
@@ -244,6 +190,11 @@ def _ui_v2_enabled() -> bool:
     return raw.strip().lower() in _TRUTHY_ENV
 
 
+def _api_reload_enabled() -> bool:
+    raw = os.getenv("MEDIA_MANAGER_API_RELOAD", "false")
+    return raw.strip().lower() in _TRUTHY_ENV
+
+
 def _v2_ok(*, data: dict[str, object]) -> JSONResponse:
     session_factory = get_service_session_factory()
     payload = ServiceEnvelope(
@@ -268,6 +219,11 @@ def _v2_error(*, http_status: int, code: str, message: str, details: dict[str, o
         errors=(ServiceError(code=code, message=message, details=details),),
     ).to_dict()
     return JSONResponse(status_code=http_status, content=payload)
+
+
+def _api_json_envelope_enabled(path: str) -> bool:
+    """Return whether a path should use the canonical JSON service envelope on errors."""
+    return path.startswith("/api/") and not path.startswith("/api/thumbnail/")
 
 
 def _execute_read(name: str, fn) -> JSONResponse:  # type: ignore[no-untyped-def]
@@ -312,6 +268,35 @@ def _execute_mutation(name: str, fn) -> JSONResponse:  # type: ignore[no-untyped
         extra={"operation": name, "duration_ms": duration_ms, "phase": "operator_console", "action": "V2_MUTATION"},
     )
     return _v2_ok(data={"result": result})
+
+
+def _execute_compat_read(name: str, fn):  # type: ignore[no-untyped-def]
+    try:
+        return fn()
+    except Exception as exc:
+        mapped = map_exception(exc)
+        LOGGER.warning(
+            "compat read rejected",
+            extra={"operation": name, "error_code": mapped.code, "phase": "operator_console", "action": "COMPAT_READ"},
+        )
+        raise HTTPException(status_code=mapped.http_status, detail=mapped.message) from exc
+
+
+def _execute_compat_mutation(name: str, fn):  # type: ignore[no-untyped-def]
+    if not _MUTATION_SEMAPHORE.acquire(blocking=False):
+        raise HTTPException(status_code=503, detail="Mutation concurrency limit reached.")
+    try:
+        return fn()
+    except Exception as exc:
+        mapped = map_exception(exc)
+        log_extra = {"operation": name, "error_code": mapped.code, "phase": "operator_console", "action": "COMPAT_MUTATION"}
+        if 400 <= mapped.http_status < 500:
+            LOGGER.warning("compat mutation rejected", extra=log_extra)
+        else:
+            LOGGER.exception("compat mutation failed", extra=log_extra)
+        raise HTTPException(status_code=mapped.http_status, detail=mapped.message) from exc
+    finally:
+        _MUTATION_SEMAPHORE.release()
 
 
 def _parse_discovery_query_args(
@@ -374,6 +359,24 @@ def create_app() -> FastAPI:
     app.mount("/static-v2", StaticFiles(directory=str(static_v2_dir)), name="static-v2")
     mount_metrics_endpoint(app)
 
+    @app.exception_handler(HTTPException)
+    async def _handle_http_exception(request: Request, exc: HTTPException) -> Response:
+        if _api_json_envelope_enabled(request.url.path):
+            detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+            return _v2_error(
+                http_status=exc.status_code,
+                code="VALIDATION_ERROR" if exc.status_code < 500 else "INTERNAL_ERROR",
+                message=detail,
+            )
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    @app.exception_handler(RequestValidationError)
+    async def _handle_request_validation_error(request: Request, exc: RequestValidationError) -> Response:
+        if _api_json_envelope_enabled(request.url.path):
+            message = "; ".join(error["msg"] for error in exc.errors()) or "Request validation failed."
+            return _v2_error(http_status=422, code="VALIDATION_ERROR", message=message, details={"errors": exc.errors()})
+        return JSONResponse(status_code=422, content={"detail": exc.errors()})
+
     def _render_console_v2_shell() -> Response:
         if not static_v2_index.exists():
             return HTMLResponse(
@@ -412,13 +415,15 @@ def create_app() -> FastAPI:
         return templates.TemplateResponse(request, "policy.html", {})
 
     @app.get("/admin", response_class=HTMLResponse)
-    def admin_page(request: Request) -> HTMLResponse:
+    def admin_page(request: Request) -> Response:
         """Render Operator Console admin page."""
+        if _ui_v2_enabled():
+            return _render_console_v2_shell()
         return templates.TemplateResponse(request, "admin.html", {})
 
     @app.get("/operations", response_class=HTMLResponse)
     def operations_page(request: Request) -> Response:
-        """Render explicit operation controls with CLI-parity semantics."""
+        """Render explicit operation controls for the supported API workflows."""
         if _ui_v2_enabled():
             return _render_console_v2_shell()
         return templates.TemplateResponse(request, "operations.html", {})
@@ -508,30 +513,37 @@ def create_app() -> FastAPI:
 
     @app.get("/api/dashboard-summary")
     def dashboard_summary(
-        service: OperatorConsoleReadService = Depends(get_operator_console_service),
-    ) -> dict[str, int]:
-        """Return aggregate library counters for the dashboard."""
-        return service.get_dashboard_summary().to_dict()
+        services: ReadServices = Depends(get_read_services),
+    ) -> JSONResponse:
+        """Return aggregate library counters in the canonical API envelope."""
+        return _execute_read("dashboard-summary", services.dashboard_summary)
 
     @app.get("/api/latest-metrics")
     def latest_metrics(
-        service: OperatorConsoleReadService = Depends(get_operator_console_service),
-    ) -> dict[str, float | str | None]:
-        """Return the latest persisted ingestion/planning/apply performance metrics."""
-        return service.get_latest_metrics().to_dict()
+        services: ReadServices = Depends(get_read_services),
+    ) -> JSONResponse:
+        """Return latest persisted performance metrics in the canonical API envelope."""
+        return _execute_read("latest-metrics", services.latest_metrics)
 
     @app.get("/api/runs")
     def runs_history(
-        service: OperatorConsoleReadService = Depends(get_operator_console_service),
-    ) -> list[dict[str, str | int | float | None]]:
-        """Return recent legacy planner/apply run history rows."""
-        return [item.to_dict() for item in service.get_internal_run_history(limit=50)]
+        limit: int = Query(default=50),
+        operation_type: str | None = Query(default=None),
+        status: str | None = Query(default=None),
+        services: ReadServices = Depends(get_read_services),
+    ) -> JSONResponse:
+        """Return unified operation run history in the canonical API envelope."""
+        parsed_limit = max(1, min(200, int(limit)))
+        return _execute_read(
+            "runs",
+            lambda: services.runs(limit=parsed_limit, operation_type=operation_type, status=status),
+        )
 
-    @app.get("/api/v2/status")
+    @app.get("/api/status")
     def status_v2(
         services: ReadServices = Depends(get_read_services),
     ) -> JSONResponse:
-        """Return v2 status metadata envelope."""
+        """Return status metadata envelope."""
         try:
             result = services.status()
         except Exception as exc:
@@ -544,32 +556,7 @@ def create_app() -> FastAPI:
             )
         return _v2_ok(data=result)
 
-    @app.get("/api/v2/dashboard-summary")
-    def dashboard_summary_v2(
-        services: ReadServices = Depends(get_read_services),
-    ) -> JSONResponse:
-        return _execute_read("dashboard-summary", services.dashboard_summary)
-
-    @app.get("/api/v2/latest-metrics")
-    def latest_metrics_v2(
-        services: ReadServices = Depends(get_read_services),
-    ) -> JSONResponse:
-        return _execute_read("latest-metrics", services.latest_metrics)
-
-    @app.get("/api/v2/runs")
-    def runs_history_v2(
-        limit: int = Query(default=50),
-        operation_type: str | None = Query(default=None),
-        status: str | None = Query(default=None),
-        services: ReadServices = Depends(get_read_services),
-    ) -> JSONResponse:
-        parsed_limit = max(1, min(200, int(limit)))
-        return _execute_read(
-            "runs",
-            lambda: services.runs(limit=parsed_limit, operation_type=operation_type, status=status),
-        )
-
-    @app.get("/api/v2/operation-runs")
+    @app.get("/api/operation-runs")
     def operation_runs_v2(
         limit: int = Query(default=50),
         operation_type: str | None = Query(default=None),
@@ -582,7 +569,7 @@ def create_app() -> FastAPI:
             lambda: services.operation_runs(limit=parsed_limit, operation_type=operation_type, status=status),
         )
 
-    @app.get("/api/v2/internal-runs")
+    @app.get("/api/internal-runs")
     def internal_runs_v2(
         limit: int = Query(default=50),
         services: ReadServices = Depends(get_read_services),
@@ -590,7 +577,7 @@ def create_app() -> FastAPI:
         parsed_limit = max(1, min(200, int(limit)))
         return _execute_read("internal-runs", lambda: services.internal_runs(limit=parsed_limit))
 
-    @app.get("/api/v2/canonical")
+    @app.get("/api/canonical")
     def canonical_gallery_v2(
         page: int = 1,
         limit: int = 30,
@@ -623,7 +610,7 @@ def create_app() -> FastAPI:
             ),
         )
 
-    @app.get("/api/v2/canonical/tags")
+    @app.get("/api/canonical/tags")
     def canonical_tag_suggestions_v2(
         q: str | None = Query(default=None),
         limit: int = Query(default=10),
@@ -635,13 +622,13 @@ def create_app() -> FastAPI:
             lambda: services.canonical_tags(q=q, limit=parsed_limit),
         )
 
-    @app.get("/api/v2/duplicates")
+    @app.get("/api/duplicates")
     def duplicates_v2(
         services: ReadServices = Depends(get_read_services),
     ) -> JSONResponse:
         return _execute_read("duplicates", services.duplicates)
 
-    @app.get("/api/v2/media-file/by-hash")
+    @app.get("/api/media-file/by-hash")
     def media_file_by_hash_v2(
         hash_prefix: str | None = Query(default=None),
         page: int = 1,
@@ -655,7 +642,7 @@ def create_app() -> FastAPI:
             lambda: services.media_file_by_hash(hash_prefix=normalized_hash, page=parsed_page, limit=parsed_limit),
         )
 
-    @app.get("/api/v2/media-file/history")
+    @app.get("/api/media-file/history")
     def media_file_history_v2(
         path: str | None = Query(default=None),
         page: int = 1,
@@ -669,7 +656,7 @@ def create_app() -> FastAPI:
             lambda: services.media_file_history(path=normalized_path, page=parsed_page, limit=parsed_limit),
         )
 
-    @app.get("/api/v2/media-file/by-status")
+    @app.get("/api/media-file/by-status")
     def media_file_by_status_v2(
         status: str | None = Query(default=None),
         page: int = 1,
@@ -683,7 +670,7 @@ def create_app() -> FastAPI:
             lambda: services.media_file_by_status(status=normalized_status, page=parsed_page, limit=parsed_limit),
         )
 
-    @app.get("/api/v2/media-file/reappearances")
+    @app.get("/api/media-file/reappearances")
     def media_file_reappearances_v2(
         path: str | None = Query(default=None),
         page: int = 1,
@@ -697,13 +684,13 @@ def create_app() -> FastAPI:
             lambda: services.media_file_reappearances(path=normalized_path, page=parsed_page, limit=parsed_limit),
         )
 
-    @app.get("/api/v2/media-file/analytics")
+    @app.get("/api/media-file/analytics")
     def media_file_analytics_v2(
         services: ReadServices = Depends(get_read_services),
     ) -> JSONResponse:
         return _execute_read("media-file-analytics", services.media_file_analytics)
 
-    @app.get("/api/v2/ledger/hash-audit")
+    @app.get("/api/admin/hash-audit")
     def media_file_hash_audit_v2(
         root_path: str | None = Query(default=None),
         sample_limit: int = Query(default=20),
@@ -718,7 +705,7 @@ def create_app() -> FastAPI:
             lambda: services.ledger_hash_audit(root_path=normalized_root, sample_limit=parsed_limit),
         )
 
-    @app.get("/api/v2/media-file/dry-run-audit")
+    @app.get("/api/media-file/dry-run-audit")
     def media_file_dry_run_audit_v2(
         start: str | None = Query(default=None),
         end: str | None = Query(default=None),
@@ -732,174 +719,7 @@ def create_app() -> FastAPI:
             lambda: services.media_file_dry_run_audit(start=start, end=end, limit=limit),
         )
 
-    @app.get("/api/canonical")
-    def canonical_gallery(
-        page: int = 1,
-        limit: int = 30,
-        tags: str | None = Query(default=None),
-        sort_by: str = Query(default="created_at"),
-        sort_order: str | None = Query(default=None),
-        source: str | None = Query(default=None),
-        min_confidence: float | None = Query(default=None),
-        service: OperatorConsoleReadService = Depends(get_operator_console_service),
-    ) -> dict[str, object]:
-        """Return paginated canonical media entries for the gallery UI."""
-        parsed = _parse_discovery_query_args(
-            page=page,
-            limit=limit,
-            tags=tags,
-            sort_by=sort_by,
-            sort_order=sort_order,
-            source=source,
-            min_confidence=min_confidence,
-        )
-
-        try:
-            return service.get_canonical_gallery(
-                page=parsed.page,
-                limit=parsed.limit,
-                tags=parsed.tags,
-                sort_by=parsed.sort_by,
-                sort_order=parsed.sort_order,
-                source=parsed.source,
-                min_confidence=parsed.min_confidence,
-            ).to_dict()
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.get("/api/canonical/tags")
-    def canonical_tag_suggestions(
-        q: str | None = Query(default=None),
-        limit: int = Query(default=10),
-        service: OperatorConsoleReadService = Depends(get_operator_console_service),
-    ) -> dict[str, list[str]]:
-        """Return deterministic normalized tag suggestions for discover autocomplete."""
-        return {"items": list(service.get_tag_suggestions(q=q, limit=limit))}
-
-    @app.get("/api/duplicates")
-    def duplicates(
-        service: OperatorConsoleReadService = Depends(get_operator_console_service),
-    ) -> dict[str, list[dict[str, object]]]:
-        """Return duplicate groups and canonical-file mapping for browser UI."""
-        return {"groups": [group.to_dict() for group in service.get_duplicate_groups()]}
-
-    @app.get("/api/media-file/by-hash")
-    def media_file_by_hash(
-        hash_prefix: str | None = Query(default=None),
-        page: int = 1,
-        limit: int = 30,
-        service: OperatorConsoleReadService = Depends(get_operator_console_service),
-    ) -> dict[str, object]:
-        normalized_hash = _require_non_empty(hash_prefix, "hash_prefix")
-        parsed_page, parsed_limit = _parse_paging_args(page=page, limit=limit)
-        return service.get_media_file_by_hash_page(
-            hash_prefix=normalized_hash,
-            page=parsed_page,
-            limit=parsed_limit,
-        ).to_dict()
-
-    @app.get("/api/media-file/history")
-    def media_file_history(
-        path: str | None = Query(default=None),
-        page: int = 1,
-        limit: int = 30,
-        service: OperatorConsoleReadService = Depends(get_operator_console_service),
-    ) -> dict[str, object]:
-        normalized_path = _require_non_empty(path, "path")
-        parsed_page, parsed_limit = _parse_paging_args(page=page, limit=limit)
-        return service.get_media_file_history_page(
-            path=normalized_path,
-            page=parsed_page,
-            limit=parsed_limit,
-        ).to_dict()
-
-    @app.get("/api/media-file/by-status")
-    def media_file_by_status(
-        status: str | None = Query(default=None),
-        page: int = 1,
-        limit: int = 30,
-        service: OperatorConsoleReadService = Depends(get_operator_console_service),
-    ) -> dict[str, object]:
-        normalized_status = _require_non_empty(status, "status")
-        parsed_page, parsed_limit = _parse_paging_args(page=page, limit=limit)
-        try:
-            status_value = MediaFileStatus(normalized_status.upper())
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail="status must be one of: INGESTED, PROCESSED, DELETED.") from exc
-        return service.get_media_file_by_status_page(
-            status=status_value,
-            page=parsed_page,
-            limit=parsed_limit,
-        ).to_dict()
-
-    @app.get("/api/media-file/reappearances")
-    def media_file_reappearances(
-        path: str | None = Query(default=None),
-        page: int = 1,
-        limit: int = 30,
-        service: OperatorConsoleReadService = Depends(get_operator_console_service),
-    ) -> dict[str, object]:
-        normalized_path = _require_non_empty(path, "path")
-        parsed_page, parsed_limit = _parse_paging_args(page=page, limit=limit)
-        return service.get_media_file_reappearances_page(
-            path=normalized_path,
-            page=parsed_page,
-            limit=parsed_limit,
-        ).to_dict()
-
-    @app.get("/api/media-file/analytics")
-    def media_file_analytics(
-        service: OperatorConsoleReadService = Depends(get_operator_console_service),
-    ) -> dict[str, object]:
-        """Return all-time Phase 13 ledger analytics for dashboard/reporting views."""
-        return service.get_media_file_analytics().to_dict()
-
-    @app.get("/api/v1/ledger/hash-audit")
-    @app.get("/api/media-file/hash-audit")
-    def media_file_hash_audit(
-        root_path: str | None = Query(default=None),
-        sample_limit: int = Query(default=20),
-        service: OperatorConsoleReadService = Depends(get_operator_console_service),
-    ) -> dict[str, object]:
-        """Return read-only ledger hash audit metrics and sample paths."""
-        normalized_root: str | None = None
-        if root_path is not None:
-            normalized_root = _require_non_empty(root_path, "root_path")
-        parsed_limit = _parse_sample_limit(sample_limit)
-        try:
-            return service.get_ledger_hash_audit(root_path=normalized_root, sample_limit=parsed_limit).to_dict()
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.get("/api/media-file/dry-run-audit")
-    def media_file_dry_run_audit(
-        start: str | None = Query(default=None),
-        end: str | None = Query(default=None),
-        limit: int = 50,
-        service: OperatorConsoleReadService = Depends(get_operator_console_service),
-    ) -> dict[str, object]:
-        """Return best-effort historical dry-run side-effect candidates."""
-        if limit < 1 or limit > 200:
-            raise HTTPException(status_code=400, detail="limit must be within [1, 200].")
-        try:
-            return service.get_dry_run_side_effect_audit(start=start, end=end, limit=limit).to_dict()
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
     @app.post("/api/media-file/validate")
-    def post_media_file_validate(
-        payload: MediaFileValidatePayload,
-        ingest_service: IngestService = Depends(get_ingest_service),
-    ) -> dict[str, object]:
-        """Run read-only ingest validation and return would-change delta report."""
-        folder = Path(payload.folder_path)
-        if not folder.exists():
-            raise HTTPException(status_code=400, detail=f"Folder path does not exist: {folder}")
-        if not folder.is_dir():
-            raise HTTPException(status_code=400, detail=f"Folder path must be a directory: {folder}")
-        return ingest_service.validate_path(folder).to_dict()
-
-    @app.post("/api/v2/media-file/validate")
     def post_media_file_validate_v2(
         payload: MediaFileValidatePayload,
         services: OperationServices = Depends(get_operation_services),
@@ -934,42 +754,12 @@ def create_app() -> FastAPI:
         return FileResponse(path=path, media_type=media_type)
 
     @app.get("/api/policy")
-    def get_policy(
-        service: PolicySettingsService = Depends(get_policy_settings_service),
-    ) -> dict[str, object]:
-        """Return structured operator policy configuration."""
-        return service.get_settings().to_dict()
-
-    @app.get("/api/v2/policy")
     def get_policy_v2(
         services: OperationServices = Depends(get_operation_services),
     ) -> JSONResponse:
         return _execute_read("policy-get", services.policy_get)
 
     @app.post("/api/policy")
-    def post_policy(
-        payload: PolicyUpdatePayload,
-        service: PolicySettingsService = Depends(get_policy_settings_service),
-    ) -> dict[str, object]:
-        """Persist deterministic operator policy settings."""
-        try:
-            command = UpdatePolicySettingsCommand(
-                selected_policy=payload.selected_policy,
-                preferred_roots=tuple(payload.preferred_roots),
-                recanonicalization_enabled=payload.recanonicalization_enabled,
-                version=payload.version,
-            )
-            snapshot = service.update_settings(command)
-        except PolicySettingsVersionConflictError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except PolicySettingsValidationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        response = snapshot.to_dict()
-        response["message"] = "Policy settings saved."
-        return response
-
-    @app.post("/api/v2/policy")
     def post_policy_v2(
         payload: PolicyUpdatePayload,
         services: OperationServices = Depends(get_operation_services),
@@ -985,27 +775,6 @@ def create_app() -> FastAPI:
         )
 
     @app.post("/api/run")
-    def post_run(
-        payload: RunTriggerPayload,
-        service: OperatorRunTriggerService = Depends(get_operator_run_trigger_service),
-    ) -> dict[str, object]:
-        """Trigger an ingest/plan/apply workflow from Operator Console."""
-        try:
-            command = RunTriggerCommand(
-                folder_path=payload.folder_path,
-                policy_name=payload.policy_name,
-                dry_run=payload.dry_run,
-            )
-            result = service.trigger_run(command)
-            return result.to_dict()
-        except (ValueError, MediaManagerError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    @app.post("/api/v2/run")
     def post_run_v2(
         payload: RunTriggerPayload,
         services: OperationServices = Depends(get_operation_services),
@@ -1019,21 +788,7 @@ def create_app() -> FastAPI:
             ),
         )
 
-    @app.post("/api/v2/operator-run")
-    def post_operator_run_v2(
-        payload: OperatorRunPayload,
-        services: OperationServices = Depends(get_operation_services),
-    ) -> JSONResponse:
-        return _execute_mutation(
-            "operator-run",
-            lambda: services.operator_run(
-                folder_path=payload.folder_path,
-                policy_name=payload.policy_name,
-                dry_run=payload.dry_run,
-            ),
-        )
-
-    @app.post("/api/v2/ingest")
+    @app.post("/api/ingest")
     def post_ingest_v2(
         payload: IngestPayload,
         services: OperationServices = Depends(get_operation_services),
@@ -1043,7 +798,7 @@ def create_app() -> FastAPI:
             lambda: services.ingest(folder_path=payload.folder_path, dry_run=payload.dry_run),
         )
 
-    @app.post("/api/v2/plan")
+    @app.post("/api/plan")
     def post_plan_v2(
         payload: PlanPayload,
         services: OperationServices = Depends(get_operation_services),
@@ -1053,7 +808,7 @@ def create_app() -> FastAPI:
             lambda: services.plan(folder_path=payload.folder_path, strict_metadata=payload.strict_metadata),
         )
 
-    @app.post("/api/v2/apply")
+    @app.post("/api/apply")
     def post_apply_v2(
         payload: ApplyPayload,
         services: OperationServices = Depends(get_operation_services),
@@ -1063,7 +818,7 @@ def create_app() -> FastAPI:
             lambda: services.apply(run_id=payload.run_id, collision_mode=payload.collision_mode),
         )
 
-    @app.post("/api/v2/canonical/recompute")
+    @app.post("/api/canonical/recompute")
     def post_canonical_recompute_v2(
         payload: CanonicalRecomputePayload,
         services: OperationServices = Depends(get_operation_services),
@@ -1077,49 +832,13 @@ def create_app() -> FastAPI:
             ),
         )
 
-    @app.get("/api/v2/operations/catalog")
+    @app.get("/api/operations/catalog")
     def get_operations_catalog_v2(
         services: OperationServices = Depends(get_operation_services),
     ) -> JSONResponse:
         return _execute_read("operations-catalog", services.operations_catalog)
 
     @app.post("/api/tag-enrichment")
-    def post_tag_enrichment(
-        payload: TagEnrichmentPayload,
-        session_factory=Depends(get_tag_enrichment_session_factory),
-    ) -> dict[str, object]:
-        """Trigger deterministic tag enrichment for canonical content ids."""
-        if payload.run_all == (payload.canonical_id is not None):
-            raise HTTPException(status_code=400, detail="Specify exactly one of all=true or canonical_id.")
-        if payload.batch_size <= 0:
-            raise HTTPException(status_code=400, detail="batch_size must be > 0.")
-        try:
-            source = TagSource(payload.source)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid source: {payload.source}") from exc
-        canonical_uuid: UUID | None = None
-        if payload.canonical_id is not None:
-            try:
-                canonical_uuid = UUID(payload.canonical_id)
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail="canonical_id must be a valid UUID.") from exc
-        command = TagEnrichmentCommand(
-            scope=EnrichmentScope.ALL if payload.run_all else EnrichmentScope.SINGLE,
-            canonical_id=canonical_uuid,
-            batch_size=int(payload.batch_size),
-            source=source,
-        )
-        try:
-            summary = run_tag_enrichment(session_factory, command)
-            return summary.to_dict()
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    @app.post("/api/v2/tag-enrichment")
     def post_tag_enrichment_v2(
         payload: TagEnrichmentPayload,
         services: OperationServices = Depends(get_operation_services),
@@ -1134,7 +853,6 @@ def create_app() -> FastAPI:
             ),
         )
 
-    @app.post("/api/v2/admin/db-reset")
     @app.post("/api/admin/db-reset")
     def post_db_reset(
         payload: DbResetPayload,
@@ -1156,3 +874,17 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+
+def main() -> None:
+    """Run the API server as the supported package entrypoint."""
+    import uvicorn
+
+    host = os.getenv("MEDIA_MANAGER_API_HOST", "127.0.0.1")
+    port = int(os.getenv("MEDIA_MANAGER_API_PORT", "8000"))
+    uvicorn.run(
+        "operator_console.main:app",
+        host=host,
+        port=port,
+        reload=_api_reload_enabled(),
+    )

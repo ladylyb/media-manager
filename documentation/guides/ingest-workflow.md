@@ -1,16 +1,18 @@
 # Ingest Workflow
 
-Use ingest to populate content and file-instance records before planning.
+Use the ingest endpoint to populate content and file-instance records before planning.
 
-## Command
+## Request
 
 ```bash
-media-manager ingest /path/to/media
+curl -X POST http://127.0.0.1:8000/api/ingest \
+  -H 'Content-Type: application/json' \
+  -d '{"folder_path":"/path/to/media","dry_run":false}'
 ```
 
-## Expected Output
+## Expected Response
 
-`Ingest Summary` includes:
+`data.result.summary` includes:
 
 - files scanned
 - new contents

@@ -32,7 +32,7 @@ from media_manager.app.persistence.tagging import upsert_canonical_tag
 logger = get_logger(__name__)
 
 
-# Backward-compatible alias used by existing CLI/API imports.
+# Backward-compatible alias used by existing internal imports.
 EnrichmentScope = TagEnrichmentScope
 
 

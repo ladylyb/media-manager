@@ -6,44 +6,55 @@ This scenario demonstrates a full deterministic run.
 
 ```bash
 source .venv/bin/activate
-media-manager plan /path/to/media
-media-manager apply <RUN_ID>
+media-manager-api &
+curl -X POST http://127.0.0.1:8000/api/plan \
+  -H 'Content-Type: application/json' \
+  -d '{"folder_path":"/path/to/media","strict_metadata":false}'
+curl -X POST http://127.0.0.1:8000/api/apply \
+  -H 'Content-Type: application/json' \
+  -d '{"run_id":"<RUN_ID>","collision_mode":"rename"}'
 ```
 
-## Expected Output Shape
+## Expected Response Shape
 
-`plan` emits sections similar to:
+`plan` returns payload similar to:
 
-```text
-MOVE
-  /input/file1.mp4
-    → /target/file1.mp4
-
-DUPLICATE
-  /input/file2.mp4
-
-NOOP
-  /input/file3.mp4
-
-Summary
-  Files scanned: <n>
-  Moves: <n>
-  Duplicates: <n>
-  No-op: <n>
-Run ID: <uuid>
+```json
+{
+  "ok": true,
+  "data": {
+    "result": {
+      "run_id": "<uuid>",
+      "summary": {
+        "scanned_count": 0,
+        "move_actions": 0,
+        "duplicate_actions": 0,
+        "noop_actions": 0
+      }
+    }
+  }
+}
 ```
 
-`apply` emits sections similar to:
+`apply` returns payload similar to:
 
-```text
-Summary
-  Files applied: <n>
-  Moves: <n>
-  Duplicates: <n>
-  No-op: <n>
-  Skipped: <n>
-  Errors: <n>
-Run ID: <uuid>
+```json
+{
+  "ok": true,
+  "data": {
+    "result": {
+      "run_id": "<uuid>",
+      "summary": {
+        "applied_count": 0,
+        "moves_count": 0,
+        "duplicates_count": 0,
+        "noop_count": 0,
+        "skipped_count": 0,
+        "errors_count": 0
+      }
+    }
+  }
+}
 ```
 
 ## Verification

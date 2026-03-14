@@ -393,7 +393,7 @@ class DryRunSideEffectAudit:
 
 @dataclass(frozen=True)
 class LedgerHashAuditResult:
-    """Read-only ledger hash audit payload for API/CLI/GUI health checks."""
+    """Read-only ledger hash audit payload for API and GUI health checks."""
 
     total_files: int
     missing_hash: int

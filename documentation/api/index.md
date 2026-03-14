@@ -2,7 +2,6 @@
 
 Generated and module-oriented API reference.
 
-- [CLI API](api-cli.md)
 - [Core API](api-core.md)
 - [Core Metadata API](api-core-metadata.md)
 - [Core Path and Naming API](api-core-paths.md)
