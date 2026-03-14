@@ -39,6 +39,10 @@ def test_canonical_api_route_inventory_and_v1_removal() -> None:
         "/api/media-file/validate",
         "/api/admin/hash-audit",
         "/api/admin/db-reset",
+        "/api/admin/observability/summary",
+        "/api/admin/observability/operation-runs",
+        "/api/admin/observability/failures",
+        "/api/admin/observability/metrics-series",
     }
 
     assert expected_canonical_paths.issubset(route_paths)
@@ -2278,6 +2282,46 @@ def test_post_db_reset_env_forbidden_returns_403() -> None:
     payload = response.json()
     assert payload["ok"] is False
     assert payload["errors"][0]["code"] == "FORBIDDEN_ENV"
+
+
+def test_admin_observability_summary_returns_envelope() -> None:
+    app.dependency_overrides[get_read_services] = _FakeReadServices
+    client = TestClient(app)
+    try:
+        response = client.get("/api/admin/observability/summary")
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["data"]["result"]["metrics_enabled"] is True
+    assert payload["data"]["result"]["recent_failure_count"] == 2
+
+
+def test_admin_observability_failures_returns_envelope() -> None:
+    app.dependency_overrides[get_read_services] = _FakeReadServices
+    client = TestClient(app)
+    try:
+        response = client.get("/api/admin/observability/failures?limit=10")
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 200
+    payload = response.json()["data"]["result"]
+    assert payload["failure_events"][0]["error_code"] == "PLANNING_FAILED"
+    assert payload["failed_operation_runs"][0]["status"] == "FAILED"
+
+
+def test_admin_observability_metrics_series_returns_curated_series() -> None:
+    app.dependency_overrides[get_read_services] = _FakeReadServices
+    client = TestClient(app)
+    try:
+        response = client.get("/api/admin/observability/metrics-series?hours=24")
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 200
+    payload = response.json()["data"]["result"]
+    assert payload["series"]["operation_volume"][0]["value"] == 4
+    assert payload["series"]["latency_ms_avg"][0]["value"] == 88.5
 
 
 def test_main_entrypoint_starts_uvicorn(monkeypatch) -> None:

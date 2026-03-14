@@ -40,7 +40,7 @@ Deeper architecture material lives in [documentation/architecture/](documentatio
 
 ### HTTP API
 
-The REST API is the only supported application interface. The FastAPI app exposes service-layer endpoints under `/api/*` for status, runs, policy, plan/apply triggers, audit operations, and administrative workflows. Metrics can also be mounted at `/metrics`.
+The REST API is the only supported application interface. The FastAPI app exposes service-layer endpoints under `/api/*` for status, runs, policy, plan/apply triggers, audit operations, and administrative workflows. Metrics are exposed at `/metrics` for Prometheus scraping, while the Admin UI consumes curated observability endpoints under `/api/admin/observability/*`.
 
 See [API Documentation](documentation/api/index.md) for the module-oriented reference and the [API-only transition notes](documentation/architecture/api-only-transition.md) for migration details.
 
@@ -107,7 +107,15 @@ Or run Uvicorn directly:
 uvicorn operator_console.main:app --reload
 ```
 
-The console also exposes `/metrics` when metrics are mounted. To force the React v2 shell on the main console routes, set `MEDIA_MANAGER_UI_V2_ENABLED=true`. The v2 shell is also available directly at `/console-v2`.
+The console also exposes `/metrics` for Prometheus. To force the React v2 shell on the main console routes, set `MEDIA_MANAGER_UI_V2_ENABLED=true`. The v2 shell is also available directly at `/console-v2`.
+
+To enable the new observability links in the Admin UI, configure:
+
+```bash
+MEDIA_MANAGER_METRICS_ENABLED=true
+MEDIA_MANAGER_PROMETHEUS_URL=http://127.0.0.1:9090
+MEDIA_MANAGER_GRAFANA_URL=http://127.0.0.1:3000
+```
 
 ### Run a first plan/apply cycle
 
@@ -168,6 +176,7 @@ Operator-facing entry points:
 - `/api/runs`
 - `/api/policy`
 - `/api/run`
+- `/api/admin/observability/summary`
 - `/metrics`
 
 Use these docs for operational details instead of relying on the README for endpoint-by-endpoint behavior:

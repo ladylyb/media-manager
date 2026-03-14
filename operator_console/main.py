@@ -705,6 +705,47 @@ def create_app() -> FastAPI:
             lambda: services.ledger_hash_audit(root_path=normalized_root, sample_limit=parsed_limit),
         )
 
+    @app.get("/api/admin/observability/summary")
+    def admin_observability_summary(
+        services: ReadServices = Depends(get_read_services),
+    ) -> JSONResponse:
+        return _execute_read("admin-observability-summary", services.admin_observability_summary)
+
+    @app.get("/api/admin/observability/operation-runs")
+    def admin_observability_operation_runs(
+        limit: int = Query(default=50),
+        operation_type: str | None = Query(default=None),
+        status: str | None = Query(default=None),
+        services: ReadServices = Depends(get_read_services),
+    ) -> JSONResponse:
+        parsed_limit = max(1, min(200, int(limit)))
+        return _execute_read(
+            "admin-observability-operation-runs",
+            lambda: services.operation_runs(limit=parsed_limit, operation_type=operation_type, status=status),
+        )
+
+    @app.get("/api/admin/observability/failures")
+    def admin_observability_failures(
+        limit: int = Query(default=25),
+        services: ReadServices = Depends(get_read_services),
+    ) -> JSONResponse:
+        parsed_limit = max(1, min(100, int(limit)))
+        return _execute_read(
+            "admin-observability-failures",
+            lambda: services.admin_observability_failures(limit=parsed_limit),
+        )
+
+    @app.get("/api/admin/observability/metrics-series")
+    def admin_observability_metrics_series(
+        hours: int = Query(default=24),
+        services: ReadServices = Depends(get_read_services),
+    ) -> JSONResponse:
+        parsed_hours = max(1, min(168, int(hours)))
+        return _execute_read(
+            "admin-observability-metrics-series",
+            lambda: services.admin_observability_metrics_series(hours=parsed_hours),
+        )
+
     @app.get("/api/media-file/dry-run-audit")
     def media_file_dry_run_audit_v2(
         start: str | None = Query(default=None),

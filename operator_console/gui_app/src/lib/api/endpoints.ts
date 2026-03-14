@@ -3,14 +3,20 @@ import { queryKeys, allReadQueryRoots } from "./queryKeys";
 import type {
   ApiEnvelope,
   AnalyticsSummary,
+  BenchmarkQueueResult,
+  BenchmarkRun,
   CanonicalFile,
   DbResetPreview,
   DbResetResult,
   DuplicateFile,
   DuplicateGroup,
+  FailureEventItem,
   HashAuditResult,
   LatestMetrics,
   MediaFileRecord,
+  ObservabilityFailures,
+  ObservabilityMetricsSeries,
+  ObservabilitySummary,
   OperationResult,
   PaginatedResponse,
   Policy,
@@ -343,6 +349,78 @@ export const adminDbReset = async (params: { dry_run: boolean; challenge_word?: 
     challenge_word: params.challenge_word,
   });
 };
+
+export const getAdminObservabilitySummary = async () => apiGet<ObservabilitySummary>("/admin/observability/summary");
+
+export const getAdminObservabilityOperationRuns = async (params?: {
+  limit?: number;
+  operation_type?: string;
+  status?: string;
+}) => {
+  const envelope = await apiGet<unknown[]>("/admin/observability/operation-runs", params as Record<string, string | number>);
+  const items = Array.isArray(envelope.data) ? envelope.data : [];
+  const mapped: Run[] = items.map((item) => {
+    const row = item as Record<string, unknown>;
+    return {
+      operation_run_id: String(row.operation_run_id ?? ""),
+      operation_type: String(row.operation_type ?? ""),
+      status:
+        String(row.status ?? "STARTED").toUpperCase() === "COMPLETED"
+          ? "COMPLETED"
+          : String(row.status ?? "STARTED").toUpperCase() === "FAILED"
+            ? "FAILED"
+            : "STARTED",
+      started_at: String(row.started_at ?? ""),
+      completed_at: row.completed_at ? String(row.completed_at) : null,
+      duration_ms: row.duration_ms == null ? null : Number(row.duration_ms),
+      linked_run_id: row.linked_run_id ? String(row.linked_run_id) : null,
+      context: (row.context as Record<string, unknown>) ?? {},
+      error_message: row.error_message ? String(row.error_message) : null,
+    };
+  });
+  return withData(envelope, mapped);
+};
+
+export const getAdminObservabilityFailures = async (params?: { limit?: number }) => {
+  const envelope = await apiGet<Record<string, unknown>>("/admin/observability/failures", params as Record<string, string | number>);
+  const payload = envelope.data;
+  const failureEvents: FailureEventItem[] = Array.isArray(payload.failure_events)
+    ? payload.failure_events.map((item) => {
+        const row = item as Record<string, unknown>;
+        return {
+          id: String(row.id ?? ""),
+          run_id: String(row.run_id ?? ""),
+          phase: String(row.phase ?? ""),
+          error_code: String(row.error_code ?? ""),
+          error_message: String(row.error_message ?? ""),
+          created_at: String(row.created_at ?? ""),
+        };
+      })
+    : [];
+  const failedOperationRuns: Run[] = Array.isArray(payload.failed_operation_runs)
+    ? payload.failed_operation_runs.map((item) => {
+        const row = item as Record<string, unknown>;
+        return {
+          operation_run_id: String(row.operation_run_id ?? ""),
+          operation_type: String(row.operation_type ?? ""),
+          status: "FAILED",
+          started_at: String(row.started_at ?? ""),
+          completed_at: row.completed_at ? String(row.completed_at) : null,
+          duration_ms: null,
+          linked_run_id: row.linked_run_id ? String(row.linked_run_id) : null,
+          context: (row.context as Record<string, unknown>) ?? {},
+          error_message: row.error_message ? String(row.error_message) : null,
+        };
+      })
+    : [];
+  return withData(envelope, {
+    failure_events: failureEvents,
+    failed_operation_runs: failedOperationRuns,
+  } as ObservabilityFailures);
+};
+
+export const getAdminObservabilityMetricsSeries = async (params?: { hours?: number }) =>
+  apiGet<ObservabilityMetricsSeries>("/admin/observability/metrics-series", params as Record<string, string | number>);
 
 export type OperationInvalidationTarget =
   | "ingest"
