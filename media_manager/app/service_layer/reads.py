@@ -9,7 +9,14 @@ from typing import Any
 
 from sqlalchemy import func, select
 
-from media_manager.app.persistence.models import FailureEvent, MediaFileStatus, OperationRun, OperationRunStatus, TagSource
+from media_manager.app.persistence.models import (
+    FailureEvent,
+    MediaFileStatus,
+    OperationRun,
+    OperationRunStatus,
+    OperationRunType,
+    TagSource,
+)
 from media_manager.app.persistence.operator_console import OperatorConsoleReadService
 from media_manager.app.service_layer.cache import ServiceCache
 from media_manager.app.service_layer.versioning import compute_phase_metadata
