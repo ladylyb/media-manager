@@ -313,7 +313,7 @@ export const runOperatorRun = async (params?: {
   policy_name?: string;
   dry_run?: boolean;
 }) => {
-  const envelope = await apiPost<Record<string, unknown>>("/operator-run", {
+  const envelope = await apiPost<Record<string, unknown>>("/run", {
     folder_path: params?.folder_path ?? "",
     policy_name: params?.policy_name ?? "FIRST_SEEN",
     dry_run: params?.dry_run ?? true,
