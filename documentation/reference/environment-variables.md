@@ -150,6 +150,39 @@ Defaults below reflect runtime code defaults, not shell defaults.
 - Safety note: can expand destructive truncation scope.
 - Example: `false`
 
+### `MEDIA_MANAGER_BENCHMARKS_ENABLED`
+- Purpose: Enable admin benchmark queueing and benchmark worker execution.
+- Truthy values: `1`, `true`, `yes`, `on`
+- Default in code: `false`
+- Safety note: benchmark execution is additionally blocked unless `MEDIA_MANAGER_ENV` is `dev` or `test`.
+- Example: `false`
+
+### `MEDIA_MANAGER_BENCHMARK_MAX_ITEMS`
+- Purpose: Upper bound for accepted synthetic benchmark row counts.
+- Format: Integer greater than zero
+- Default in code: `10000`
+- Safety note: protects benchmark runs from unbounded DB load.
+- Example: `10000`
+
+### `MEDIA_MANAGER_BENCHMARK_POLL_INTERVAL_SECONDS`
+- Purpose: Poll interval for the benchmark worker loop.
+- Format: Positive float or integer
+- Default in code: `2.0`
+- Example: `2.0`
+
+### `MEDIA_MANAGER_BENCHMARK_STALE_AFTER_SECONDS`
+- Purpose: Time before a running benchmark is marked failed as abandoned by the worker.
+- Format: Positive float or integer
+- Default in code: `900`
+- Safety note: defines a durable failure boundary for abandoned benchmark runs; it is not an automatic retry interval.
+- Example: `900`
+
+### `MEDIA_MANAGER_BENCHMARK_WORKER_MODE`
+- Purpose: Control whether the benchmark worker runs continuously or exits after one poll cycle.
+- Allowed values: `forever`, `once`
+- Default in code: `forever`
+- Example: `forever`
+
 ## Source of Truth
 
 - Runtime template: repository root `.env.sample`

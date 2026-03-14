@@ -24,6 +24,9 @@ export const queryKeys = {
     ["admin", "observability", "runs", params ?? {}] as const,
   adminObservabilityFailures: (limit = 25) => ["admin", "observability", "failures", { limit }] as const,
   adminObservabilitySeries: (hours = 24) => ["admin", "observability", "series", { hours }] as const,
+  benchmarkRunsRoot: ["admin", "benchmarks"] as const,
+  benchmarkRuns: (limit = 50) => ["admin", "benchmarks", { limit }] as const,
+  benchmarkRun: (operationRunId: string) => ["admin", "benchmark", operationRunId] as const,
   ledgerByHash: (hashPrefix: string, page = 1, limit = 30) =>
     ["ledger", "by-hash", { hashPrefix, page, limit }] as const,
   ledgerHistory: (path: string, page = 1, limit = 30) => ["ledger", "history", { path, page, limit }] as const,
@@ -44,4 +47,5 @@ export const allReadQueryRoots = [
   queryKeys.policy,
   queryKeys.analytics,
   queryKeys.adminObservabilitySummary,
+  queryKeys.benchmarkRunsRoot,
 ] as const;

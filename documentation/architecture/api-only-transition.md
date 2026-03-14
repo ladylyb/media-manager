@@ -46,7 +46,7 @@ Supported first-party clients:
 Unsupported runtime client surfaces:
 
 - `operator_console/gui_upstream/` is an immutable upstream snapshot, not a deployable contract layer.
-- internal benchmarking helpers are not part of the supported application interface.
+- legacy direct benchmark scripts have been removed; benchmark execution now flows through the admin API plus benchmark worker.
 
 ## Supported Architecture
 
@@ -92,4 +92,4 @@ Temporary compatibility shims:
 
 Remaining follow-up work:
 
-- continue removing internal-only tooling that is no longer needed by engineering workflows
+- no remaining direct benchmark scripts should be reintroduced outside the admin API plus benchmark worker flow

@@ -120,6 +120,21 @@ class DbResetPayload(BaseModel):
     challenge_word: str | None = None
 
 
+class MetadataBenchmarkPayload(BaseModel):
+    """Payload for admin metadata benchmark queue requests."""
+
+    items: int = 1000
+    batch_size: int = 250
+    challenge_word: str | None = None
+
+
+class DiscoveryBenchmarkPayload(BaseModel):
+    """Payload for admin discovery benchmark queue requests."""
+
+    items: int = 1000
+    challenge_word: str | None = None
+
+
 class IngestPayload(BaseModel):
     """Payload for ingest-only operations."""
 
@@ -909,6 +924,64 @@ def create_app() -> FastAPI:
         return _execute_mutation(
             "db-reset",
             lambda: services.db_reset(dry_run=bool(payload.dry_run), challenge_word=payload.challenge_word),
+        )
+
+    @app.post("/api/admin/benchmarks/metadata")
+    def post_admin_metadata_benchmark(
+        payload: MetadataBenchmarkPayload,
+        services: AdminServices = Depends(get_admin_services),
+    ) -> JSONResponse:
+        return _execute_mutation(
+            "benchmark-metadata-queue",
+            lambda: services.benchmark_metadata_queue(
+                items=payload.items,
+                batch_size=payload.batch_size,
+                challenge_word=payload.challenge_word,
+            ),
+        )
+
+    @app.post("/api/admin/benchmarks/discovery")
+    def post_admin_discovery_benchmark(
+        payload: DiscoveryBenchmarkPayload,
+        services: AdminServices = Depends(get_admin_services),
+    ) -> JSONResponse:
+        return _execute_mutation(
+            "benchmark-discovery-queue",
+            lambda: services.benchmark_discovery_queue(
+                items=payload.items,
+                challenge_word=payload.challenge_word,
+            ),
+        )
+
+    @app.get("/api/admin/benchmarks/runs")
+    def get_admin_benchmark_runs(
+        limit: int = Query(default=50),
+        services: AdminServices = Depends(get_admin_services),
+    ) -> JSONResponse:
+        parsed_limit = max(1, min(200, int(limit)))
+        return _execute_read(
+            "benchmark-runs",
+            lambda: services.benchmark_runs(limit=parsed_limit),
+        )
+
+    @app.get("/api/admin/benchmarks/runs/{operation_run_id}")
+    def get_admin_benchmark_run(
+        operation_run_id: str,
+        services: AdminServices = Depends(get_admin_services),
+    ) -> JSONResponse:
+        return _execute_read(
+            "benchmark-run-detail",
+            lambda: services.benchmark_run_detail(operation_run_id=operation_run_id),
+        )
+
+    @app.post("/api/admin/benchmarks/runs/{operation_run_id}/cancel")
+    def post_admin_benchmark_run_cancel(
+        operation_run_id: str,
+        services: AdminServices = Depends(get_admin_services),
+    ) -> JSONResponse:
+        return _execute_mutation(
+            "benchmark-run-cancel",
+            lambda: services.benchmark_run_cancel(operation_run_id=operation_run_id),
         )
 
     return app

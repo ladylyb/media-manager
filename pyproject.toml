@@ -30,6 +30,7 @@ docs = [
 
 [project.scripts]
 media-manager-api = "operator_console.main:main"
+media-manager-benchmark-worker = "media_manager.app.workers.benchmark_runner:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

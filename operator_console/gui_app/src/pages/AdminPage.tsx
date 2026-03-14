@@ -20,14 +20,20 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import {
   adminDbReset,
+  cancelBenchmarkRun,
   getAdminObservabilityFailures,
   getAdminObservabilityMetricsSeries,
   getAdminObservabilityOperationRuns,
   getAdminObservabilitySummary,
+  getBenchmarkRun,
+  getBenchmarkRuns,
   invalidateAllReadsAfterDbReset,
+  queueDiscoveryBenchmark,
+  queueMetadataBenchmark,
 } from "@/lib/api/endpoints";
 import { queryKeys } from "@/lib/api/queryKeys";
 import type {
+  BenchmarkRun,
   DbResetPreview,
   DbResetResult,
   FailureEventItem,
@@ -43,8 +49,10 @@ import {
   Gauge,
   LineChart as LineChartIcon,
   Loader2,
+  Play,
   RefreshCw,
   Trash2,
+  XCircle,
 } from "lucide-react";
 
 const chartConfig = {
@@ -258,6 +266,177 @@ function ObservabilityTab() {
   );
 }
 
+function BenchmarksTab() {
+  const queryClient = useQueryClient();
+  const [metadataItems, setMetadataItems] = useState("1000");
+  const [metadataBatchSize, setMetadataBatchSize] = useState("250");
+  const [discoveryItems, setDiscoveryItems] = useState("1000");
+  const [challengeWord, setChallengeWord] = useState("media-manager");
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+
+  const runsQuery = useQuery({
+    queryKey: queryKeys.benchmarkRuns(50),
+    queryFn: () => getBenchmarkRuns({ limit: 50 }),
+    refetchInterval: 5_000,
+  });
+  const selectedRunQuery = useQuery({
+    queryKey: selectedRunId ? queryKeys.benchmarkRun(selectedRunId) : ["admin", "benchmark", "idle"],
+    queryFn: () => getBenchmarkRun(selectedRunId as string),
+    enabled: Boolean(selectedRunId),
+    refetchInterval: 5_000,
+  });
+
+  const metadataMutation = useMutation({
+    mutationFn: () =>
+      queueMetadataBenchmark({
+        items: Number(metadataItems),
+        batch_size: Number(metadataBatchSize),
+        challenge_word: challengeWord,
+      }),
+    onSuccess: (result) => {
+      setSelectedRunId(result.data.operation_run_id);
+      queryClient.invalidateQueries({ queryKey: queryKeys.benchmarkRunsRoot });
+      queryClient.invalidateQueries({ queryKey: queryKeys.runsRoot });
+    },
+  });
+
+  const discoveryMutation = useMutation({
+    mutationFn: () =>
+      queueDiscoveryBenchmark({
+        items: Number(discoveryItems),
+        challenge_word: challengeWord,
+      }),
+    onSuccess: (result) => {
+      setSelectedRunId(result.data.operation_run_id);
+      queryClient.invalidateQueries({ queryKey: queryKeys.benchmarkRunsRoot });
+      queryClient.invalidateQueries({ queryKey: queryKeys.runsRoot });
+    },
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: (operationRunId: string) => cancelBenchmarkRun(operationRunId),
+    onSuccess: (_, operationRunId) => {
+      setSelectedRunId(operationRunId);
+      queryClient.invalidateQueries({ queryKey: queryKeys.benchmarkRunsRoot });
+      queryClient.invalidateQueries({ queryKey: queryKeys.benchmarkRun(operationRunId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.runsRoot });
+    },
+  });
+
+  const benchmarkRuns = (runsQuery.data?.data as BenchmarkRun[] | undefined) ?? [];
+  const selectedRun = selectedRunId ? (selectedRunQuery.data?.data as BenchmarkRun | undefined) : undefined;
+  const benchmarkError =
+    (metadataMutation.error as Error | null)?.message ||
+    (discoveryMutation.error as Error | null)?.message ||
+    (cancelMutation.error as Error | null)?.message ||
+    (runsQuery.error as Error | null)?.message ||
+    (selectedRunQuery.error as Error | null)?.message;
+
+  return (
+    <div className="space-y-6">
+      {benchmarkError ? <ErrorAlert message={benchmarkError} /> : null}
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Metadata benchmark</CardTitle>
+            <CardDescription>Database-only synthetic metadata upsert and lookup benchmark.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <Input value={metadataItems} onChange={(event) => setMetadataItems(event.target.value)} placeholder="Items" />
+            <Input value={metadataBatchSize} onChange={(event) => setMetadataBatchSize(event.target.value)} placeholder="Batch size" />
+            <Input value={challengeWord} onChange={(event) => setChallengeWord(event.target.value)} placeholder="Challenge word" />
+            <Button onClick={() => metadataMutation.mutate()} disabled={metadataMutation.isPending || discoveryMutation.isPending}>
+              {metadataMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
+              Queue metadata benchmark
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Discovery benchmark</CardTitle>
+            <CardDescription>Synthetic canonical/tag query benchmark for discovery reads.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <Input value={discoveryItems} onChange={(event) => setDiscoveryItems(event.target.value)} placeholder="Items seeded" />
+            <Input value={challengeWord} onChange={(event) => setChallengeWord(event.target.value)} placeholder="Challenge word" />
+            <Button onClick={() => discoveryMutation.mutate()} disabled={metadataMutation.isPending || discoveryMutation.isPending}>
+              {discoveryMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
+              Queue discovery benchmark
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[1.2fr_1fr]">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><RefreshCw className="h-4 w-4" /> Benchmark queue</CardTitle>
+            <CardDescription>Queued and recent benchmark runs.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {runsQuery.isLoading ? (
+              <div className="text-sm text-muted-foreground">Loading benchmark runs…</div>
+            ) : benchmarkRuns.length === 0 ? (
+              <div className="text-sm text-muted-foreground">No benchmark runs queued yet.</div>
+            ) : benchmarkRuns.map((run) => (
+              <div
+                key={run.operation_run_id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3"
+              >
+                <button className="text-left" onClick={() => setSelectedRunId(run.operation_run_id)}>
+                  <div className="font-medium">{run.benchmark_type}</div>
+                  <div className="font-mono text-xs text-muted-foreground">{run.operation_run_id}</div>
+                </button>
+                <SeverityBadge value={run.status} />
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">{new Date(run.queued_at).toLocaleString()}</span>
+                  {(run.status === "QUEUED" || run.status === "RUNNING" || run.status === "CANCEL_REQUESTED") ? (
+                    <Button variant="outline" size="sm" onClick={() => cancelMutation.mutate(run.operation_run_id)}>
+                      <XCircle className="mr-2 h-3.5 w-3.5" />
+                      Cancel
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Selected benchmark</CardTitle>
+            <CardDescription>Durable result payload for the selected benchmark run.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {!selectedRunId ? (
+              <div className="text-sm text-muted-foreground">Select a benchmark run to inspect it.</div>
+            ) : selectedRunQuery.isLoading ? (
+              <div className="text-sm text-muted-foreground">Loading benchmark detail…</div>
+            ) : selectedRun ? (
+              <>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-medium">{selectedRun.benchmark_type}</div>
+                    <div className="font-mono text-xs text-muted-foreground">{selectedRun.operation_run_id}</div>
+                  </div>
+                  <SeverityBadge value={selectedRun.status} />
+                </div>
+                {selectedRun.summary_payload ? <JsonViewer data={selectedRun.summary_payload} title="Summary" /> : null}
+                {selectedRun.report_payload ? <JsonViewer data={selectedRun.report_payload} title="Report" /> : null}
+                {selectedRun.error_message ? <ErrorAlert message={selectedRun.error_message} /> : null}
+              </>
+            ) : (
+              <div className="text-sm text-muted-foreground">Benchmark run not found.</div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
 function ResetTab() {
   const queryClient = useQueryClient();
   const [preview, setPreview] = useState<DbResetPreview | null>(null);
@@ -371,15 +550,17 @@ export default function AdminPage() {
     <div className="p-6 space-y-6 max-w-7xl">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Admin</h1>
-        <p className="text-sm text-muted-foreground mt-1">Controlled destructive operations and observability over the API.</p>
+        <p className="text-sm text-muted-foreground mt-1">Controlled destructive operations, observability, and benchmark workflows over the API.</p>
       </div>
 
       <Tabs defaultValue="observability" className="space-y-4">
         <TabsList className="grid w-full grid-cols-3 max-w-2xl">
           <TabsTrigger value="observability">Observability</TabsTrigger>
+          <TabsTrigger value="benchmarks">Benchmarks</TabsTrigger>
           <TabsTrigger value="reset">Reset</TabsTrigger>
         </TabsList>
         <TabsContent value="observability"><ObservabilityTab /></TabsContent>
+        <TabsContent value="benchmarks"><BenchmarksTab /></TabsContent>
         <TabsContent value="reset"><ResetTab /></TabsContent>
       </Tabs>
     </div>

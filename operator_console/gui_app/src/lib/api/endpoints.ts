@@ -422,6 +422,21 @@ export const getAdminObservabilityFailures = async (params?: { limit?: number })
 export const getAdminObservabilityMetricsSeries = async (params?: { hours?: number }) =>
   apiGet<ObservabilityMetricsSeries>("/admin/observability/metrics-series", params as Record<string, string | number>);
 
+export const queueMetadataBenchmark = async (params: { items: number; batch_size: number; challenge_word: string }) =>
+  apiPost<BenchmarkQueueResult>("/admin/benchmarks/metadata", params);
+
+export const queueDiscoveryBenchmark = async (params: { items: number; challenge_word: string }) =>
+  apiPost<BenchmarkQueueResult>("/admin/benchmarks/discovery", params);
+
+export const getBenchmarkRuns = async (params?: { limit?: number }) =>
+  apiGet<BenchmarkRun[]>("/admin/benchmarks/runs", params as Record<string, string | number>);
+
+export const getBenchmarkRun = async (operationRunId: string) =>
+  apiGet<BenchmarkRun>(`/admin/benchmarks/runs/${operationRunId}`);
+
+export const cancelBenchmarkRun = async (operationRunId: string) =>
+  apiPost<BenchmarkRun>(`/admin/benchmarks/runs/${operationRunId}/cancel`);
+
 export type OperationInvalidationTarget =
   | "ingest"
   | "operatorRun"
