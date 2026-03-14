@@ -134,6 +134,21 @@ gh pr merge <pr-number> --squash
 
 Use a different strategy only if repository policy for that PR requires it.
 
+## Branch and Release Strategy
+
+Branch roles:
+
+- `main` contains stable releases only.
+- `develop` is the integration branch for ongoing work.
+- `feature/*` branches are short-lived branches created from `develop`.
+
+Release workflow:
+
+1. Complete and validate work on `develop`.
+2. Merge `develop` into `main` using a non-fast-forward merge.
+3. Create an annotated version tag on the release commit in `main`.
+4. Continue new work from `develop` or a fresh `feature/*` branch.
+
 ## Branch Cleanup
 
 Cleanup only after confirming merge:
