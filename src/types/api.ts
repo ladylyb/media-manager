@@ -14,6 +14,13 @@ export interface ApiError {
   detail?: string;
 }
 
+// Re-export domain types for convenience
+export type { Run } from "./runs";
+export type {
+  CanonicalFile, Tag, DuplicateGroup, DuplicateFile,
+  MediaFileRecord, AnalyticsSummary, TrendPoint, HashAuditResult,
+} from "./media";
+
 // Status
 export interface SystemStatus {
   workflow_version: string;
@@ -39,78 +46,6 @@ export interface LatestMetrics {
   db_ms: number;
   cache_hit_rate: number;
   regression_status: "PASS" | "FAIL" | "UNKNOWN";
-}
-
-// Runs
-export interface Run {
-  run_id: string;
-  timestamp: string;
-  files_processed: number;
-  duplicates_found: number;
-  runtime_ms: number;
-  regression: "PASS" | "FAIL" | "UNKNOWN";
-  details?: Record<string, unknown>;
-}
-
-// Canonical / Gallery
-export interface CanonicalFile {
-  hash: string;
-  path: string;
-  mime_type: string;
-  size_bytes: number;
-  created_at: string;
-  tags?: Tag[];
-  thumbnail_url?: string;
-}
-
-export interface Tag {
-  name: string;
-  confidence: number;
-  source: string;
-}
-
-// Duplicates
-export interface DuplicateGroup {
-  group_id: string;
-  hash: string;
-  canonical_path: string;
-  duplicates: DuplicateFile[];
-}
-
-export interface DuplicateFile {
-  path: string;
-  size_bytes: number;
-  created_at: string;
-  is_canonical: boolean;
-}
-
-// Ledger / Media File
-export interface MediaFileRecord {
-  hash: string;
-  path: string;
-  status: string;
-  first_seen: string;
-  last_seen: string;
-  size_bytes: number;
-}
-
-export interface AnalyticsSummary {
-  total_records: number;
-  by_status: Record<string, number>;
-  avg_file_size: number;
-  trend_data?: TrendPoint[];
-}
-
-export interface TrendPoint {
-  date: string;
-  count: number;
-}
-
-export interface HashAuditResult {
-  hash: string;
-  path: string;
-  status: string;
-  audit_note: string;
 }
 
 // Policy

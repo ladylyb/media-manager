@@ -4,7 +4,7 @@ import {
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
 import {
-  Sidebar,
+  Sidebar as ShadcnSidebar,
   SidebarContent,
   SidebarGroup,
   SidebarGroupContent,
@@ -34,7 +34,7 @@ const systemNav = [
   { title: "Admin", url: "/admin", icon: Settings },
 ];
 
-export function AppSidebar() {
+export function Sidebar() {
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
   const location = useLocation();
@@ -69,7 +69,7 @@ export function AppSidebar() {
   );
 
   return (
-    <Sidebar collapsible="icon" className="border-r border-sidebar-border">
+    <ShadcnSidebar collapsible="icon" className="border-r border-sidebar-border">
       <SidebarHeader className="px-4 py-4 border-b border-sidebar-border">
         {!collapsed && (
           <div className="flex items-center gap-2">
@@ -93,6 +93,6 @@ export function AppSidebar() {
         {renderGroup("Media", mediaNav)}
         {renderGroup("System", systemNav)}
       </SidebarContent>
-    </Sidebar>
+    </ShadcnSidebar>
   );
 }
