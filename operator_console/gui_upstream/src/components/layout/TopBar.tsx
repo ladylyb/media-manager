@@ -1,14 +1,14 @@
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
-import { AppSidebar } from "@/components/AppSidebar";
-import { StatusBar } from "@/components/StatusBar";
+import { Sidebar } from "@/components/layout/Sidebar";
+import { StatusStrip } from "@/components/layout/StatusStrip";
 
-export function AppLayout({ children }: { children: React.ReactNode }) {
+export function TopBar({ children }: { children: React.ReactNode }) {
   return (
     <SidebarProvider>
       <div className="min-h-screen flex w-full">
-        <AppSidebar />
+        <Sidebar />
         <div className="flex-1 flex flex-col min-w-0">
-          <StatusBar />
+          <StatusStrip />
           <header className="h-11 flex items-center border-b bg-card px-2 shrink-0">
             <SidebarTrigger className="ml-1" />
           </header>

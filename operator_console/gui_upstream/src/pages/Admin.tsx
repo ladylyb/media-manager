@@ -3,11 +3,11 @@ import { ErrorAlert } from "@/components/ErrorAlert";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { JsonViewer } from "@/components/JsonViewer";
 import { Button } from "@/components/ui/button";
-import { adminDbReset } from "@/lib/api/endpoints";
+import { runDbReset } from "@/lib/api/endpoints";
 import type { DbResetPreview, DbResetResult } from "@/types/api";
 import { AlertTriangle, Loader2, Trash2, Eye } from "lucide-react";
 
-export default function AdminPage() {
+export default function Admin() {
   const [preview, setPreview] = useState<DbResetPreview | null>(null);
   const [result, setResult] = useState<DbResetResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -19,9 +19,9 @@ export default function AdminPage() {
     setError(null);
     setResult(null);
     try {
-      const res = await adminDbReset({ dry_run: true });
-      setPreview(res.data as DbResetPreview);
-    } catch (err: any) { setError(err.message); }
+      const res = await runDbReset({ dry_run: true });
+      setPreview(res as DbResetPreview);
+    } catch (err: unknown) { setError(err instanceof Error ? err.message : "Unknown error"); }
     finally { setLoading(false); }
   };
 
@@ -29,10 +29,10 @@ export default function AdminPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await adminDbReset({ dry_run: false, challenge: "DESTROY" });
-      setResult(res.data as DbResetResult);
+      const res = await runDbReset({ dry_run: false, challenge: "DESTROY" });
+      setResult(res as DbResetResult);
       setPreview(null);
-    } catch (err: any) { setError(err.message); }
+    } catch (err: unknown) { setError(err instanceof Error ? err.message : "Unknown error"); }
     finally { setLoading(false); setConfirmOpen(false); }
   };
 
@@ -45,7 +45,6 @@ export default function AdminPage() {
 
       {error && <ErrorAlert message={error} onDismiss={() => setError(null)} />}
 
-      {/* DB Reset */}
       <div className="rounded-lg border-2 border-destructive/30 bg-destructive/5 p-6 space-y-4">
         <div className="flex items-center gap-3">
           <div className="p-2 rounded-md bg-destructive/10">
@@ -72,7 +71,7 @@ export default function AdminPage() {
           <div className="space-y-3">
             <h3 className="text-sm font-semibold">Affected Tables</h3>
             <div className="grid grid-cols-2 gap-2">
-              {preview.affected_tables.map(table => (
+              {preview.affected_tables.map((table) => (
                 <div key={table} className="rounded-md border bg-card p-3 flex items-center justify-between">
                   <span className="text-sm font-mono">{table}</span>
                   <span className="text-xs font-mono text-destructive font-bold">{preview.record_counts[table] ?? 0} rows</span>
@@ -111,7 +110,7 @@ export default function AdminPage() {
           <div className="text-sm text-muted-foreground">
             <p className="font-semibold">Tables to be cleared:</p>
             <ul className="list-disc list-inside mt-1">
-              {preview.affected_tables.map(t => <li key={t} className="font-mono text-xs">{t} ({preview.record_counts[t]} rows)</li>)}
+              {preview.affected_tables.map((t) => <li key={t} className="font-mono text-xs">{t} ({preview.record_counts[t]} rows)</li>)}
             </ul>
           </div>
         )}

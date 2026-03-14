@@ -39,3 +39,5 @@ export function PageSkeleton() {
     </div>
   );
 }
+
+export { CardSkeleton as LoadingSkeleton };

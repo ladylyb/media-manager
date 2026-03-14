@@ -1,46 +1,43 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { MetricCard } from "@/components/MetricCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { ErrorAlert } from "@/components/ErrorAlert";
 import { OperationRiskLabel } from "@/components/OperationRiskLabel";
 import { JsonViewer } from "@/components/JsonViewer";
 import { Button } from "@/components/ui/button";
-import { getDashboardSummary, getLatestMetrics, runIngest, runOperatorRun } from "@/lib/api/endpoints";
-import type { DashboardSummary, LatestMetrics, OperationResult } from "@/types/api";
-import { Files, ImageIcon, Video, Layers, Crown, PlayCircle, Timer, Database, Zap, BarChart3, Loader2 } from "lucide-react";
+import { getDashboardSummary, getLatestMetrics, runIngest, runOperatorComposite } from "@/lib/api/endpoints";
+import { usePolling } from "@/hooks/usePolling";
+import type { OperationResult } from "@/types/api";
+import { Files, ImageIcon, Video, Layers, Crown, PlayCircle, Timer, Database, Zap, Loader2 } from "lucide-react";
 
-export default function DashboardPage() {
-  const [summary, setSummary] = useState<DashboardSummary | null>(null);
-  const [metrics, setMetrics] = useState<LatestMetrics | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+export default function Dashboard() {
+  const { data: summary, isLoading: summaryLoading, error: summaryError } = usePolling(
+    ["dashboard-summary"], getDashboardSummary
+  );
+  const { data: metrics, isLoading: metricsLoading, error: metricsError } = usePolling(
+    ["latest-metrics"], getLatestMetrics
+  );
+
+  const loading = summaryLoading || metricsLoading;
+  const queryError = summaryError || metricsError;
+
   const [actionMode, setActionMode] = useState<"validate" | "composite">("validate");
   const [actionLoading, setActionLoading] = useState(false);
   const [actionResult, setActionResult] = useState<OperationResult | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [rootPath, setRootPath] = useState("");
-
-  useEffect(() => {
-    Promise.all([
-      getDashboardSummary().then(e => setSummary(e.data)),
-      getLatestMetrics().then(e => setMetrics(e.data)),
-    ])
-      .catch(err => setError(err.message))
-      .finally(() => setLoading(false));
-  }, []);
 
   const handleQuickAction = async () => {
     setActionLoading(true);
     setActionResult(null);
+    setActionError(null);
     try {
-      if (actionMode === "validate") {
-        const res = await runIngest({ root_path: rootPath || undefined, dry_run: true });
-        setActionResult(res.data);
-      } else {
-        const res = await runOperatorRun({ root_path: rootPath || undefined });
-        setActionResult(res.data);
-      }
-    } catch (err: any) {
-      setError(err.message);
+      const res = actionMode === "validate"
+        ? await runIngest({ root_path: rootPath || undefined, dry_run: true })
+        : await runOperatorComposite({ root_path: rootPath || undefined });
+      setActionResult(res);
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setActionLoading(false);
     }
@@ -53,7 +50,8 @@ export default function DashboardPage() {
         <p className="text-sm text-muted-foreground mt-1">System overview and quick actions</p>
       </div>
 
-      {error && <ErrorAlert message={error} onDismiss={() => setError(null)} />}
+      {queryError && <ErrorAlert message={queryError.message} />}
+      {actionError && <ErrorAlert message={actionError} onDismiss={() => setActionError(null)} />}
 
       {/* KPI Cards */}
       <div>
@@ -120,7 +118,7 @@ export default function DashboardPage() {
           <div className="flex items-center gap-3">
             <input
               value={rootPath}
-              onChange={e => setRootPath(e.target.value)}
+              onChange={(e) => setRootPath(e.target.value)}
               placeholder="Root path (optional)"
               className="flex-1 max-w-sm rounded-md border bg-background px-3 py-2 text-sm font-mono"
             />

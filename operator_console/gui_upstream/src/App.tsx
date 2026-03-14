@@ -3,17 +3,17 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
-import { AppLayout } from "@/components/AppLayout";
-import DashboardPage from "@/pages/DashboardPage";
-import OperationsPage from "@/pages/OperationsPage";
-import RunsPage from "@/pages/RunsPage";
-import LedgerPage from "@/pages/LedgerPage";
-import DiscoverPage from "@/pages/DiscoverPage";
-import DuplicatesPage from "@/pages/DuplicatesPage";
-import PolicyPage from "@/pages/PolicyPage";
-import AdminPage from "@/pages/AdminPage";
-import GalleryPage from "@/pages/GalleryPage";
-import NotFound from "./pages/NotFound";
+import { TopBar } from "@/components/layout/TopBar";
+import Dashboard from "@/pages/Dashboard";
+import Operations from "@/pages/Operations";
+import Runs from "@/pages/Runs";
+import Ledger from "@/pages/Ledger";
+import Duplicates from "@/pages/Duplicates";
+import Policy from "@/pages/Policy";
+import Admin from "@/pages/Admin";
+import Gallery from "@/pages/Gallery";
+import MediaDetail from "@/pages/MediaDetail";
+import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
 
@@ -23,20 +23,20 @@ const App = () => (
       <Toaster />
       <Sonner />
       <BrowserRouter>
-        <AppLayout>
+        <TopBar>
           <Routes>
-            <Route path="/" element={<DashboardPage />} />
-            <Route path="/operations" element={<OperationsPage />} />
-            <Route path="/runs" element={<RunsPage />} />
-            <Route path="/ledger" element={<LedgerPage />} />
-            <Route path="/discover" element={<DiscoverPage />} />
-            <Route path="/duplicates" element={<DuplicatesPage />} />
-            <Route path="/policy" element={<PolicyPage />} />
-            <Route path="/admin" element={<AdminPage />} />
-            <Route path="/gallery" element={<GalleryPage />} />
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/operations" element={<Operations />} />
+            <Route path="/runs" element={<Runs />} />
+            <Route path="/ledger" element={<Ledger />} />
+            <Route path="/duplicates" element={<Duplicates />} />
+            <Route path="/policy" element={<Policy />} />
+            <Route path="/admin" element={<Admin />} />
+            <Route path="/gallery" element={<Gallery />} />
+            <Route path="/media" element={<MediaDetail />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
-        </AppLayout>
+        </TopBar>
       </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>

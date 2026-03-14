@@ -1,10 +1,10 @@
 import {
-  LayoutDashboard, Cog, PlayCircle, BookOpen, Search, Copy, Shield, Settings, Image
+  LayoutDashboard, Cog, PlayCircle, BookOpen, Copy, Shield, Settings, Image
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
 import {
-  Sidebar,
+  Sidebar as ShadcnSidebar,
   SidebarContent,
   SidebarGroup,
   SidebarGroupContent,
@@ -25,9 +25,8 @@ const mainNav = [
 ];
 
 const mediaNav = [
-  { title: "Discover", url: "/discover", icon: Search },
-  { title: "Duplicates", url: "/duplicates", icon: Copy },
   { title: "Gallery", url: "/gallery", icon: Image },
+  { title: "Duplicates", url: "/duplicates", icon: Copy },
 ];
 
 const systemNav = [
@@ -35,7 +34,7 @@ const systemNav = [
   { title: "Admin", url: "/admin", icon: Settings },
 ];
 
-export function AppSidebar() {
+export function Sidebar() {
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
   const location = useLocation();
@@ -70,7 +69,7 @@ export function AppSidebar() {
   );
 
   return (
-    <Sidebar collapsible="icon" className="border-r border-sidebar-border">
+    <ShadcnSidebar collapsible="icon" className="border-r border-sidebar-border">
       <SidebarHeader className="px-4 py-4 border-b border-sidebar-border">
         {!collapsed && (
           <div className="flex items-center gap-2">
@@ -94,6 +93,6 @@ export function AppSidebar() {
         {renderGroup("Media", mediaNav)}
         {renderGroup("System", systemNav)}
       </SidebarContent>
-    </Sidebar>
+    </ShadcnSidebar>
   );
 }
