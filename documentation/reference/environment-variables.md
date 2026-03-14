@@ -170,6 +170,13 @@ Defaults below reflect runtime code defaults, not shell defaults.
 - Default in code: `2.0`
 - Example: `2.0`
 
+### `MEDIA_MANAGER_BENCHMARK_STALE_AFTER_SECONDS`
+- Purpose: Time before a running benchmark is marked failed as abandoned by the worker.
+- Format: Positive float or integer
+- Default in code: `900`
+- Safety note: defines a durable failure boundary for abandoned benchmark runs; it is not an automatic retry interval.
+- Example: `900`
+
 ### `MEDIA_MANAGER_BENCHMARK_WORKER_MODE`
 - Purpose: Control whether the benchmark worker runs continuously or exits after one poll cycle.
 - Allowed values: `forever`, `once`
