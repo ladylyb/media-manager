@@ -19,6 +19,11 @@ export const queryKeys = {
   duplicates: ["duplicates"] as const,
   policy: ["policy"] as const,
   analytics: ["analytics"] as const,
+  adminObservabilitySummary: ["admin", "observability", "summary"] as const,
+  adminObservabilityRuns: (params?: { limit?: number; operation_type?: string; status?: string }) =>
+    ["admin", "observability", "runs", params ?? {}] as const,
+  adminObservabilityFailures: (limit = 25) => ["admin", "observability", "failures", { limit }] as const,
+  adminObservabilitySeries: (hours = 24) => ["admin", "observability", "series", { hours }] as const,
   ledgerByHash: (hashPrefix: string, page = 1, limit = 30) =>
     ["ledger", "by-hash", { hashPrefix, page, limit }] as const,
   ledgerHistory: (path: string, page = 1, limit = 30) => ["ledger", "history", { path, page, limit }] as const,
@@ -38,4 +43,5 @@ export const allReadQueryRoots = [
   queryKeys.duplicates,
   queryKeys.policy,
   queryKeys.analytics,
+  queryKeys.adminObservabilitySummary,
 ] as const;

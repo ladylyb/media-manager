@@ -153,6 +153,47 @@ export interface DbResetResult {
   dry_run: boolean;
 }
 
+export interface ObservabilitySummary {
+  metrics_enabled: boolean;
+  prometheus_url?: string | null;
+  grafana_url?: string | null;
+  generated_at: string;
+  window_hours: number;
+  recent_failure_count: number;
+  recent_runs_by_status: Record<string, number>;
+  recent_runs_by_type: Record<string, number>;
+  last_success_by_type: Record<string, string | null>;
+  latest_metrics: LatestMetrics;
+}
+
+export interface FailureEventItem {
+  id: string;
+  run_id: string;
+  phase: string;
+  error_code: string;
+  error_message: string;
+  created_at: string;
+}
+
+export interface ObservabilityFailures {
+  failure_events: FailureEventItem[];
+  failed_operation_runs: Run[];
+}
+
+export interface SeriesPoint {
+  timestamp: string;
+  value: number;
+}
+
+export interface ObservabilityMetricsSeries {
+  hours: number;
+  series: {
+    operation_volume: SeriesPoint[];
+    failure_volume: SeriesPoint[];
+    latency_ms_avg: SeriesPoint[];
+  };
+}
+
 // Pagination
 export interface PaginatedResponse<T> {
   items: T[];

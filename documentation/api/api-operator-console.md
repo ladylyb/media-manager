@@ -40,6 +40,10 @@ Available canonical endpoints:
 - `POST /api/tag-enrichment`
 - `POST /api/media-file/validate`
 - `GET /api/admin/hash-audit`
+- `GET /api/admin/observability/summary`
+- `GET /api/admin/observability/operation-runs`
+- `GET /api/admin/observability/failures`
+- `GET /api/admin/observability/metrics-series`
 - `POST /api/admin/db-reset`
 
 Error mapping:
@@ -77,6 +81,40 @@ Result payload in envelope `data.result`:
   "message": "Dry-run only. No data deleted."
 }
 ```
+
+### `GET /api/admin/observability/summary`
+
+Read-only operator snapshot with:
+
+- metrics enabled flag
+- optional Prometheus and Grafana links
+- recent run counts by status and type
+- last successful operation timestamps
+- recent failure count
+- selected latest metrics
+
+### `GET /api/admin/observability/operation-runs`
+
+Read-only operation history feed for the Admin Observability UI. Supports the
+same `limit`, `operation_type`, and `status` filters as `GET /api/operation-runs`.
+
+### `GET /api/admin/observability/failures`
+
+Read-only recent failure view combining durable `failure_events` and failed
+`operation_runs`. Query params:
+
+- `limit` (default `20`, max `200`)
+
+### `GET /api/admin/observability/metrics-series`
+
+Read-only chart-ready metrics series for the Admin Observability UI.
+
+Query params:
+
+- `hours` (default `24`, max `168`)
+
+This endpoint intentionally exposes a fixed allowlist of curated series rather
+than arbitrary Prometheus queries.
 
 ## Binary And HTML Routes
 

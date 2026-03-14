@@ -85,6 +85,18 @@ Defaults below reflect runtime code defaults, not shell defaults.
 - Default in code: `9000`
 - Example: `9000`
 
+### `MEDIA_MANAGER_PROMETHEUS_URL`
+- Purpose: External Prometheus base URL shown in the Admin observability UI for operator deep links.
+- Format: HTTP(S) URL
+- Default in code: empty
+- Example: `http://127.0.0.1:9090`
+
+### `MEDIA_MANAGER_GRAFANA_URL`
+- Purpose: External Grafana base URL shown in the Admin observability UI for dashboard deep links.
+- Format: HTTP(S) URL
+- Default in code: empty
+- Example: `http://127.0.0.1:3000`
+
 ### `CANONICAL_READ_CACHE_ENABLED`
 - Purpose: Enable canonical metadata read TTL cache (optimization-only path).
 - Truthy values: `1`, `true`, `yes`, `on`
