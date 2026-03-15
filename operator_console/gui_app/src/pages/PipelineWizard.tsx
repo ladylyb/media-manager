@@ -821,7 +821,7 @@ export default function PipelineWizard() {
     };
   };
 
-  const buildReviewDuplicatesDecision = () => {
+  const buildReviewDuplicatesSummary = () => {
     const duplicateActions = asNumber(planSummary.duplicate_actions) ?? 0;
     const groupCount = duplicates.length;
     const largestGroup = largestDuplicateGroup;
@@ -838,7 +838,7 @@ export default function PipelineWizard() {
         "This plan found a moderate number of duplicate groups, so it is worth checking that the scale still feels right for this batch.";
     }
 
-    const whatThisPlanFound = [
+    const whatPlanningFound = [
       groupCount === 0
         ? "Planning did not surface any duplicate groups for this batch."
         : `Planning found ${groupCount} duplicate group${groupCount === 1 ? "" : "s"} and prepared ${duplicateActions} duplicate action${duplicateActions === 1 ? "" : "s"}.`,
@@ -846,29 +846,11 @@ export default function PipelineWizard() {
         ? `The largest group contains ${largestGroup} file${largestGroup === 1 ? "" : "s"}.`
         : "There is no duplicate group example to inspect on this run.",
       scaleSummary,
+      "This is a short progress checkpoint so you can understand what planning found before the wizard moves on.",
     ];
 
-    let continueIf =
-      "the duplicate counts and the example group feel broadly plausible for the folder you just planned.";
-    let investigateIf =
-      "you expected almost no duplicates, far more duplicates, or the example canonical path looks obviously wrong.";
-
-    if (groupCount === 0) {
-      continueIf =
-        "you expected this batch to have little or no duplicate overlap and the rest of the plan looked reasonable.";
-      investigateIf =
-        "you expected duplicates to appear here and their absence suggests the wrong folder or an unexpected ingest result.";
-    } else if (groupCount >= 10 || duplicateActions >= 10 || largestGroup >= 5) {
-      continueIf =
-        "you expected a duplicate-heavy batch and this scale does not surprise you.";
-      investigateIf =
-        "this feels too large for the batch you intended to process or the example group suggests the wrong files were matched.";
-    }
-
     return {
-      whatThisPlanFound,
-      continueIf,
-      investigateIf,
+      whatPlanningFound,
     };
   };
 
@@ -1105,27 +1087,21 @@ export default function PipelineWizard() {
     }
 
     if (currentStepId === "review-duplicates") {
-      const guidance = STEP_GUIDANCE["review-duplicates"];
-      const duplicateDecision = buildReviewDuplicatesDecision();
+      const duplicateSummary = buildReviewDuplicatesSummary();
       const exampleGroup = duplicates
         .slice()
         .sort((left, right) => right.duplicates.length - left.duplicates.length)[0];
       return (
         <CheckpointStep
           title="Review Duplicate Groups"
-          description={guidance.description}
+          description="This is a short progress checkpoint that explains what planning found about duplicates before the wizard moves on."
           onContinue={goToNextStep}
-          onRerun={() => goToStep("plan")}
-          onAbort={abortWizard}
+          showRerun={false}
+          showAbort={false}
         >
           {duplicatesQuery.error && <ErrorAlert message={parseError(duplicatesQuery.error)} />}
           <div className="space-y-4">
-            <ReviewDecisionCard
-              title="Quick Duplicate Sanity Check"
-              whatHappened={duplicateDecision.whatThisPlanFound}
-              continueIf={duplicateDecision.continueIf}
-              rerunIf={duplicateDecision.investigateIf}
-            />
+            <RestPointSummaryCard title="Duplicate Summary" lines={duplicateSummary.whatPlanningFound} />
             <MetricGrid
               items={summarizeMetrics([
                 { label: "Duplicate groups", value: duplicates.length },
@@ -1145,7 +1121,7 @@ export default function PipelineWizard() {
             <div className="rounded-xl border bg-card p-4">
               <p className="text-sm font-semibold">Example duplicate group</p>
               <p className="mt-1 text-sm text-muted-foreground">
-                This is one example so you can spot obvious surprises before Apply.
+                This is one example from the saved plan. It is illustrative only, not a full review surface.
               </p>
               <div className="mt-3 rounded-lg border bg-muted/20 p-3">
                 <p className="text-xs font-mono text-muted-foreground">Group {exampleGroup.group_id}</p>
@@ -1156,11 +1132,6 @@ export default function PipelineWizard() {
               </div>
             </div>
           )}
-          <ReviewSupportNote
-            title="Need A Closer Look?"
-            content="Use the detailed Duplicates or Gallery views only if this quick sanity check raises questions. They are optional follow-up tools, not the main task of this checkpoint."
-          />
-          <InlineLinks links={[{ label: "Open Duplicates", to: "/duplicates" }, { label: "Open Gallery", to: "/gallery" }]} />
         </CheckpointStep>
       );
     }
@@ -1561,6 +1532,36 @@ function ReviewDecisionCard({
               Re-run If
             </p>
             <p className="mt-3 text-sm leading-6 text-foreground/90">{rerunIf}</p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function RestPointSummaryCard({ title, lines }: { title: string; lines: string[] }) {
+  return (
+    <Card className="border-primary/20 bg-primary/[0.04]">
+      <CardContent className="space-y-4 p-5">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-primary/80">
+            Progress Checkpoint
+          </p>
+          <h3 className="mt-2 text-lg font-semibold text-foreground">{title}</h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            This step is informational. It gives you a plain-English summary of the duplicate picture before the wizard continues.
+          </p>
+        </div>
+        <div className="rounded-xl border border-border/70 bg-background/80 p-4 shadow-sm">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+            What Planning Found
+          </p>
+          <div className="mt-3 space-y-2">
+            {lines.map((line, index) => (
+              <p key={`${index}-${line}`} className="text-sm leading-6 text-foreground/90">
+                {line}
+              </p>
+            ))}
           </div>
         </div>
       </CardContent>

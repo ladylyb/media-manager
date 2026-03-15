@@ -7,10 +7,12 @@ interface CheckpointStepProps {
   title: string;
   description: string;
   onContinue: () => void;
-  onRerun: () => void;
-  onAbort: () => void;
+  onRerun?: (() => void) | null;
+  onAbort?: (() => void) | null;
   continueLabel?: string;
   guidance?: ReactNode;
+  showRerun?: boolean;
+  showAbort?: boolean;
   children: ReactNode;
 }
 
@@ -22,6 +24,8 @@ export function CheckpointStep({
   onAbort,
   continueLabel = "Continue",
   guidance,
+  showRerun = true,
+  showAbort = true,
   children,
 }: CheckpointStepProps) {
   return (
@@ -39,14 +43,18 @@ export function CheckpointStep({
             <ArrowRight className="mr-2 h-4 w-4" />
             {continueLabel}
           </Button>
-          <Button variant="outline" onClick={onRerun}>
-            <RotateCcw className="mr-2 h-4 w-4" />
-            Re-run Previous Step
-          </Button>
-          <Button variant="ghost" onClick={onAbort}>
-            <XCircle className="mr-2 h-4 w-4" />
-            Abort Wizard
-          </Button>
+          {showRerun && onRerun && (
+            <Button variant="outline" onClick={onRerun}>
+              <RotateCcw className="mr-2 h-4 w-4" />
+              Re-run Previous Step
+            </Button>
+          )}
+          {showAbort && onAbort && (
+            <Button variant="ghost" onClick={onAbort}>
+              <XCircle className="mr-2 h-4 w-4" />
+              Abort Wizard
+            </Button>
+          )}
         </div>
       </CardContent>
     </Card>
