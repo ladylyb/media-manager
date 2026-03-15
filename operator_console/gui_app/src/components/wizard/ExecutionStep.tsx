@@ -15,6 +15,7 @@ interface ExecutionStepProps {
   onRun: () => void;
   onContinue: () => void;
   continueDisabled: boolean;
+  guidance?: ReactNode;
   children?: ReactNode;
   result?: ReactNode;
   footer?: ReactNode;
@@ -30,6 +31,7 @@ export function ExecutionStep({
   onRun,
   onContinue,
   continueDisabled,
+  guidance,
   children,
   result,
   footer,
@@ -57,6 +59,7 @@ export function ExecutionStep({
         )}
 
         {children}
+        {guidance}
 
         <div className="flex flex-wrap items-center gap-3">
           <Button onClick={onRun} disabled={loading}>

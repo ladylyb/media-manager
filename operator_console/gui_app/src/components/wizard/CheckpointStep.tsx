@@ -10,6 +10,7 @@ interface CheckpointStepProps {
   onRerun: () => void;
   onAbort: () => void;
   continueLabel?: string;
+  guidance?: ReactNode;
   children: ReactNode;
 }
 
@@ -20,6 +21,7 @@ export function CheckpointStep({
   onRerun,
   onAbort,
   continueLabel = "Continue",
+  guidance,
   children,
 }: CheckpointStepProps) {
   return (
@@ -30,6 +32,7 @@ export function CheckpointStep({
         <p className="max-w-3xl text-sm text-muted-foreground">{description}</p>
       </CardHeader>
       <CardContent className="space-y-5">
+        {guidance}
         {children}
         <div className="flex flex-wrap items-center gap-3">
           <Button onClick={onContinue}>
