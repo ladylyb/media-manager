@@ -1,6 +1,8 @@
 import { apiPost } from "@/lib/api/client";
+import { apiGet } from "@/lib/api/client";
 import { withData } from "@/lib/api/envelope";
 import { mapOperationResult } from "@/lib/api/mappers/admin";
+import type { DirectoryPickerCapability, DirectoryPickerListing } from "@/types";
 
 export const runIngest = async (params: { folder_path?: string; dry_run?: boolean }) => {
   const envelope = await apiPost<Record<string, unknown>>("/ingest", {
@@ -108,3 +110,9 @@ export const runWizardTagEnrichment = async (params?: {
     batch_size: params?.batch_size ?? 100,
     source: params?.source ?? "system",
   });
+
+export const getDirectoryPickerCapability = async () =>
+  apiGet<DirectoryPickerCapability>("/directory-picker/capability");
+
+export const getDirectoryPickerListing = async (path: string) =>
+  apiGet<DirectoryPickerListing>("/directory-picker/list", { path });

@@ -25,6 +25,8 @@ def test_canonical_api_route_inventory_and_v1_removal() -> None:
         "/api/status",
         "/api/dashboard-summary",
         "/api/latest-metrics",
+        "/api/directory-picker/capability",
+        "/api/directory-picker/list",
         "/api/runs",
         "/api/operation-runs",
         "/api/internal-runs",
@@ -2333,3 +2335,92 @@ def test_main_entrypoint_starts_uvicorn(monkeypatch) -> None:
         "port": 8123,
         "reload": True,
     }
+
+
+def test_directory_picker_capability_disabled_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("MEDIA_MANAGER_DIRECTORY_PICKER_ENABLED", raising=False)
+    monkeypatch.delenv("MEDIA_MANAGER_DIRECTORY_PICKER_ROOTS", raising=False)
+    client = TestClient(app)
+
+    response = client.get("/api/directory-picker/capability")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]["result"]
+    assert payload["enabled"] is False
+    assert payload["roots"] == []
+
+
+def test_directory_picker_capability_returns_configured_roots(monkeypatch, tmp_path: Path) -> None:
+    incoming = tmp_path / "incoming"
+    archive = tmp_path / "archive"
+    incoming.mkdir()
+    archive.mkdir()
+    monkeypatch.setenv("MEDIA_MANAGER_DIRECTORY_PICKER_ENABLED", "true")
+    monkeypatch.setenv("MEDIA_MANAGER_DIRECTORY_PICKER_ROOTS", f"{incoming},{archive}")
+    client = TestClient(app)
+
+    response = client.get("/api/directory-picker/capability")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]["result"]
+    assert payload["enabled"] is True
+    assert payload["roots"] == [
+        {"label": "incoming", "path": str(incoming.resolve())},
+        {"label": "archive", "path": str(archive.resolve())},
+    ]
+
+
+def test_directory_picker_listing_returns_child_directories(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "incoming"
+    album_a = root / "album-a"
+    album_b = root / "album-b"
+    root.mkdir()
+    album_a.mkdir()
+    album_b.mkdir()
+    (root / "notes.txt").write_text("ignore me", encoding="utf-8")
+    monkeypatch.setenv("MEDIA_MANAGER_DIRECTORY_PICKER_ENABLED", "true")
+    monkeypatch.setenv("MEDIA_MANAGER_DIRECTORY_PICKER_ROOTS", str(root))
+    client = TestClient(app)
+
+    response = client.get("/api/directory-picker/list", params={"path": str(root)})
+
+    assert response.status_code == 200
+    payload = response.json()["data"]["result"]
+    assert payload["current_path"] == str(root.resolve())
+    assert payload["parent_path"] is None
+    assert payload["directories"] == [
+        {"name": "album-a", "path": str(album_a.resolve())},
+        {"name": "album-b", "path": str(album_b.resolve())},
+    ]
+
+
+def test_directory_picker_listing_rejects_path_outside_allowed_roots(monkeypatch, tmp_path: Path) -> None:
+    allowed_root = tmp_path / "incoming"
+    outside_root = tmp_path / "outside"
+    allowed_root.mkdir()
+    outside_root.mkdir()
+    monkeypatch.setenv("MEDIA_MANAGER_DIRECTORY_PICKER_ENABLED", "true")
+    monkeypatch.setenv("MEDIA_MANAGER_DIRECTORY_PICKER_ROOTS", str(allowed_root))
+    client = TestClient(app)
+
+    response = client.get("/api/directory-picker/list", params={"path": str(outside_root)})
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["errors"][0]["code"] == "VALIDATION_ERROR"
+
+
+def test_directory_picker_listing_rejects_disabled_feature(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "incoming"
+    root.mkdir()
+    monkeypatch.delenv("MEDIA_MANAGER_DIRECTORY_PICKER_ENABLED", raising=False)
+    monkeypatch.setenv("MEDIA_MANAGER_DIRECTORY_PICKER_ROOTS", str(root))
+    client = TestClient(app)
+
+    response = client.get("/api/directory-picker/list", params={"path": str(root)})
+
+    assert response.status_code == 404
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["errors"][0]["code"] == "NOT_FOUND"

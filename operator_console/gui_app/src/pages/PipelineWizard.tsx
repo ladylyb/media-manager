@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import {
   CheckSquare,
   Copy,
+  FolderOpen,
   GitBranchPlus,
   ListChecks,
   RefreshCw,
@@ -22,12 +23,14 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { CheckpointStep } from "@/components/wizard/CheckpointStep";
+import { DirectoryPickerDialog } from "@/components/wizard/DirectoryPickerDialog";
 import { ExecutionStep } from "@/components/wizard/ExecutionStep";
 import { WizardLayout } from "@/components/wizard/WizardLayout";
 import { WizardResultConsole } from "@/components/wizard/WizardResultConsole";
 import type { WizardSidebarItem, WizardSidebarStatus } from "@/components/wizard/WizardSidebar";
 import {
   getCanonical,
+  getDirectoryPickerCapability,
   getDuplicates,
   invalidateReadsAfterOperation,
   runWizardApply,
@@ -39,7 +42,12 @@ import {
 } from "@/lib/api/endpoints";
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
-import type { CanonicalFile, DuplicateGroup, PaginatedResponse } from "@/types/api";
+import type {
+  CanonicalFile,
+  DirectoryPickerCapability,
+  DuplicateGroup,
+  PaginatedResponse,
+} from "@/types";
 
 type StepId =
   | "ingest"
@@ -251,6 +259,7 @@ export default function PipelineWizard() {
   const queryClient = useQueryClient();
   const [wizardState, setWizardState] = useState<WizardState>(INITIAL_STATE);
   const [confirmingStep, setConfirmingStep] = useState<ExecutionStepId | null>(null);
+  const [pickerTarget, setPickerTarget] = useState<"ingest" | "plan" | null>(null);
 
   const currentStepId = wizardState.currentStepId;
   const currentMeta = STEP_META[currentStepId];
@@ -267,6 +276,12 @@ export default function PipelineWizard() {
     queryFn: async () => (await getCanonical({ page: 1, limit: 1 })).data,
     staleTime: queryOptions.canonical.staleTime,
     enabled: currentStepId === "review-canonical" && wizardState.steps.canonical.status === "completed",
+  });
+
+  const directoryPickerCapabilityQuery = useQuery({
+    queryKey: queryKeys.directoryPickerCapability,
+    queryFn: async () => (await getDirectoryPickerCapability()).data,
+    staleTime: queryOptions.directoryPicker.staleTime,
   });
 
   const sidebarItems = useMemo<WizardSidebarItem[]>(
@@ -418,6 +433,11 @@ export default function PipelineWizard() {
   const duplicates = (duplicatesQuery.data as DuplicateGroup[] | undefined) ?? [];
   const largestDuplicateGroup = duplicates.reduce<number>((largest, group) => Math.max(largest, group.duplicates.length), 0);
   const canonicalPage = canonicalReviewQuery.data as PaginatedResponse<CanonicalFile> | undefined;
+  const directoryPickerCapability =
+    (directoryPickerCapabilityQuery.data as DirectoryPickerCapability | undefined) ?? null;
+  const directoryPickerEnabled = Boolean(
+    directoryPickerCapability?.enabled && directoryPickerCapability.roots.length > 0,
+  );
 
   const renderResultConsole = (stepId: ExecutionStepId) => {
     const state = wizardState.steps[stepId];
@@ -519,12 +539,25 @@ export default function PipelineWizard() {
           <div className="grid gap-4 lg:grid-cols-2">
             <div className="space-y-2 lg:col-span-2">
               <Label htmlFor="ingest-folder">Folder Path</Label>
-              <Input
-                id="ingest-folder"
-                value={state.input.folder_path}
-                onChange={(event) => updateStepInput("ingest", { folder_path: event.target.value })}
-                placeholder="/media/incoming"
-              />
+              <div className="flex gap-2">
+                <Input
+                  id="ingest-folder"
+                  value={state.input.folder_path}
+                  onChange={(event) => updateStepInput("ingest", { folder_path: event.target.value })}
+                  placeholder="/media/incoming"
+                />
+                {directoryPickerEnabled && (
+                  <Button type="button" variant="outline" onClick={() => setPickerTarget("ingest")}>
+                    <FolderOpen className="mr-2 h-4 w-4" />
+                    Browse
+                  </Button>
+                )}
+              </div>
+              {directoryPickerCapabilityQuery.error && (
+                <p className="text-xs text-muted-foreground">
+                  Directory picker unavailable: {parseError(directoryPickerCapabilityQuery.error)}
+                </p>
+              )}
             </div>
             <div className="flex items-center justify-between rounded-xl border p-4">
               <div>
@@ -586,12 +619,20 @@ export default function PipelineWizard() {
           <div className="grid gap-4 lg:grid-cols-2">
             <div className="space-y-2 lg:col-span-2">
               <Label htmlFor="plan-folder">Folder Path</Label>
-              <Input
-                id="plan-folder"
-                value={state.input.folder_path}
-                onChange={(event) => updateStepInput("plan", { folder_path: event.target.value })}
-                placeholder="/media/incoming"
-              />
+              <div className="flex gap-2">
+                <Input
+                  id="plan-folder"
+                  value={state.input.folder_path}
+                  onChange={(event) => updateStepInput("plan", { folder_path: event.target.value })}
+                  placeholder="/media/incoming"
+                />
+                {directoryPickerEnabled && (
+                  <Button type="button" variant="outline" onClick={() => setPickerTarget("plan")}>
+                    <FolderOpen className="mr-2 h-4 w-4" />
+                    Browse
+                  </Button>
+                )}
+              </div>
             </div>
             <div className="flex items-center justify-between rounded-xl border p-4">
               <div>
@@ -930,6 +971,18 @@ export default function PipelineWizard() {
         destructive
         onConfirm={() => runExecutionStep("tag")}
         loading={wizardState.steps.tag.status === "running"}
+      />
+      <DirectoryPickerDialog
+        open={pickerTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setPickerTarget(null);
+        }}
+        capability={directoryPickerCapability}
+        initialPath={pickerTarget ? wizardState.steps[pickerTarget].input.folder_path : ""}
+        onSelect={(path) => {
+          if (!pickerTarget) return;
+          updateStepInput(pickerTarget, { folder_path: path });
+        }}
       />
     </div>
   );
