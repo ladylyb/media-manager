@@ -14,6 +14,9 @@ interface ExecutionStepProps {
   error?: string | null;
   onRun: () => void;
   onContinue: () => void;
+  runLabel?: string;
+  runVariant?: "default" | "outline";
+  preferContinue?: boolean;
   continueLabel?: string;
   continueDisabled: boolean;
   guidance?: ReactNode;
@@ -31,6 +34,9 @@ export function ExecutionStep({
   error,
   onRun,
   onContinue,
+  runLabel = "Run Step",
+  runVariant = "default",
+  preferContinue = false,
   continueLabel = "Continue",
   continueDisabled,
   guidance,
@@ -64,13 +70,27 @@ export function ExecutionStep({
         {guidance}
 
         <div className="flex flex-wrap items-center gap-3">
-          <Button onClick={onRun} disabled={loading}>
-            {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Run Step
-          </Button>
-          <Button variant="outline" onClick={onContinue} disabled={continueDisabled || loading}>
-            {continueLabel}
-          </Button>
+          {preferContinue ? (
+            <>
+              <Button onClick={onContinue} disabled={continueDisabled || loading}>
+                {continueLabel}
+              </Button>
+              <Button variant={runVariant} onClick={onRun} disabled={loading}>
+                {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {runLabel}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant={runVariant} onClick={onRun} disabled={loading}>
+                {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {runLabel}
+              </Button>
+              <Button variant="outline" onClick={onContinue} disabled={continueDisabled || loading}>
+                {continueLabel}
+              </Button>
+            </>
+          )}
         </div>
 
         {error && <ErrorAlert message={error} />}

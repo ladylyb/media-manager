@@ -6,6 +6,7 @@ import {
   Copy,
   FolderOpen,
   GitBranchPlus,
+  type LucideIcon,
   ListChecks,
   RefreshCw,
   ScanSearch,
@@ -16,7 +17,6 @@ import {
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ErrorAlert } from "@/components/ErrorAlert";
 import { JsonViewer } from "@/components/JsonViewer";
-import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -33,8 +33,8 @@ import { DirectoryPickerDialog } from "@/components/wizard/DirectoryPickerDialog
 import { ExecutionStep } from "@/components/wizard/ExecutionStep";
 import { WizardGuidancePanel } from "@/components/wizard/WizardGuidancePanel";
 import { WizardLayout } from "@/components/wizard/WizardLayout";
+import { WizardProgressHeader, type WizardProgressItem, type WizardProgressStatus } from "@/components/wizard/WizardProgressHeader";
 import { WizardResultConsole } from "@/components/wizard/WizardResultConsole";
-import type { WizardSidebarItem, WizardSidebarStatus } from "@/components/wizard/WizardSidebar";
 import {
   getCanonical,
   getDirectoryPickerCapability,
@@ -170,7 +170,7 @@ const INITIAL_STATE: WizardState = {
 
 const STEP_META: Record<
   StepId,
-  { title: string; kind: "execution" | "checkpoint"; icon: WizardSidebarItem["icon"] }
+  { title: string; kind: "execution" | "checkpoint"; icon: LucideIcon }
 > = {
   ingest: { title: "Ingest", kind: "execution", icon: Upload },
   "review-ingest": { title: "Review Ingest", kind: "checkpoint", icon: ScanSearch },
@@ -511,7 +511,7 @@ function canVisitStep(state: WizardState, stepId: StepId) {
   }
 }
 
-function deriveSidebarStatus(state: WizardState, stepId: StepId): WizardSidebarStatus {
+function deriveProgressStatus(state: WizardState, stepId: StepId): WizardProgressStatus {
   const currentIndex = STEP_ORDER.indexOf(state.currentStepId);
   const stepIndex = STEP_ORDER.indexOf(stepId);
   const meta = STEP_META[stepId];
@@ -559,14 +559,14 @@ export default function PipelineWizard() {
     staleTime: queryOptions.directoryPicker.staleTime,
   });
 
-  const sidebarItems = useMemo<WizardSidebarItem[]>(
+  const progressItems = useMemo<WizardProgressItem[]>(
     () =>
       STEP_ORDER.map((stepId) => ({
         id: stepId,
         title: STEP_META[stepId].title,
         kind: STEP_META[stepId].kind,
         icon: STEP_META[stepId].icon,
-        status: deriveSidebarStatus(wizardState, stepId),
+        status: deriveProgressStatus(wizardState, stepId),
       })),
     [wizardState],
   );
@@ -1029,6 +1029,13 @@ export default function PipelineWizard() {
     return links;
   };
 
+  const currentStepIndex = STEP_ORDER.indexOf(currentStepId);
+  const previousStepTitle = currentStepIndex > 0 ? STEP_META[STEP_ORDER[currentStepIndex - 1]].title : null;
+  const nextStepTitle =
+    currentStepIndex >= 0 && currentStepIndex < STEP_ORDER.length - 1
+      ? STEP_META[STEP_ORDER[currentStepIndex + 1]].title
+      : null;
+
   const renderResultConsole = (stepId: ExecutionStepId) => {
     const state = wizardState.steps[stepId];
     if (!state.result) return null;
@@ -1261,6 +1268,9 @@ export default function PipelineWizard() {
           error={state.error}
           onRun={() => runExecutionStep("ingest")}
           onContinue={goToNextStep}
+          runLabel={state.status === "completed" ? "Run Again" : "Run Step"}
+          runVariant={state.status === "completed" ? "outline" : "default"}
+          preferContinue={state.status === "completed"}
           continueDisabled={state.status !== "completed"}
           guidance={<WizardGuidancePanel sections={guidance.sections} />}
           result={renderResultConsole("ingest")}
@@ -1347,6 +1357,9 @@ export default function PipelineWizard() {
           error={state.error}
           onRun={() => runExecutionStep("plan")}
           onContinue={goToNextStep}
+          runLabel={state.status === "completed" ? "Run Again" : "Run Step"}
+          runVariant={state.status === "completed" ? "outline" : "default"}
+          preferContinue={state.status === "completed"}
           continueDisabled={state.status !== "completed"}
           guidance={<WizardGuidancePanel sections={guidance.sections} />}
           result={renderResultConsole("plan")}
@@ -1444,6 +1457,9 @@ export default function PipelineWizard() {
           error={state.error}
           onRun={() => setConfirmingStep("apply")}
           onContinue={goToNextStep}
+          runLabel={state.status === "completed" ? "Run Again" : "Run Step"}
+          runVariant={state.status === "completed" ? "outline" : "default"}
+          preferContinue={state.status === "completed"}
           continueDisabled={state.status !== "completed"}
           guidance={<WizardGuidancePanel sections={guidance.sections} />}
           result={renderResultConsole("apply")}
@@ -1533,6 +1549,9 @@ export default function PipelineWizard() {
           error={state.error}
           onRun={() => setConfirmingStep("canonical")}
           onContinue={goToNextStep}
+          runLabel={state.status === "completed" ? "Run Again" : "Run Step"}
+          runVariant={state.status === "completed" ? "outline" : "default"}
+          preferContinue={state.status === "completed"}
           continueDisabled={state.status !== "completed"}
           guidance={<WizardGuidancePanel sections={guidance.sections} />}
           result={renderResultConsole("canonical")}
@@ -1670,6 +1689,9 @@ export default function PipelineWizard() {
               },
             }));
           }}
+          runLabel={state.status === "completed" ? "Run Again" : "Run Step"}
+          runVariant={state.status === "completed" ? "outline" : "default"}
+          preferContinue={state.status === "completed"}
           continueLabel={continueLabel}
           continueDisabled={false}
           guidance={
@@ -1779,12 +1801,20 @@ export default function PipelineWizard() {
                 The guided run is complete. These views are optional follow-up tools if you want more detail.
               </p>
             </div>
-            <div className="flex flex-wrap gap-3">
-              {nextStepLinks.map((link) => (
-                <Button key={link.to} variant="outline" onClick={() => navigate(link.to)}>
-                  {link.label}
-                </Button>
-              ))}
+            <div className="space-y-3">
+              <div className="flex flex-wrap gap-3">
+                {nextStepLinks.map((link) => (
+                  <Button
+                    key={link.to}
+                    type="button"
+                    variant="outline"
+                    onClick={() => window.open(link.to, "_blank", "noopener,noreferrer")}
+                  >
+                    {link.label}
+                  </Button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">These views open in a new tab so you can return to this wizard summary.</p>
             </div>
           </CardContent>
         </Card>
@@ -1807,31 +1837,43 @@ export default function PipelineWizard() {
       <div className="border-b bg-card/70 px-6 py-5">
         <div className="mx-auto max-w-7xl space-y-2">
           <p className="text-xs font-semibold uppercase tracking-[0.3em] text-muted-foreground">Operator Console</p>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h1 className="text-3xl font-semibold tracking-tight">Pipeline Wizard</h1>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Guided execution through ingest, planning, apply, canonical recompute, and enrichment, with checkpoints that explain what each stage does before you move forward.
-              </p>
-              <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-                This wizard is designed to help operators understand the purpose of each stage, not just run the APIs in order. Execution steps perform work; review checkpoints exist so you can confirm results before the next stage begins.
-              </p>
-            </div>
-            <StatusBadge
-              label={currentMeta.kind === "execution" ? "Operation Step" : "Review Checkpoint"}
-              severity={currentMeta.kind === "execution" ? "info" : "neutral"}
-            />
+          <div>
+            <h1 className="text-3xl font-semibold tracking-tight">Pipeline Wizard</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Guided execution through ingest, planning, apply, canonical recompute, and enrichment, with checkpoints that explain what each stage does before you move forward.
+            </p>
+            <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
+              This wizard is designed to help operators understand the purpose of each stage, not just run the APIs in order. Execution steps perform work; review checkpoints exist so you can confirm results before the next stage begins.
+            </p>
           </div>
         </div>
       </div>
 
-      <WizardLayout sidebarItems={sidebarItems}>{renderCurrentStep()}</WizardLayout>
+      <WizardLayout
+        header={
+          <WizardProgressHeader
+            currentIndex={currentStepIndex}
+            totalSteps={STEP_ORDER.length}
+            currentTitle={currentMeta.title}
+            currentKind={currentMeta.kind}
+            previousTitle={previousStepTitle}
+            nextTitle={nextStepTitle}
+            items={progressItems}
+          />
+        }
+      >
+        {renderCurrentStep()}
+      </WizardLayout>
 
       <ConfirmDialog
         open={confirmingStep === "apply"}
         onOpenChange={(open) => setConfirmingStep(open ? "apply" : null)}
-        title="Execute Apply?"
-        description="This step starts making the saved plan real. Files and records may now be changed based on the plan you just reviewed."
+        title={wizardState.steps.apply.status === "completed" ? "Run Apply Again?" : "Execute Apply?"}
+        description={
+          wizardState.steps.apply.status === "completed"
+            ? "Apply already completed once for this guided run. Running it again may repeat work or result in no changes, so only continue if rerunning Apply is intentional."
+            : "This step starts making the saved plan real. Files and records may now be changed based on the plan you just reviewed."
+        }
         destructive
         onConfirm={() => runExecutionStep("apply")}
         loading={wizardState.steps.apply.status === "running"}
@@ -1839,8 +1881,12 @@ export default function PipelineWizard() {
       <ConfirmDialog
         open={confirmingStep === "canonical"}
         onOpenChange={(open) => setConfirmingStep(open ? "canonical" : null)}
-        title="Execute Canonical Recompute?"
-        description="This step chooses which file should be treated as the main version going forward. Later views and enrichment will use that chosen version."
+        title={wizardState.steps.canonical.status === "completed" ? "Run Canonical Recompute Again?" : "Execute Canonical Recompute?"}
+        description={
+          wizardState.steps.canonical.status === "completed"
+            ? "Canonical recompute already completed once for this guided run. Running it again may leave the chosen versions unchanged, so only continue if you intentionally want to recalculate them."
+            : "This step chooses which file should be treated as the main version going forward. Later views and enrichment will use that chosen version."
+        }
         destructive
         onConfirm={() => runExecutionStep("canonical")}
         loading={wizardState.steps.canonical.status === "running"}
@@ -1848,8 +1894,12 @@ export default function PipelineWizard() {
       <ConfirmDialog
         open={confirmingStep === "tag"}
         onOpenChange={(open) => setConfirmingStep(open ? "tag" : null)}
-        title="Execute Tag Enrichment?"
-        description="This step adds or refreshes searchable tags and metadata for the chosen media items. It does not move files or change the chosen versions you already reviewed."
+        title={wizardState.steps.tag.status === "completed" ? "Run Tag Enrichment Again?" : "Execute Tag Enrichment?"}
+        description={
+          wizardState.steps.tag.status === "completed"
+            ? "Tag enrichment already completed once for this guided run. Running it again may simply refresh existing metadata or do no additional work, so only continue if rerunning is intentional."
+            : "This step adds or refreshes searchable tags and metadata for the chosen media items. It does not move files or change the chosen versions you already reviewed."
+        }
         destructive
         onConfirm={() => runExecutionStep("tag")}
         loading={wizardState.steps.tag.status === "running"}
@@ -1886,15 +1936,21 @@ function MetricGrid({ items }: { items: Array<{ label: string; value: string | n
 }
 
 function InlineLinks({ links }: { links: Array<{ label: string; to: string }> }) {
-  const navigate = useNavigate();
-
   return (
-    <div className="flex flex-wrap gap-3">
-      {links.map((link) => (
-        <Button key={link.to} variant="outline" onClick={() => navigate(link.to)}>
-          {link.label}
-        </Button>
-      ))}
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-3">
+        {links.map((link) => (
+          <Button
+            key={link.to}
+            type="button"
+            variant="outline"
+            onClick={() => window.open(link.to, "_blank", "noopener,noreferrer")}
+          >
+            {link.label}
+          </Button>
+        ))}
+      </div>
+      <p className="text-xs text-muted-foreground">Opens in a new tab so your wizard progress stays here.</p>
     </div>
   );
 }
