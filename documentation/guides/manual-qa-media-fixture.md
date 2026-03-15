@@ -34,7 +34,7 @@ Requirements:
 
 ## How To Use It
 
-Point the Pipeline Wizard or other local testing flow at:
+Point Organize Media or another local testing flow at:
 
 `testdata/manual-qa/media-manager-v1`
 

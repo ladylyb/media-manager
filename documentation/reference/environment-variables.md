@@ -179,7 +179,7 @@ Defaults below reflect runtime code defaults, not shell defaults.
 ## Operator Console UX Flags
 
 ### `MEDIA_MANAGER_DIRECTORY_PICKER_ENABLED`
-- Purpose: Enable the optional server-backed directory picker used by the pipeline wizard `Browse` button.
+- Purpose: Enable the optional server-backed directory picker used by the Organize Media `Browse` button.
 - Truthy values: `1`, `true`, `yes`, `on`
 - Default in code: `false`
 - Local-use note: this browses directories on the API server host, not on the operator's local workstation browser.
