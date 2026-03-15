@@ -48,9 +48,21 @@ Implemented on branch `feat/gui-layout-and-routing-polish`:
   - route table normalized into `appRoutes`
   - `/console-v2` converted to a client-side compatibility redirect to `/`
 
+Implemented on branch `feat/gui-page-ux-polish`:
+
+- selected page-level UX improvements for local runtime pages:
+  - `src/pages/DashboardPage.tsx`
+  - `src/pages/RunsPage.tsx`
+  - `src/pages/DuplicatesPage.tsx`
+  - `src/pages/PolicyPage.tsx`
+- retained the existing local API/query layer while improving:
+  - page-level information hierarchy
+  - summary cards and at-a-glance status framing
+  - detail/inspection panels
+  - policy editor affordances and save-state clarity
+
 Still intentionally not implemented:
 
-- page UX refactors for dashboard, runs, duplicates, policy
 - `MediaDetail` route work
 - discover-to-gallery consolidation
 - operations-page upstream UX adoption
@@ -62,8 +74,10 @@ MTM assessment:
 
 - low-risk visual harvest from upstream has been successfully applied without
   disturbing the API adapter layer
-- medium-risk layout/routing polish is now partially completed, but server-side
-  route ambiguity around `/console-v2` remains
+- medium-risk layout/routing and page-composition harvest is now substantially
+  completed on the local `gui_app` runtime
+- server-side route ambiguity around `/console-v2` remains the main unfinished
+  route-surface item from this analysis
 - high-risk API/data/admin ownership areas remain correctly untouched
 
 ## High-Risk Local Ownership Areas
@@ -125,9 +139,9 @@ Classification legend:
 | `operator_console/gui_upstream/src/lib/api/endpoints.ts` | `do not port` | Local endpoint adapters are repo-specific and map current backend payloads, request keys, and invalidation behavior. |
 | `operator_console/gui_upstream/src/lib/api/envelope.ts` | `manual UX adaptation candidate` | Envelope factoring is structurally interesting, but only if reimplemented around the local `/api` contract rather than copied directly. |
 | `operator_console/gui_upstream/src/pages/Admin.tsx` | `do not port` | Local admin is significantly richer and bound to service-layer-backed DB reset, observability, and benchmark flows. |
-| `operator_console/gui_upstream/src/pages/Dashboard.tsx` | `manual UX adaptation candidate` | Dashboard layout ideas may be useful, but local metrics and operation wiring are now repo-specific. |
+| `operator_console/gui_upstream/src/pages/Dashboard.tsx` | `manual UX adaptation candidate` | Dashboard layout ideas may be useful, but local metrics and operation wiring are now repo-specific. Implemented locally on `feat/gui-page-ux-polish` as composition-only UX refresh without API-hook changes. |
 | `operator_console/gui_upstream/src/pages/DiscoverPage.tsx` | `manual UX adaptation candidate` | Upstream removed this page, so the main question is whether local discover functionality should stay standalone or merge into gallery later. |
-| `operator_console/gui_upstream/src/pages/Duplicates.tsx` | `manual UX adaptation candidate` | The page refactor may improve presentation, but local duplicate-group data mapping must stay intact. |
+| `operator_console/gui_upstream/src/pages/Duplicates.tsx` | `manual UX adaptation candidate` | The page refactor may improve presentation, but local duplicate-group data mapping must stay intact. Implemented locally on `feat/gui-page-ux-polish` as presentation/detail-panel refresh while preserving current duplicate-group mapping. |
 | `operator_console/gui_upstream/src/pages/Gallery.tsx` | `manual UX adaptation candidate` | Gallery UX ideas are relevant, but local gallery already maps canonical payloads and modal detail behavior. |
 | `operator_console/gui_upstream/src/pages/GalleryPage.tsx` | `ignore` | Historical upstream file removed by the refactor; no direct port needed. |
 | `operator_console/gui_upstream/src/pages/Index.tsx` | `ignore` | Historical scaffold file removed upstream; no local value. |
@@ -135,8 +149,8 @@ Classification legend:
 | `operator_console/gui_upstream/src/pages/MediaDetail.tsx` | `manual UX adaptation candidate` | A dedicated media-detail route could be useful later, but it is a product decision and must be built around local canonical-media models. |
 | `operator_console/gui_upstream/src/pages/Operations.tsx` | `manual UX adaptation candidate` | The upstream reshaping of operations UI is worth reviewing, but local operation execution, invalidation, and safety affordances must remain canonical. |
 | `operator_console/gui_upstream/src/pages/OperationsPage.tsx` | `ignore` | Historical upstream file removed by the refactor; only useful as context while reviewing the new operations page. |
-| `operator_console/gui_upstream/src/pages/Policy.tsx` | `manual UX adaptation candidate` | Policy-editor presentation may be portable, but local policy payloads and save semantics are backend-owned. |
-| `operator_console/gui_upstream/src/pages/Runs.tsx` | `manual UX adaptation candidate` | Polling and table UX may be useful, but local run history is tied to unified `operation_runs`. |
+| `operator_console/gui_upstream/src/pages/Policy.tsx` | `manual UX adaptation candidate` | Policy-editor presentation may be portable, but local policy payloads and save semantics are backend-owned. Implemented locally on `feat/gui-page-ux-polish` as editor/layout polish only; local save semantics remain canonical. |
+| `operator_console/gui_upstream/src/pages/Runs.tsx` | `manual UX adaptation candidate` | Polling and table UX may be useful, but local run history is tied to unified `operation_runs`. Implemented locally on `feat/gui-page-ux-polish` as inspection-panel and summary-card refresh without changing run queries. |
 | `operator_console/gui_upstream/src/types/api.ts` | `do not port` | Local API types are already aligned to current `/api/*` envelopes and payloads. |
 | `operator_console/gui_upstream/src/types/media.ts` | `manual UX adaptation candidate` | Type splitting is a code-organization idea only; any split must preserve local runtime fields and request/response mapping. |
 | `operator_console/gui_upstream/src/types/runs.ts` | `manual UX adaptation candidate` | Same as `media.ts`: structure idea only, not a copy target. |
@@ -149,12 +163,14 @@ Completed:
 
 1. media components and gallery preview UX
 2. layout polish from `layout/*` (implemented on `feat/gui-layout-and-routing-polish`)
+3. selected page-level UX improvements for dashboard, runs, duplicates, and policy (implemented on `feat/gui-page-ux-polish`)
 
 Recommended next:
 
-3. route-surface cleanup and product decision on `/console-v2`
-4. selected page-level UX improvements for dashboard, runs, duplicates, and policy
-5. optional product decision on `MediaDetail` and discover-to-gallery consolidation
+4. route-surface cleanup and product decision on `/console-v2`
+5. operations-page UX adoption using the same local-runtime-only adaptation strategy
+6. optional product decision on `MediaDetail` and discover-to-gallery consolidation
+7. code-organization-only follow-up: type/module splitting and any envelope factoring, if still valuable after the UI work settles
 
 Do not start with API, types, admin pages, or alternate data hooks.
 
@@ -166,6 +182,12 @@ Do not start with API, types, admin pages, or alternate data hooks.
   adaptation into `gui_app`.
 - Gallery/media harvest passed guard checks and build before merge to `develop`.
 - Layout/routing polish on `feat/gui-layout-and-routing-polish` passes:
+  - `bash tools/ci/check_gui_sync_boundary.sh`
+  - `bash tools/ci/check_gui_app_api_client_contract.sh`
+  - `bash tools/ci/check_supported_tooling_api_boundary.sh`
+  - `npm run build`
+- Page UX polish on `feat/gui-page-ux-polish` should pass the same guard/build
+  sequence before PR:
   - `bash tools/ci/check_gui_sync_boundary.sh`
   - `bash tools/ci/check_gui_app_api_client_contract.sh`
   - `bash tools/ci/check_supported_tooling_api_boundary.sh`
