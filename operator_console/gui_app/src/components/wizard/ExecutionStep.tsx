@@ -14,7 +14,9 @@ interface ExecutionStepProps {
   error?: string | null;
   onRun: () => void;
   onContinue: () => void;
+  continueLabel?: string;
   continueDisabled: boolean;
+  guidance?: ReactNode;
   children?: ReactNode;
   result?: ReactNode;
   footer?: ReactNode;
@@ -29,7 +31,9 @@ export function ExecutionStep({
   error,
   onRun,
   onContinue,
+  continueLabel = "Continue",
   continueDisabled,
+  guidance,
   children,
   result,
   footer,
@@ -51,12 +55,13 @@ export function ExecutionStep({
           <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-muted-foreground">
             <div className="flex items-start gap-2">
               <AlertTriangle className="mt-0.5 h-4 w-4 text-destructive" />
-              <p>This step mutates durable system state. Review inputs carefully before running it.</p>
+              <p>This is the point where the wizard starts making real changes. Review the details carefully before you continue.</p>
             </div>
           </div>
         )}
 
         {children}
+        {guidance}
 
         <div className="flex flex-wrap items-center gap-3">
           <Button onClick={onRun} disabled={loading}>
@@ -64,7 +69,7 @@ export function ExecutionStep({
             Run Step
           </Button>
           <Button variant="outline" onClick={onContinue} disabled={continueDisabled || loading}>
-            Continue
+            {continueLabel}
           </Button>
         </div>
 
