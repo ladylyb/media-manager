@@ -5,4 +5,5 @@ Task-oriented guides for common workflows.
 - [Ingest Workflow](ingest-workflow.md)
 - [Plan Workflow](plan-workflow.md)
 - [Apply Workflow](apply-workflow.md)
+- [Manual QA Media Fixture](manual-qa-media-fixture.md)
 - [Documentation Workflow](documentation-workflow.md)
