@@ -39,6 +39,7 @@ nav:
       - Ingest Workflow: guides/ingest-workflow.md
       - Plan Workflow: guides/plan-workflow.md
       - Apply Workflow: guides/apply-workflow.md
+      - Manual QA Media Fixture: guides/manual-qa-media-fixture.md
       - Documentation Workflow: guides/documentation-workflow.md
   - Examples:
       - Overview: examples/index.md
