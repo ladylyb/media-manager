@@ -15,9 +15,17 @@ import {
 } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ErrorAlert } from "@/components/ErrorAlert";
+import { JsonViewer } from "@/components/JsonViewer";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -239,53 +247,53 @@ const STEP_GUIDANCE: Record<
   },
   plan: {
     description:
-      "Generate the proposed duplicate and move actions that the system would carry out later, without executing them yet.",
+      "Prepare the system's proposed decisions for the files you just ingested, without moving or renaming anything yet.",
     sections: [
       {
         title: "What this step does",
         content:
-          "Plan examines the discovered media set and prepares the decisions the pipeline would later apply, such as duplicate handling and file movement logic.",
+          "Plan looks at the folder you already ingested and works out what the system would do next, such as duplicate handling and file organization decisions.",
       },
       {
         title: "Before you run",
         content:
-          "Confirm the carried-forward folder path is still correct. Use Strict Metadata if you want planning to be less forgiving about required metadata quality.",
+          "This step automatically uses the same folder from Ingest. In the wizard, there is nothing extra to configure here: just confirm you are ready for the system to prepare its proposed next actions.",
       },
       {
         title: "What success looks like",
         content:
-          "You receive a plan result with a run ID and summary counts. That run ID becomes the input for Apply, which is the first stage that actually executes the planned work.",
+          "You receive a saved plan with a run ID and a plain-English summary. The wizard carries that run ID forward automatically into Apply, which is the first stage that actually executes the work.",
       },
       {
         title: "Risk level",
         content:
-          "This is a moderate mutation step because it creates durable run facts and planned actions, but it does not yet perform the downstream file or canonical mutations.",
+          "This step saves planning state in the system so later stages know what to do, but it does not yet move files or change canonical selections.",
       },
     ],
   },
   "review-duplicates": {
     description:
-      "Inspect the duplicate picture before the wizard is allowed to move into Apply.",
+      "Use this quick safety check to confirm the planned duplicate picture looks broadly sane before Apply.",
     sections: [
       {
         title: "What this step does",
         content:
-          "This checkpoint lets you sanity-check the duplicate groups that planning surfaced so you can see whether the plan is roughly aligned with reality.",
+          "This is a quick pre-apply check, not a full duplicate-audit workflow. Use it to spot obvious surprises before the wizard reaches the first file-changing stage.",
       },
       {
         title: "Before you continue",
         content:
-          "Look for suspiciously large groups, unexpected canonical paths, or a plan summary that feels out of scale for the batch you intended to process.",
+          "Focus on whether the duplicate counts and one example group look broadly plausible for the folder you just planned. If anything feels clearly wrong, stop and investigate before Apply.",
       },
       {
         title: "What success looks like",
         content:
-          "You are comfortable that the duplicate picture looks credible and that Apply should be allowed to execute the current plan.",
+          "You can confidently answer a simple question: does this duplicate picture look roughly right for this batch, or should you investigate before continuing?",
       },
       {
         title: "Risk level",
         content:
-          "This is a review checkpoint. It does not mutate state; it exists to give the operator a chance to inspect results before the more destructive stages begin.",
+          "This is a review checkpoint. It does not mutate state; it exists to catch obvious red flags before the more destructive stages begin.",
       },
     ],
   },
@@ -630,7 +638,10 @@ export default function PipelineWizard() {
         });
         payload = response.data;
       } else if (stepId === "plan") {
-        const response = await runWizardPlan(wizardState.steps.plan.input);
+        const response = await runWizardPlan({
+          folder_path: wizardState.steps.plan.input.folder_path,
+          strict_metadata: false,
+        });
         payload = response.data;
       } else if (stepId === "apply") {
         const response = await runWizardApply(wizardState.steps.apply.input);
@@ -752,6 +763,115 @@ export default function PipelineWizard() {
     return lines;
   };
 
+  const buildReviewIngestDecision = (payload: Record<string, unknown>) => {
+    const filesScanned = asNumber(payload.files_scanned);
+    const newContents = asNumber(payload.new_contents);
+    const knownMatches = asNumber(payload.duplicates_detected);
+
+    const whatHappened = buildIngestSummary(payload);
+    let continueIf =
+      "this matches what you expected to ingest and you are ready for the system to prepare a plan.";
+    let rerunIf =
+      "you expected a different folder, a different file count, or brand-new material that does not appear here.";
+
+    if ((newContents ?? 0) > 0) {
+      continueIf =
+        "you expected new material to be discovered and the counts look plausible for this batch.";
+      rerunIf =
+        "the number of new files looks too high, too low, or points to the wrong folder being selected.";
+    } else if ((knownMatches ?? 0) > 0 && filesScanned !== null && knownMatches === filesScanned) {
+      continueIf =
+        "you expected this run to refresh or confirm files the system already knows about.";
+      rerunIf =
+        "you expected this folder to contain new material or a significantly different set of files.";
+    }
+
+    return {
+      whatHappened,
+      continueIf,
+      rerunIf,
+    };
+  };
+
+  const buildPlanIngestSnapshot = (payload: Record<string, unknown>) => {
+    const newContents = asNumber(payload.new_contents);
+    const filesScanned = asNumber(payload.files_scanned);
+    const newInstances = asNumber(payload.new_instances);
+    const knownMatches = asNumber(payload.duplicates_detected);
+
+    let planningMeaning =
+      "Planning will use the files found in the previous Ingest step to prepare the system's proposed next actions for this batch.";
+
+    if ((newContents ?? 0) > 0) {
+      planningMeaning =
+        "Planning will prepare proposed duplicate and move decisions for the newly discovered material from the previous Ingest step.";
+    } else if ((knownMatches ?? 0) > 0 && filesScanned !== null && knownMatches === filesScanned) {
+      planningMeaning =
+        "Planning will prepare proposed decisions for files the system already knows about, using this ingest run as the confirmed input set.";
+    }
+
+    return {
+      metrics: summarizeMetrics([
+        { label: "Files checked", value: filesScanned },
+        { label: "Brand-new files found", value: newContents },
+        { label: "Known matches", value: knownMatches },
+        { label: "New file records", value: newInstances },
+      ]),
+      planningMeaning,
+    };
+  };
+
+  const buildReviewDuplicatesDecision = () => {
+    const duplicateActions = asNumber(planSummary.duplicate_actions) ?? 0;
+    const groupCount = duplicates.length;
+    const largestGroup = largestDuplicateGroup;
+
+    let scaleSummary = "This plan found a small number of duplicate groups.";
+    if (groupCount === 0) {
+      scaleSummary =
+        "This plan did not find any duplicate groups, so Apply will mainly act on non-duplicate decisions.";
+    } else if (groupCount >= 10 || duplicateActions >= 10 || largestGroup >= 5) {
+      scaleSummary =
+        "This duplicate picture is larger than a quick sanity check would usually expect, so it deserves a closer look before Apply.";
+    } else if (groupCount >= 5 || duplicateActions >= 5 || largestGroup >= 3) {
+      scaleSummary =
+        "This plan found a moderate number of duplicate groups, so it is worth checking that the scale still feels right for this batch.";
+    }
+
+    const whatThisPlanFound = [
+      groupCount === 0
+        ? "Planning did not surface any duplicate groups for this batch."
+        : `Planning found ${groupCount} duplicate group${groupCount === 1 ? "" : "s"} and prepared ${duplicateActions} duplicate action${duplicateActions === 1 ? "" : "s"}.`,
+      largestGroup > 0
+        ? `The largest group contains ${largestGroup} file${largestGroup === 1 ? "" : "s"}.`
+        : "There is no duplicate group example to inspect on this run.",
+      scaleSummary,
+    ];
+
+    let continueIf =
+      "the duplicate counts and the example group feel broadly plausible for the folder you just planned.";
+    let investigateIf =
+      "you expected almost no duplicates, far more duplicates, or the example canonical path looks obviously wrong.";
+
+    if (groupCount === 0) {
+      continueIf =
+        "you expected this batch to have little or no duplicate overlap and the rest of the plan looked reasonable.";
+      investigateIf =
+        "you expected duplicates to appear here and their absence suggests the wrong folder or an unexpected ingest result.";
+    } else if (groupCount >= 10 || duplicateActions >= 10 || largestGroup >= 5) {
+      continueIf =
+        "you expected a duplicate-heavy batch and this scale does not surprise you.";
+      investigateIf =
+        "this feels too large for the batch you intended to process or the example group suggests the wrong files were matched.";
+    }
+
+    return {
+      whatThisPlanFound,
+      continueIf,
+      investigateIf,
+    };
+  };
+
   const renderResultConsole = (stepId: ExecutionStepId) => {
     const state = wizardState.steps[stepId];
     if (!state.result) return null;
@@ -776,17 +896,36 @@ export default function PipelineWizard() {
     }
 
     if (stepId === "plan") {
+      const runId = asString(state.result.run_id);
       return (
         <WizardResultConsole
           title="Plan Result"
           status="success"
+          references={
+            runId
+              ? [
+                  {
+                    label: "Run ID",
+                    value: runId,
+                    helperText: "Apply will use this automatically.",
+                    copyable: true,
+                  },
+                ]
+              : []
+          }
           metrics={summarizeMetrics([
-            { label: "Run ID", value: asString(state.result.run_id) },
-            { label: "Scanned", value: asNumber(planSummary.scanned_count) },
-            { label: "Duplicate Actions", value: asNumber(planSummary.duplicate_actions) },
-            { label: "Move Actions", value: asNumber(planSummary.move_actions) },
+            { label: "Files reviewed", value: asNumber(planSummary.scanned_count) },
+            { label: "Duplicate decisions prepared", value: asNumber(planSummary.duplicate_actions) },
+            { label: "Move decisions prepared", value: asNumber(planSummary.move_actions) },
           ])}
+          summaryLines={[
+            "Plan prepared the system's proposed next actions for the folder you just ingested.",
+            ...(runId ? ["The plan was saved and is ready for Apply."] : []),
+            "No files were moved or renamed in this step.",
+          ]}
+          nextStepHint="If this looks right, continue to Review Duplicate Groups. Apply will use this run ID automatically."
           payload={state.result}
+          technicalDetailsMode="modal"
         />
       );
     }
@@ -883,18 +1022,23 @@ export default function PipelineWizard() {
     }
 
     if (currentStepId === "review-ingest") {
-      const guidance = STEP_GUIDANCE["review-ingest"];
+      const decision = ingestResult ? buildReviewIngestDecision(ingestPayload) : null;
       return (
         <CheckpointStep
           title="Review Ingest Results"
-          description={guidance.description}
+          description="Decide whether this ingest run looks correct enough to continue into planning."
           onContinue={goToNextStep}
           onRerun={() => goToStep("ingest")}
           onAbort={abortWizard}
-          guidance={<WizardGuidancePanel sections={guidance.sections} />}
         >
           {ingestResult ? (
             <div className="space-y-4">
+              <ReviewDecisionCard
+                title="Ingest Checkpoint"
+                whatHappened={decision?.whatHappened ?? []}
+                continueIf={decision?.continueIf ?? ""}
+                rerunIf={decision?.rerunIf ?? ""}
+              />
               <MetricGrid
                 items={summarizeMetrics([
                   { label: "Files checked", value: asNumber(ingestPayload.files_scanned) },
@@ -904,14 +1048,11 @@ export default function PipelineWizard() {
                   { label: "Metadata captured", value: asNumber(ingestPayload.metadata_extracted) },
                 ])}
               />
-              <WizardResultConsole
-                title="Ingest Review"
-                status="success"
-                summaryLines={buildIngestSummary(ingestPayload)}
-                nextStepHint="If this result looks right, continue to Plan so the system can prepare the next stage of work."
-                payload={ingestResult}
-                technicalDetailsMode="modal"
+              <ReviewSupportNote
+                title="How To Use This Checkpoint"
+                content="Use these numbers as supporting evidence. If the file count and discovery outcome match what you expected from this folder, continue to Plan. If the result feels off, re-run ingest with a different path before moving forward."
               />
+              <TechnicalResponseButton title="Ingest Review" payload={ingestResult} />
               <InlineLinks links={[{ label: "Open Gallery", to: "/gallery" }]} />
             </div>
           ) : (
@@ -924,11 +1065,12 @@ export default function PipelineWizard() {
     if (currentStepId === "plan") {
       const state = wizardState.steps.plan;
       const guidance = STEP_GUIDANCE.plan;
+      const ingestSnapshot = buildPlanIngestSnapshot(ingestPayload);
       return (
         <ExecutionStep
           title="Plan"
           description={guidance.description}
-          riskLabel="Moderate Mutation"
+          riskLabel="Saves planning state"
           loading={state.status === "running"}
           error={state.error}
           onRun={() => runExecutionStep("plan")}
@@ -937,30 +1079,25 @@ export default function PipelineWizard() {
           guidance={<WizardGuidancePanel sections={guidance.sections} />}
           result={renderResultConsole("plan")}
         >
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div className="space-y-2 lg:col-span-2">
-              <Label htmlFor="plan-folder">Folder Path</Label>
-              <div className="flex gap-2">
-                <Input
-                  id="plan-folder"
-                  value={state.input.folder_path}
-                  onChange={(event) => updateStepInput("plan", { folder_path: event.target.value })}
-                  placeholder="/media/incoming"
-                />
-                {directoryPickerEnabled && (
-                  <Button type="button" variant="outline" onClick={() => setPickerTarget("plan")}>
-                    <FolderOpen className="mr-2 h-4 w-4" />
-                    Browse
-                  </Button>
-                )}
-              </div>
-            </div>
-            <div className="flex items-center justify-between rounded-xl border p-4">
-              <div>
-                <p className="text-sm font-medium">Strict Metadata</p>
-                <p className="text-xs text-muted-foreground">Use stricter planning validation rules.</p>
-              </div>
-              <Switch checked={state.input.strict_metadata} onCheckedChange={(checked) => updateStepInput("plan", { strict_metadata: checked })} />
+          <div className="rounded-xl border bg-muted/15 p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+              Planning This Folder
+            </p>
+            <p className="mt-3 break-all rounded-lg border bg-background px-3 py-2 font-mono text-sm">
+              {state.input.folder_path || "--"}
+            </p>
+            <p className="mt-3 text-sm text-muted-foreground">
+              This path was carried forward from the completed Ingest step so the wizard can prepare the next stage automatically.
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-primary/15 bg-primary/[0.04] p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary/80">
+              What Ingest Found
+            </p>
+            <p className="mt-3 text-sm leading-6 text-foreground/90">{ingestSnapshot.planningMeaning}</p>
+            <div className="mt-4">
+              <MetricGrid items={ingestSnapshot.metrics} />
             </div>
           </div>
         </ExecutionStep>
@@ -969,6 +1106,10 @@ export default function PipelineWizard() {
 
     if (currentStepId === "review-duplicates") {
       const guidance = STEP_GUIDANCE["review-duplicates"];
+      const duplicateDecision = buildReviewDuplicatesDecision();
+      const exampleGroup = duplicates
+        .slice()
+        .sort((left, right) => right.duplicates.length - left.duplicates.length)[0];
       return (
         <CheckpointStep
           title="Review Duplicate Groups"
@@ -976,34 +1117,49 @@ export default function PipelineWizard() {
           onContinue={goToNextStep}
           onRerun={() => goToStep("plan")}
           onAbort={abortWizard}
-          guidance={<WizardGuidancePanel sections={guidance.sections} />}
         >
           {duplicatesQuery.error && <ErrorAlert message={parseError(duplicatesQuery.error)} />}
-          <MetricGrid
-            items={summarizeMetrics([
-              { label: "Duplicate Groups", value: duplicates.length },
-              { label: "Largest Group", value: largestDuplicateGroup },
-              { label: "Plan Run ID", value: asString(planResult?.run_id) },
-              { label: "Duplicate Actions", value: asNumber(planSummary.duplicate_actions) },
-            ])}
-          />
-          {duplicates.length > 0 && (
+          <div className="space-y-4">
+            <ReviewDecisionCard
+              title="Quick Duplicate Sanity Check"
+              whatHappened={duplicateDecision.whatThisPlanFound}
+              continueIf={duplicateDecision.continueIf}
+              rerunIf={duplicateDecision.investigateIf}
+            />
+            <MetricGrid
+              items={summarizeMetrics([
+                { label: "Duplicate groups", value: duplicates.length },
+                { label: "Largest group size", value: largestDuplicateGroup },
+                { label: "Duplicate actions prepared", value: asNumber(planSummary.duplicate_actions) },
+              ])}
+            />
+            {asString(planResult?.run_id) && (
+              <PlanReferenceStrip
+                label="Plan Run ID"
+                value={asString(planResult?.run_id) ?? ""}
+                helperText="This is the saved plan reference for the batch you are about to apply."
+              />
+            )}
+          </div>
+          {exampleGroup && (
             <div className="rounded-xl border bg-card p-4">
-              <p className="text-sm font-semibold">Largest current duplicate group</p>
-              {duplicates
-                .sort((left, right) => right.duplicates.length - left.duplicates.length)
-                .slice(0, 1)
-                .map((group) => (
-                  <div key={group.group_id} className="mt-3 rounded-lg border bg-muted/20 p-3">
-                    <p className="text-xs font-mono text-muted-foreground">Group {group.group_id}</p>
-                    <p className="mt-2 text-sm">Files in group: {group.duplicates.length}</p>
-                    <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
-                      Canonical path: {group.canonical_path || "--"}
-                    </p>
-                  </div>
-                ))}
+              <p className="text-sm font-semibold">Example duplicate group</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                This is one example so you can spot obvious surprises before Apply.
+              </p>
+              <div className="mt-3 rounded-lg border bg-muted/20 p-3">
+                <p className="text-xs font-mono text-muted-foreground">Group {exampleGroup.group_id}</p>
+                <p className="mt-2 text-sm">Files in group: {exampleGroup.duplicates.length}</p>
+                <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
+                  Canonical path: {exampleGroup.canonical_path || "--"}
+                </p>
+              </div>
             </div>
           )}
+          <ReviewSupportNote
+            title="Need A Closer Look?"
+            content="Use the detailed Duplicates or Gallery views only if this quick sanity check raises questions. They are optional follow-up tools, not the main task of this checkpoint."
+          />
           <InlineLinks links={[{ label: "Open Duplicates", to: "/duplicates" }, { label: "Open Gallery", to: "/gallery" }]} />
         </CheckpointStep>
       );
@@ -1351,6 +1507,124 @@ function InlineLinks({ links }: { links: Array<{ label: string; to: string }> })
           {link.label}
         </Button>
       ))}
+    </div>
+  );
+}
+
+function ReviewDecisionCard({
+  title,
+  whatHappened,
+  continueIf,
+  rerunIf,
+}: {
+  title: string;
+  whatHappened: string[];
+  continueIf: string;
+  rerunIf: string;
+}) {
+  return (
+    <Card className="border-primary/20 bg-primary/[0.04]">
+      <CardContent className="space-y-4 p-5">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-primary/80">
+            Decision Checkpoint
+          </p>
+          <h3 className="mt-2 text-lg font-semibold text-foreground">{title}</h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Use the result below to decide whether this ingest run looks correct enough to move into planning.
+          </p>
+        </div>
+
+        <div className="grid gap-3 xl:grid-cols-3">
+          <div className="rounded-xl border border-border/70 bg-background/80 p-4 shadow-sm xl:col-span-1">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+              What Happened
+            </p>
+            <div className="mt-3 space-y-2">
+              {whatHappened.map((line, index) => (
+                <p key={`${index}-${line}`} className="text-sm leading-6 text-foreground/90">
+                  {line}
+                </p>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-success/20 bg-success/[0.05] p-4 shadow-sm">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-success">
+              Continue If
+            </p>
+            <p className="mt-3 text-sm leading-6 text-foreground/90">{continueIf}</p>
+          </div>
+
+          <div className="rounded-xl border border-caution/25 bg-caution/[0.08] p-4 shadow-sm">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-caution">
+              Re-run If
+            </p>
+            <p className="mt-3 text-sm leading-6 text-foreground/90">{rerunIf}</p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ReviewSupportNote({ title, content }: { title: string; content: string }) {
+  return (
+    <Card className="border-border/70 bg-muted/[0.16]">
+      <CardContent className="p-4">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+          {title}
+        </p>
+        <p className="mt-3 text-sm leading-6 text-foreground/90">{content}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function TechnicalResponseButton({ title, payload }: { title: string; payload: unknown }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <>
+      <div className="flex justify-start">
+        <Button type="button" variant="outline" size="sm" onClick={() => setOpen(true)}>
+          View technical response
+        </Button>
+      </div>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>{title} Technical Response</DialogTitle>
+            <DialogDescription>
+              Raw API details remain available for debugging, but they are optional for the guided workflow.
+            </DialogDescription>
+          </DialogHeader>
+          <JsonViewer data={payload} title="Response Payload" collapsible={false} maxHeight="60vh" />
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function PlanReferenceStrip({
+  label,
+  value,
+  helperText,
+}: {
+  label: string;
+  value: string;
+  helperText: string;
+}) {
+  return (
+    <div className="rounded-xl border border-border/70 bg-muted/15 p-4">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+        Saved Plan
+      </p>
+      <div className="mt-3 rounded-lg border bg-background p-3">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">{label}</p>
+        <p className="mt-2 break-all font-mono text-sm text-foreground/90">{value}</p>
+        <p className="mt-2 text-sm text-muted-foreground">{helperText}</p>
+      </div>
     </div>
   );
 }

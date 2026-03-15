@@ -15,10 +15,18 @@ interface WizardMetric {
   value: string | number;
 }
 
+interface WizardReferenceItem {
+  label: string;
+  value: string;
+  helperText?: string;
+  copyable?: boolean;
+}
+
 interface WizardResultConsoleProps {
   title?: string;
   status: "success" | "failed";
   metrics?: WizardMetric[];
+  references?: WizardReferenceItem[];
   summaryLines?: string[];
   nextStepHint?: string;
   payload: unknown;
@@ -29,12 +37,26 @@ export function WizardResultConsole({
   title = "Step Result",
   status,
   metrics = [],
+  references = [],
   summaryLines = [],
   nextStepHint,
   payload,
   technicalDetailsMode = "inline",
 }: WizardResultConsoleProps) {
   const [technicalOpen, setTechnicalOpen] = useState(false);
+  const [copiedReference, setCopiedReference] = useState<string | null>(null);
+
+  const copyReference = async (label: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedReference(label);
+      window.setTimeout(() => {
+        setCopiedReference((current) => (current === label ? null : current));
+      }, 2000);
+    } catch {
+      setCopiedReference(null);
+    }
+  };
 
   return (
     <div className="space-y-3 rounded-xl border bg-card p-4">
@@ -62,6 +84,42 @@ export function WizardResultConsole({
               <p key={`${index}-${line}`} className="text-sm leading-6 text-foreground/90">
                 {line}
               </p>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {references.length > 0 && (
+        <div className="rounded-xl border border-border/70 bg-muted/15 p-4">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+            Saved Plan
+          </p>
+          <div className="mt-3 space-y-3">
+            {references.map((reference) => (
+              <div
+                key={`${reference.label}-${reference.value}`}
+                className="flex flex-wrap items-start justify-between gap-3 rounded-lg border bg-background p-3"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                    {reference.label}
+                  </p>
+                  <p className="mt-2 break-all font-mono text-sm text-foreground/90">{reference.value}</p>
+                  {reference.helperText && (
+                    <p className="mt-2 text-sm text-muted-foreground">{reference.helperText}</p>
+                  )}
+                </div>
+                {reference.copyable && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void copyReference(reference.label, reference.value)}
+                  >
+                    {copiedReference === reference.label ? "Copied" : "Copy"}
+                  </Button>
+                )}
+              </div>
             ))}
           </div>
         </div>
