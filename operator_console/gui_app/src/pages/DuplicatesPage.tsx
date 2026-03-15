@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { getDuplicates } from "@/lib/api/endpoints";
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
-import type { DuplicateGroup } from "@/types/api";
+import type { DuplicateGroup } from "@/types";
 import { Copy, Crown, FileIcon, FolderTree, Layers3, Sparkles } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 

@@ -53,7 +53,7 @@ be overwritten wholesale from upstream:
 
 - `src/lib/api/client.ts`
 - `src/lib/api/endpoints.ts`
-- `src/types/api.ts`
+- `src/types/`
 - admin, observability, benchmark, and operation-run UI flows
 
 These files encode the supported `/api/*` contract, envelope handling,

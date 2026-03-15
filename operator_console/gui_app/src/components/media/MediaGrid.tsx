@@ -1,7 +1,7 @@
 import { EmptyState } from "@/components/EmptyState";
 import { MediaCard } from "@/components/media/MediaCard";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { CanonicalFile } from "@/types/api";
+import type { CanonicalFile } from "@/types";
 import { ImageIcon } from "lucide-react";
 
 interface MediaGridProps {

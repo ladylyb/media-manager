@@ -1,4 +1,4 @@
-import type { ApiEnvelope } from "@/types/api";
+import type { ApiEnvelope } from "@/types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 

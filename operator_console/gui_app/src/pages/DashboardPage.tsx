@@ -17,7 +17,7 @@ import {
 } from "@/lib/api/endpoints";
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
-import type { DashboardSummary, LatestMetrics, OperationResult } from "@/types/api";
+import type { DashboardSummary, LatestMetrics, OperationResult } from "@/types";
 import {
   ArrowRight,
   Crown,

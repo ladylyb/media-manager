@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { invalidateReadsAfterOperation } from "@/lib/api/endpoints";
-import type { OperationResult } from "@/types/api";
+import type { OperationResult } from "@/types";
 
 export interface OperationInputConfig {
   key: string;

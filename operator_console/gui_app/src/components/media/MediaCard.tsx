@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/StatusBadge";
 import { cn } from "@/lib/utils";
-import type { CanonicalFile } from "@/types/api";
+import type { CanonicalFile } from "@/types";
 import { ImageIcon, Video } from "lucide-react";
 import { Link } from "react-router-dom";
 
