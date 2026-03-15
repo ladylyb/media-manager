@@ -1,6 +1,7 @@
 import { CheckCircle2, CircleDot, Lock, OctagonAlert, type LucideIcon } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import type { ReactNode } from "react";
 
 export type WizardProgressStatus = "completed" | "current" | "pending" | "failed" | "blocked";
 
@@ -20,6 +21,7 @@ interface WizardProgressHeaderProps {
   previousTitle?: string | null;
   nextTitle?: string | null;
   items: WizardProgressItem[];
+  secondaryAction?: ReactNode;
 }
 
 function StatusIcon({ status }: { status: WizardProgressStatus }) {
@@ -38,10 +40,11 @@ export function WizardProgressHeader({
   previousTitle,
   nextTitle,
   items,
+  secondaryAction,
 }: WizardProgressHeaderProps) {
   return (
     <Card className="rounded-2xl border-border/80 bg-card/80 shadow-sm">
-      <CardContent className="space-y-5 p-5">
+      <CardContent className="space-y-4 p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="space-y-2">
             <p className="text-xs font-semibold uppercase tracking-[0.3em] text-muted-foreground">Pipeline Progress</p>
@@ -49,21 +52,24 @@ export function WizardProgressHeader({
               <p className="text-sm text-muted-foreground">
                 Step {currentIndex + 1} of {totalSteps}
               </p>
-              <h2 className="text-xl font-semibold tracking-tight">{currentTitle}</h2>
+              <h2 className="text-lg font-semibold tracking-tight">{currentTitle}</h2>
               <p className="text-sm text-muted-foreground">
                 {currentKind === "execution" ? "Execution step" : "Review checkpoint"}
               </p>
             </div>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-xl border bg-muted/15 p-3">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">Previous</p>
-              <p className="mt-2 text-sm font-medium text-foreground/90">{previousTitle ?? "Start of guided run"}</p>
-            </div>
-            <div className="rounded-xl border bg-muted/15 p-3">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">Next</p>
-              <p className="mt-2 text-sm font-medium text-foreground/90">{nextTitle ?? "Guided run complete"}</p>
+          <div className="flex flex-wrap items-start justify-end gap-3">
+            {secondaryAction}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="rounded-xl border bg-muted/15 p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">Previous</p>
+                <p className="mt-2 text-sm font-medium text-foreground/90">{previousTitle ?? "Start of guided run"}</p>
+              </div>
+              <div className="rounded-xl border bg-muted/15 p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">Next</p>
+                <p className="mt-2 text-sm font-medium text-foreground/90">{nextTitle ?? "Guided run complete"}</p>
+              </div>
             </div>
           </div>
         </div>

@@ -2,6 +2,8 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
+  ChevronDown,
+  ChevronUp,
   CheckSquare,
   Copy,
   FolderOpen,
@@ -13,6 +15,7 @@ import {
   Sparkles,
   Tag,
   Upload,
+  XCircle,
 } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ErrorAlert } from "@/components/ErrorAlert";
@@ -535,6 +538,7 @@ export default function PipelineWizard() {
   const [wizardState, setWizardState] = useState<WizardState>(INITIAL_STATE);
   const [confirmingStep, setConfirmingStep] = useState<ExecutionStepId | null>(null);
   const [pickerTarget, setPickerTarget] = useState<"ingest" | "plan" | null>(null);
+  const [confirmAbortOpen, setConfirmAbortOpen] = useState(false);
 
   const currentStepId = wizardState.currentStepId;
   const currentMeta = STEP_META[currentStepId];
@@ -1268,9 +1272,10 @@ export default function PipelineWizard() {
           error={state.error}
           onRun={() => runExecutionStep("ingest")}
           onContinue={goToNextStep}
-          runLabel={state.status === "completed" ? "Run Again" : "Run Step"}
+          runLabel={state.status === "completed" ? "Run Again" : "Run Ingest"}
           runVariant={state.status === "completed" ? "outline" : "default"}
           preferContinue={state.status === "completed"}
+          continueLabel="Continue to Review Ingest"
           continueDisabled={state.status !== "completed"}
           guidance={<WizardGuidancePanel sections={guidance.sections} />}
           result={renderResultConsole("ingest")}
@@ -1310,8 +1315,9 @@ export default function PipelineWizard() {
           title="Review Ingest Results"
           description="Decide whether this ingest run looks correct enough to continue into planning."
           onContinue={goToNextStep}
+          continueLabel="Continue to Plan"
           onRerun={() => goToStep("ingest")}
-          onAbort={abortWizard}
+          showAbort={false}
         >
           {ingestResult ? (
             <div className="space-y-4">
@@ -1321,21 +1327,23 @@ export default function PipelineWizard() {
                 continueIf={decision?.continueIf ?? ""}
                 rerunIf={decision?.rerunIf ?? ""}
               />
-              <MetricGrid
-                items={summarizeMetrics([
-                  { label: "Files checked", value: asNumber(ingestPayload.files_scanned) },
-                  { label: "Brand-new files found", value: asNumber(ingestPayload.new_contents) },
-                  { label: "New file records", value: asNumber(ingestPayload.new_instances) },
-                  { label: "Known matches", value: asNumber(ingestPayload.duplicates_detected) },
-                  { label: "Metadata captured", value: asNumber(ingestPayload.metadata_extracted) },
-                ])}
-              />
-              <ReviewSupportNote
-                title="How To Use This Checkpoint"
-                content="Use these numbers as supporting evidence. If the file count and discovery outcome match what you expected from this folder, continue to Plan. If the result feels off, re-run ingest with a different path before moving forward."
-              />
+              <CollapsibleSection title="Show key numbers" defaultOpen={false}>
+                <MetricGrid
+                  items={summarizeMetrics([
+                    { label: "Files checked", value: asNumber(ingestPayload.files_scanned) },
+                    { label: "Brand-new files found", value: asNumber(ingestPayload.new_contents) },
+                    { label: "New file records", value: asNumber(ingestPayload.new_instances) },
+                    { label: "Known matches", value: asNumber(ingestPayload.duplicates_detected) },
+                  ])}
+                />
+              </CollapsibleSection>
+              <CollapsibleSection title="Show checkpoint guidance" defaultOpen={false}>
+                <ReviewSupportNote
+                  title="How To Use This Checkpoint"
+                  content="Use these numbers as supporting evidence. If the file count and discovery outcome match what you expected from this folder, continue to Plan. If the result feels off, re-run ingest with a different path before moving forward."
+                />
+              </CollapsibleSection>
               <TechnicalResponseButton title="Ingest Review" payload={ingestResult} />
-              <InlineLinks links={[{ label: "Open Gallery", to: "/gallery" }]} />
             </div>
           ) : (
             <ErrorAlert message="No ingest result is available yet. Re-run ingest to continue." severity="warning" />
@@ -1357,9 +1365,10 @@ export default function PipelineWizard() {
           error={state.error}
           onRun={() => runExecutionStep("plan")}
           onContinue={goToNextStep}
-          runLabel={state.status === "completed" ? "Run Again" : "Run Step"}
+          runLabel={state.status === "completed" ? "Run Again" : "Create Plan"}
           runVariant={state.status === "completed" ? "outline" : "default"}
           preferContinue={state.status === "completed"}
+          continueLabel="Continue to Review Duplicates"
           continueDisabled={state.status !== "completed"}
           guidance={<WizardGuidancePanel sections={guidance.sections} />}
           result={renderResultConsole("plan")}
@@ -1376,15 +1385,17 @@ export default function PipelineWizard() {
             </p>
           </div>
 
-          <div className="rounded-xl border border-primary/15 bg-primary/[0.04] p-4">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary/80">
-              What Ingest Found
-            </p>
-            <p className="mt-3 text-sm leading-6 text-foreground/90">{ingestSnapshot.planningMeaning}</p>
-            <div className="mt-4">
+          <CollapsibleSection title="Show previous step details" defaultOpen={false} tone="context">
+            <div className="space-y-4 rounded-xl border border-primary/15 bg-primary/[0.04] p-4">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary/80">
+                  What Ingest Found
+                </p>
+                <p className="mt-3 text-sm leading-6 text-foreground/90">{ingestSnapshot.planningMeaning}</p>
+              </div>
               <MetricGrid items={ingestSnapshot.metrics} />
             </div>
-          </div>
+          </CollapsibleSection>
         </ExecutionStep>
       );
     }
@@ -1399,6 +1410,7 @@ export default function PipelineWizard() {
           title="Review Duplicate Groups"
           description="This is a short progress checkpoint that explains what planning found about duplicates before the wizard moves on."
           onContinue={goToNextStep}
+          continueLabel="Continue to Apply"
           showRerun={false}
           showAbort={false}
         >
@@ -1410,35 +1422,41 @@ export default function PipelineWizard() {
               sectionLabel="What Planning Found"
               description="This step is informational. It gives you a plain-English summary of the duplicate picture before the wizard continues."
             />
-            <MetricGrid
-              items={summarizeMetrics([
-                { label: "Duplicate groups", value: duplicates.length },
-                { label: "Largest group size", value: largestDuplicateGroup },
-                { label: "Duplicate actions prepared", value: asNumber(planSummary.duplicate_actions) },
-              ])}
-            />
-            {asString(planResult?.run_id) && (
-              <PlanReferenceStrip
-                label="Plan Run ID"
-                value={asString(planResult?.run_id) ?? ""}
-                helperText="This is the saved plan reference for the batch you are about to apply."
+            <CollapsibleSection title="Show key numbers" defaultOpen={false}>
+              <MetricGrid
+                items={summarizeMetrics([
+                  { label: "Duplicate groups", value: duplicates.length },
+                  { label: "Largest group size", value: largestDuplicateGroup },
+                  { label: "Duplicate actions prepared", value: asNumber(planSummary.duplicate_actions) },
+                ])}
               />
+            </CollapsibleSection>
+            {asString(planResult?.run_id) && (
+              <CollapsibleSection title="Show saved plan reference" defaultOpen={false}>
+                <PlanReferenceStrip
+                  label="Plan Run ID"
+                  value={asString(planResult?.run_id) ?? ""}
+                  helperText="This is the saved plan reference for the batch you are about to apply."
+                />
+              </CollapsibleSection>
             )}
           </div>
           {exampleGroup && (
-            <div className="rounded-xl border bg-card p-4">
-              <p className="text-sm font-semibold">Example duplicate group</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                This is one example from the saved plan. It is illustrative only, not a full review surface.
-              </p>
-              <div className="mt-3 rounded-lg border bg-muted/20 p-3">
-                <p className="text-xs font-mono text-muted-foreground">Group {exampleGroup.group_id}</p>
-                <p className="mt-2 text-sm">Files in group: {exampleGroup.duplicates.length}</p>
-                <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
-                  Canonical path: {exampleGroup.canonical_path || "--"}
+            <CollapsibleSection title="Show example duplicate group" defaultOpen={false}>
+              <div className="rounded-xl border bg-card p-4">
+                <p className="text-sm font-semibold">Example duplicate group</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  This is one example from the saved plan. It is illustrative only, not a full review surface.
                 </p>
+                <div className="mt-3 rounded-lg border bg-muted/20 p-3">
+                  <p className="text-xs font-mono text-muted-foreground">Group {exampleGroup.group_id}</p>
+                  <p className="mt-2 text-sm">Files in group: {exampleGroup.duplicates.length}</p>
+                  <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
+                    Canonical path: {exampleGroup.canonical_path || "--"}
+                  </p>
+                </div>
               </div>
-            </div>
+            </CollapsibleSection>
           )}
         </CheckpointStep>
       );
@@ -1457,9 +1475,10 @@ export default function PipelineWizard() {
           error={state.error}
           onRun={() => setConfirmingStep("apply")}
           onContinue={goToNextStep}
-          runLabel={state.status === "completed" ? "Run Again" : "Run Step"}
+          runLabel={state.status === "completed" ? "Run Again" : "Apply Plan"}
           runVariant={state.status === "completed" ? "outline" : "default"}
           preferContinue={state.status === "completed"}
+          continueLabel="Continue to Review Apply"
           continueDisabled={state.status !== "completed"}
           guidance={<WizardGuidancePanel sections={guidance.sections} />}
           result={renderResultConsole("apply")}
@@ -1476,14 +1495,16 @@ export default function PipelineWizard() {
             </p>
           </div>
 
-          <div className="rounded-xl border border-primary/15 bg-primary/[0.04] p-4">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary/80">
-              What Will Happen Next
-            </p>
-            <p className="mt-3 text-sm leading-6 text-foreground/90">
-              The system will now carry out the saved changes from Plan. This is the first stage where file operations and durable ledger updates become real outcomes instead of proposed ones.
-            </p>
-          </div>
+          <CollapsibleSection title="Show more about this step" defaultOpen={false} tone="context">
+            <div className="rounded-xl border border-primary/15 bg-primary/[0.04] p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary/80">
+                What Will Happen Next
+              </p>
+              <p className="mt-3 text-sm leading-6 text-foreground/90">
+                The system will now carry out the saved changes from Plan. This is the first stage where file operations and durable ledger updates become real outcomes instead of proposed ones.
+              </p>
+            </div>
+          </CollapsibleSection>
         </ExecutionStep>
       );
     }
@@ -1495,8 +1516,9 @@ export default function PipelineWizard() {
           title="Review Apply Results"
           description="This checkpoint explains what Apply just did before the wizard moves on to canonical recomputation."
           onContinue={goToNextStep}
+          continueLabel="Continue to Canonical"
           onRerun={() => goToStep("apply")}
-          onAbort={abortWizard}
+          showAbort={false}
         >
           {applyResult ? (
             <div className="space-y-4">
@@ -1507,27 +1529,25 @@ export default function PipelineWizard() {
                 description="This checkpoint explains what Apply just did before the wizard moves on to canonical recomputation."
               />
               {asString(applyResult.run_id) && (
-                <PlanReferenceStrip
-                  label="Run ID"
-                  value={asString(applyResult.run_id) ?? ""}
-                  helperText="This is the saved plan reference that Apply just executed."
-                />
+                <CollapsibleSection title="Show saved plan reference" defaultOpen={false}>
+                  <PlanReferenceStrip
+                    label="Run ID"
+                    value={asString(applyResult.run_id) ?? ""}
+                    helperText="This is the saved plan reference that Apply just executed."
+                  />
+                </CollapsibleSection>
               )}
-              <MetricGrid
-                items={summarizeMetrics([
-                  { label: "Actions completed", value: asNumber(applySummary.applied_count) },
-                  { label: "File moves completed", value: asNumber(applySummary.moves_count) },
-                  { label: "Duplicate actions handled", value: asNumber(applySummary.duplicates_count) },
-                  { label: "Errors reported", value: asNumber(applySummary.errors_count) },
-                ])}
-              />
-              <WizardResultConsole
-                title="Apply Review"
-                status="success"
-                nextStepHint="If this outcome looks right, continue to canonical recomputation so the wizard can recalculate canonical selections on top of the new state."
-                payload={applyResult}
-                technicalDetailsMode="modal"
-              />
+              <CollapsibleSection title="Show key numbers" defaultOpen={false}>
+                <MetricGrid
+                  items={summarizeMetrics([
+                    { label: "Actions completed", value: asNumber(applySummary.applied_count) },
+                    { label: "File moves completed", value: asNumber(applySummary.moves_count) },
+                    { label: "Duplicate actions handled", value: asNumber(applySummary.duplicates_count) },
+                    { label: "Errors reported", value: asNumber(applySummary.errors_count) },
+                  ])}
+                />
+              </CollapsibleSection>
+              <TechnicalResponseButton title="Apply Review" payload={applyResult} />
             </div>
           ) : (
             <ErrorAlert message="No apply result is available yet. Re-run Apply to continue." severity="warning" />
@@ -1549,9 +1569,10 @@ export default function PipelineWizard() {
           error={state.error}
           onRun={() => setConfirmingStep("canonical")}
           onContinue={goToNextStep}
-          runLabel={state.status === "completed" ? "Run Again" : "Run Step"}
+          runLabel={state.status === "completed" ? "Run Again" : "Choose Main Versions"}
           runVariant={state.status === "completed" ? "outline" : "default"}
           preferContinue={state.status === "completed"}
+          continueLabel="Continue to Review Canonical"
           continueDisabled={state.status !== "completed"}
           guidance={<WizardGuidancePanel sections={guidance.sections} />}
           result={renderResultConsole("canonical")}
@@ -1568,14 +1589,16 @@ export default function PipelineWizard() {
             </p>
           </div>
 
-          <div className="rounded-xl border border-primary/15 bg-primary/[0.04] p-4">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary/80">
-              What This Means
-            </p>
-            <p className="mt-3 text-sm leading-6 text-foreground/90">
-              After files have been applied, the system still needs to decide which version should be treated as the chosen one going forward. Later views and enrichment steps will use that chosen version.
-            </p>
-          </div>
+          <CollapsibleSection title="Show more about this step" defaultOpen={false} tone="context">
+            <div className="rounded-xl border border-primary/15 bg-primary/[0.04] p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary/80">
+                What This Means
+              </p>
+              <p className="mt-3 text-sm leading-6 text-foreground/90">
+                After files have been applied, the system still needs to decide which version should be treated as the chosen one going forward. Later views and enrichment steps will use that chosen version.
+              </p>
+            </div>
+          </CollapsibleSection>
         </ExecutionStep>
       );
     }
@@ -1590,8 +1613,9 @@ export default function PipelineWizard() {
           title="Review Canonical Results"
           description="This checkpoint explains what the system chose as the main version before the wizard moves into enrichment."
           onContinue={goToNextStep}
+          continueLabel="Continue to Enrichment"
           onRerun={() => goToStep("canonical")}
-          onAbort={abortWizard}
+          showAbort={false}
         >
           {canonicalReviewQuery.error && <ErrorAlert message={parseError(canonicalReviewQuery.error)} />}
           {canonicalResult ? (
@@ -1620,28 +1644,25 @@ export default function PipelineWizard() {
                 description="This checkpoint explains which file the system now treats as the chosen version before enrichment begins."
               />
               {asString(canonicalResult.policy_name) && (
-                <PlanReferenceStrip
-                  label="Selection policy"
-                  value={asString(canonicalResult.policy_name) ?? ""}
-                  helperText="This is the guided policy the wizard used to choose the main version."
-                />
+                <CollapsibleSection title="Show policy details" defaultOpen={false}>
+                  <PlanReferenceStrip
+                    label="Selection policy"
+                    value={asString(canonicalResult.policy_name) ?? ""}
+                    helperText="This is the guided policy the wizard used to choose the main version."
+                  />
+                </CollapsibleSection>
               )}
-              <MetricGrid
-                items={summarizeMetrics([
-                  { label: "Chosen versions changed", value: changedCount },
-                  { label: "Updates applied", value: appliedCount },
-                  { label: "Failures", value: failedCount },
-                  { label: "Visible chosen items", value: canonicalPage?.total },
-                ])}
-              />
-              <WizardResultConsole
-                title="Canonical Review"
-                status="success"
-                nextStepHint="If this looks right, continue to enrichment so the wizard can build on the chosen versions."
-                nextStepTone={zeroOutcome ? "caution" : "default"}
-                payload={canonicalResult}
-                technicalDetailsMode="modal"
-              />
+              <CollapsibleSection title="Show key numbers" defaultOpen={false}>
+                <MetricGrid
+                  items={summarizeMetrics([
+                    { label: "Chosen versions changed", value: changedCount },
+                    { label: "Updates applied", value: appliedCount },
+                    { label: "Failures", value: failedCount },
+                    { label: "Visible chosen items", value: canonicalPage?.total },
+                  ])}
+                />
+              </CollapsibleSection>
+              <TechnicalResponseButton title="Canonical Review" payload={canonicalResult} />
             </div>
           ) : (
             <ErrorAlert message="No canonical recompute result is available yet. Re-run the step to continue." severity="warning" />
@@ -1654,7 +1675,7 @@ export default function PipelineWizard() {
       const state = wizardState.steps.tag;
       const guidance = STEP_GUIDANCE.tag;
       const chosenItems = asNumber(canonicalReviewQuery.data?.total);
-      const continueLabel = state.status === "completed" ? "Continue" : "Skip for now";
+      const continueLabel = state.status === "completed" ? "Continue to Summary" : "Skip for now";
       return (
         <ExecutionStep
           title="Add Searchable Tags"
@@ -1689,7 +1710,7 @@ export default function PipelineWizard() {
               },
             }));
           }}
-          runLabel={state.status === "completed" ? "Run Again" : "Run Step"}
+          runLabel={state.status === "completed" ? "Run Again" : "Run Tag Enrichment"}
           runVariant={state.status === "completed" ? "outline" : "default"}
           preferContinue={state.status === "completed"}
           continueLabel={continueLabel}
@@ -1715,22 +1736,26 @@ export default function PipelineWizard() {
                       Your main organization work is already complete. This step is optional and only affects searchable tags and metadata.
                     </p>
                   </div>
-                  <div className="grid gap-3 xl:grid-cols-3">
-                    {guidance.sections.map((section) => (
-                      <div key={section.title} className="rounded-xl border border-border/70 bg-background/80 p-4 shadow-sm">
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                          {section.title}
-                        </p>
-                        <p className="mt-3 text-sm leading-6 text-foreground/90">{section.content}</p>
-                      </div>
-                    ))}
-                  </div>
                 </CardContent>
               </Card>
-              <ReviewSupportNote
-                title="What will change"
-                content="This step writes or refreshes stored tag and metadata results. It does not move files or change duplicate decisions or chosen-version decisions."
-              />
+              <CollapsibleSection title="Show more about enrichment" defaultOpen={false} tone="context">
+                <div className="grid gap-3 xl:grid-cols-3">
+                  {guidance.sections.map((section) => (
+                    <div key={section.title} className="rounded-xl border border-border/70 bg-background/80 p-4 shadow-sm">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                        {section.title}
+                      </p>
+                      <p className="mt-3 text-sm leading-6 text-foreground/90">{section.content}</p>
+                    </div>
+                  ))}
+                </div>
+              </CollapsibleSection>
+              <CollapsibleSection title="Show what will change" defaultOpen={false}>
+                <ReviewSupportNote
+                  title="What will change"
+                  content="This step writes or refreshes stored tag and metadata results. It does not move files or change duplicate decisions or chosen-version decisions."
+                />
+              </CollapsibleSection>
             </div>
           }
           result={renderResultConsole("tag")}
@@ -1748,6 +1773,7 @@ export default function PipelineWizard() {
         title="Guided Run Complete"
         description="The guided run is finished. This page gives you a quick plain-English wrap-up of what happened and what you can do next."
         categoryLabel="Completion Screen"
+        tone="completion"
         onContinue={() => {
           setWizardState(INITIAL_STATE);
           navigate("/pipeline-wizard");
@@ -1764,17 +1790,19 @@ export default function PipelineWizard() {
           description="This is the plain-English wrap-up of the guided run, highlighting the outcomes that matter most."
           sectionLabel="What This Run Did"
         />
-        <MetricGrid
-          items={summarizeMetrics([
-            { label: "Files scanned", value: asNumber(ingestPayload.files_scanned) },
-            { label: "Actions applied", value: asNumber(applySummary.applied_count) },
-            { label: "Chosen-version changes", value: asNumber(canonicalSummary.changed_count) },
-            {
-              label: tagStatus === "SKIPPED" ? "Tag enrichment" : "Items enriched",
-              value: tagStatus === "SKIPPED" ? "Skipped" : tagProcessed,
-            },
-          ])}
-        />
+        <CollapsibleSection title="Show key numbers" defaultOpen={false}>
+          <MetricGrid
+            items={summarizeMetrics([
+              { label: "Files scanned", value: asNumber(ingestPayload.files_scanned) },
+              { label: "Actions applied", value: asNumber(applySummary.applied_count) },
+              { label: "Chosen-version changes", value: asNumber(canonicalSummary.changed_count) },
+              {
+                label: tagStatus === "SKIPPED" ? "Tag enrichment" : "Items enriched",
+                value: tagStatus === "SKIPPED" ? "Skipped" : tagProcessed,
+              },
+            ])}
+          />
+        </CollapsibleSection>
         <Card className="border-border/70 bg-muted/[0.16]">
           <CardContent className="p-4">
             <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
@@ -1834,16 +1862,13 @@ export default function PipelineWizard() {
 
   return (
     <div className="space-y-6">
-      <div className="border-b bg-card/70 px-6 py-5">
-        <div className="mx-auto max-w-7xl space-y-2">
+      <div className="border-b bg-card/70 px-6 py-4">
+        <div className="mx-auto max-w-7xl space-y-1">
           <p className="text-xs font-semibold uppercase tracking-[0.3em] text-muted-foreground">Operator Console</p>
-          <div>
+          <div className="flex flex-wrap items-end justify-between gap-3">
             <h1 className="text-3xl font-semibold tracking-tight">Pipeline Wizard</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Guided execution through ingest, planning, apply, canonical recompute, and enrichment, with checkpoints that explain what each stage does before you move forward.
-            </p>
-            <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-              This wizard is designed to help operators understand the purpose of each stage, not just run the APIs in order. Execution steps perform work; review checkpoints exist so you can confirm results before the next stage begins.
+            <p className="max-w-3xl text-sm text-muted-foreground">
+              Guided ingest, planning, apply, chosen-version review, and enrichment with short checkpoints between stages.
             </p>
           </div>
         </div>
@@ -1859,11 +1884,31 @@ export default function PipelineWizard() {
             previousTitle={previousStepTitle}
             nextTitle={nextStepTitle}
             items={progressItems}
+            secondaryAction={
+              currentStepId === "summary" ? null : (
+                <Button type="button" variant="ghost" onClick={() => setConfirmAbortOpen(true)}>
+                  <XCircle className="mr-2 h-4 w-4" />
+                  Abort Wizard
+                </Button>
+              )
+            }
           />
         }
       >
         {renderCurrentStep()}
       </WizardLayout>
+
+      <ConfirmDialog
+        open={confirmAbortOpen}
+        onOpenChange={setConfirmAbortOpen}
+        title="Abort Wizard?"
+        description="This will leave the guided flow and reset the current wizard state. Completed operation results remain in the system, but this guided session will be cleared."
+        destructive
+        onConfirm={() => {
+          abortWizard();
+          setConfirmAbortOpen(false);
+        }}
+      />
 
       <ConfirmDialog
         open={confirmingStep === "apply"}
@@ -1922,7 +1967,11 @@ export default function PipelineWizard() {
 
 function MetricGrid({ items }: { items: Array<{ label: string; value: string | number }> }) {
   return (
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+    <div
+      className={`grid gap-3 ${
+        items.length <= 3 ? "md:grid-cols-3" : "sm:grid-cols-2 xl:grid-cols-4"
+      }`}
+    >
       {items.map((metric) => (
         <Card key={metric.label}>
           <CardContent className="p-4">
@@ -1935,22 +1984,41 @@ function MetricGrid({ items }: { items: Array<{ label: string; value: string | n
   );
 }
 
-function InlineLinks({ links }: { links: Array<{ label: string; to: string }> }) {
+function CollapsibleSection({
+  title,
+  defaultOpen = false,
+  tone = "default",
+  children,
+}: {
+  title: string;
+  defaultOpen?: boolean;
+  tone?: "default" | "context";
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap gap-3">
-        {links.map((link) => (
-          <Button
-            key={link.to}
-            type="button"
-            variant="outline"
-            onClick={() => window.open(link.to, "_blank", "noopener,noreferrer")}
-          >
-            {link.label}
-          </Button>
-        ))}
+      <div className="flex justify-start">
+        <Button type="button" variant="outline" size="sm" onClick={() => setOpen((current) => !current)}>
+          {open ? (
+            <>
+              <ChevronUp className="mr-2 h-4 w-4" />
+              Hide section
+            </>
+          ) : (
+            <>
+              <ChevronDown className="mr-2 h-4 w-4" />
+              {title}
+            </>
+          )}
+        </Button>
       </div>
-      <p className="text-xs text-muted-foreground">Opens in a new tab so your wizard progress stays here.</p>
+      {open && (
+        <div className={tone === "context" ? "rounded-xl border border-border/60 bg-muted/[0.08] p-4" : ""}>
+          {children}
+        </div>
+      )}
     </div>
   );
 }

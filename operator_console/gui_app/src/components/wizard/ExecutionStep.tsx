@@ -68,6 +68,8 @@ export function ExecutionStep({
 
         {children}
         {guidance}
+        {error && <ErrorAlert message={error} />}
+        {result}
 
         <div className="flex flex-wrap items-center gap-3">
           {preferContinue ? (
@@ -93,8 +95,6 @@ export function ExecutionStep({
           )}
         </div>
 
-        {error && <ErrorAlert message={error} />}
-        {result}
         {footer}
       </CardContent>
     </Card>
