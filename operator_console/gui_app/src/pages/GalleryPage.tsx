@@ -2,15 +2,14 @@ import { useMemo, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { ErrorAlert } from "@/components/ErrorAlert";
-import { EmptyState } from "@/components/EmptyState";
-import { StatusBadge } from "@/components/StatusBadge";
+import { MediaGrid } from "@/components/media/MediaGrid";
+import { MediaPreviewModal } from "@/components/media/MediaPreviewModal";
+import { Button } from "@/components/ui/button";
 import { getCanonical } from "@/lib/api/endpoints";
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
 import type { CanonicalFile, PaginatedResponse } from "@/types/api";
-import { ImageIcon, Video, FileIcon } from "lucide-react";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { ChevronLeft, ChevronRight, Images } from "lucide-react";
 
 function getErrorMessage(err: unknown): string | null {
   if (!err) return null;
@@ -39,14 +38,37 @@ export default function GalleryPage() {
   });
 
   const data = (galleryQuery.data as PaginatedResponse<CanonicalFile> | undefined) ?? null;
-
-  const isVideo = (fileType: string) => fileType === "video";
+  const items = data?.items ?? [];
+  const videoCount = items.filter((file) => file.file_type === "video").length;
+  const imageCount = items.length - videoCount;
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Gallery</h1>
-        <p className="text-sm text-muted-foreground mt-1">Canonical media browser</p>
+    <div className="mx-auto flex max-w-7xl flex-col gap-6 p-6">
+      <div className="overflow-hidden rounded-[28px] border border-border/70 bg-[linear-gradient(135deg,hsl(var(--card))_0%,hsl(var(--card))_35%,hsl(var(--secondary)/0.65)_100%)] shadow-sm">
+        <div className="grid gap-6 px-6 py-8 lg:grid-cols-[minmax(0,1.4fr)_20rem] lg:px-8">
+          <div className="space-y-4">
+            <div className="inline-flex items-center gap-2 rounded-full border border-border/80 bg-background/80 px-3 py-1 text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">
+              <Images className="h-3.5 w-3.5" />
+              Canonical media
+            </div>
+            <div className="space-y-2">
+              <h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
+                Gallery
+              </h1>
+              <p className="max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
+                Browse the current canonical media set with the existing API-backed query flow. This
+                refresh is visual only, so paging, selection, and preview behavior stay on the local
+                runtime contract.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
+            <MetricTile label="Visible items" value={String(items.length)} />
+            <MetricTile label="Images" value={String(imageCount)} />
+            <MetricTile label="Videos" value={String(videoCount)} />
+          </div>
+        </div>
       </div>
 
       {galleryQuery.error && (
@@ -55,136 +77,62 @@ export default function GalleryPage() {
         />
       )}
 
-      {galleryQuery.isLoading && !data ? (
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-          {Array.from({ length: 18 }).map((_, i) => (
-            <Skeleton key={i} className="aspect-square rounded-lg" />
-          ))}
-        </div>
-      ) : !data?.items.length ? (
-        <EmptyState
-          icon={<ImageIcon className="h-10 w-10" />}
-          title="No media files"
-          description="Run an ingest to populate the gallery"
-        />
-      ) : (
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-          {data.items.map(file => (
-            <button
-              key={file.id}
-              onClick={() => setSelectedFile(file)}
-              className="rounded-lg border bg-card overflow-hidden hover:border-primary/30 transition-colors group text-left"
-            >
-              <div className="aspect-square bg-muted flex items-center justify-center overflow-hidden relative">
-                {file.media_url ? (
-                  <img
-                    src={file.media_url}
-                    alt={file.filename}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                  />
-                ) : isVideo(file.file_type) ? (
-                  <Video className="h-8 w-8 text-muted-foreground" />
-                ) : (
-                  <ImageIcon className="h-8 w-8 text-muted-foreground" />
-                )}
-                {isVideo(file.file_type) && (
-                  <span className="absolute top-2 right-2 bg-card/80 backdrop-blur rounded px-1.5 py-0.5 text-[10px] font-semibold">
-                    VIDEO
-                  </span>
-                )}
-              </div>
-              <div className="p-2">
-                <p className="text-xs font-mono truncate text-muted-foreground">{file.filename}</p>
-              </div>
-            </button>
-          ))}
-        </div>
-      )}
+      <MediaGrid
+        files={items}
+        loading={galleryQuery.isLoading && !data}
+        emptyTitle="No media files"
+        emptyDescription="Run an ingest to populate the gallery."
+        onSelect={setSelectedFile}
+      />
 
       {data && data.total_pages > 1 && (
-        <div className="flex items-center justify-center gap-2">
-          <button
+        <div className="flex flex-col gap-3 rounded-2xl border bg-card/80 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-medium text-foreground">Gallery page {page}</p>
+            <p className="text-sm text-muted-foreground">
+              Showing {items.length} items on this page out of {data.total_pages} total pages.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 self-end sm:self-auto">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
             onClick={() => setSearchParams({ page: String(Math.max(1, page - 1)) })}
             disabled={page === 1}
-            className="px-3 py-1 text-sm rounded border disabled:opacity-50"
           >
-            Prev
-          </button>
-          <span className="text-xs text-muted-foreground">
-            Page {page} of {data.total_pages}
-          </span>
-          <button
+              <ChevronLeft className="mr-1 h-4 w-4" />
+              Prev
+            </Button>
+            <span className="min-w-24 text-center text-xs text-muted-foreground">
+              Page {page} of {data.total_pages}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
             onClick={() =>
               setSearchParams({ page: String(Math.min(data.total_pages, page + 1)) })
             }
             disabled={page === data.total_pages}
-            className="px-3 py-1 text-sm rounded border disabled:opacity-50"
           >
-            Next
-          </button>
+              Next
+              <ChevronRight className="ml-1 h-4 w-4" />
+            </Button>
+          </div>
         </div>
       )}
 
-      <Dialog open={!!selectedFile} onOpenChange={() => setSelectedFile(null)}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-auto">
-          {selectedFile && (
-            <div className="space-y-4">
-              <div className="aspect-video bg-muted rounded-lg flex items-center justify-center overflow-hidden">
-                {selectedFile.media_url ? (
-                  isVideo(selectedFile.file_type) ? (
-                    <video
-                      src={selectedFile.media_url}
-                      controls
-                      className="w-full h-full object-contain"
-                    />
-                  ) : (
-                    <img
-                      src={selectedFile.media_url}
-                      alt={selectedFile.filename}
-                      className="w-full h-full object-contain"
-                    />
-                  )
-                ) : (
-                  <FileIcon className="h-16 w-16 text-muted-foreground" />
-                )}
-              </div>
-              <div className="space-y-3">
-                <h3 className="font-semibold">{selectedFile.filename}</h3>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div>
-                    <span className="text-muted-foreground">Media URL:</span>
-                    <p className="font-mono text-xs mt-0.5 break-all">{selectedFile.media_url}</p>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">ID:</span>
-                    <p className="font-mono text-xs mt-0.5 break-all">{selectedFile.id}</p>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Type:</span>
-                    <p className="text-xs mt-0.5">{selectedFile.file_type}</p>
-                  </div>
-                </div>
-                {selectedFile.matched_tags && selectedFile.matched_tags.length > 0 && (
-                  <div>
-                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-                      Tags
-                    </p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {selectedFile.matched_tags.map(tag => (
-                        <StatusBadge
-                          key={tag}
-                          label={`${tag} (${((selectedFile.top_confidence_score ?? 0) * 100).toFixed(0)}%)`}
-                          severity="info"
-                        />
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+      <MediaPreviewModal file={selectedFile} onClose={() => setSelectedFile(null)} />
+    </div>
+  );
+}
+
+function MetricTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-border/70 bg-background/80 p-4 shadow-sm backdrop-blur">
+      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">{label}</p>
+      <p className="mt-2 text-2xl font-semibold text-foreground">{value}</p>
     </div>
   );
 }
