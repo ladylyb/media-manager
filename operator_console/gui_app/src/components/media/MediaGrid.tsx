@@ -9,7 +9,8 @@ interface MediaGridProps {
   loading?: boolean;
   emptyTitle?: string;
   emptyDescription?: string;
-  onSelect?: (file: CanonicalFile) => void;
+  onPreview?: (file: CanonicalFile) => void;
+  getDetailHref?: (file: CanonicalFile) => string;
 }
 
 export function MediaGrid({
@@ -17,7 +18,8 @@ export function MediaGrid({
   loading = false,
   emptyTitle = "No media found",
   emptyDescription = "Run an ingest to populate the gallery",
-  onSelect,
+  onPreview,
+  getDetailHref,
 }: MediaGridProps) {
   if (loading) {
     return (
@@ -47,9 +49,14 @@ export function MediaGrid({
   }
 
   return (
-    <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
       {files.map((file) => (
-        <MediaCard key={file.id} file={file} onClick={() => onSelect?.(file)} />
+        <MediaCard
+          key={file.id}
+          file={file}
+          onPreview={() => onPreview?.(file)}
+          detailHref={getDetailHref?.(file)}
+        />
       ))}
     </div>
   );

@@ -1,15 +1,16 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { ErrorAlert } from "@/components/ErrorAlert";
 import { MediaGrid } from "@/components/media/MediaGrid";
 import { MediaPreviewModal } from "@/components/media/MediaPreviewModal";
 import { Button } from "@/components/ui/button";
-import { getCanonical } from "@/lib/api/endpoints";
+import { Input } from "@/components/ui/input";
+import { getCanonical, getCanonicalTags } from "@/lib/api/endpoints";
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
-import type { CanonicalFile, PaginatedResponse } from "@/types/api";
-import { ChevronLeft, ChevronRight, Images } from "lucide-react";
+import type { CanonicalFile, PaginatedResponse, Tag } from "@/types/api";
+import { ArrowUpDown, ChevronLeft, ChevronRight, Images, Loader2, Search, X } from "lucide-react";
 
 function getErrorMessage(err: unknown): string | null {
   if (!err) return null;
@@ -20,15 +21,51 @@ function getErrorMessage(err: unknown): string | null {
 export default function GalleryPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedFile, setSelectedFile] = useState<CanonicalFile | null>(null);
+  const [tagInput, setTagInput] = useState("");
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const tagsParam = searchParams.get("tags") || "";
+  const selectedTags = tagsParam.split(",").filter(Boolean);
+  const sortBy = searchParams.get("sort_by") || "created_at";
+  const sortOrder = searchParams.get("sort_order") || "desc";
   const page = Number(searchParams.get("page") || 1);
+
+  const updateParams = (updates: Record<string, string | undefined>) => {
+    const next = new URLSearchParams(searchParams);
+    Object.entries(updates).forEach(([key, value]) => {
+      if (value) next.set(key, value);
+      else next.delete(key);
+    });
+    setSearchParams(next);
+  };
+
+  const addTag = (tag: string) => {
+    if (!tag.trim() || selectedTags.includes(tag)) return;
+    updateParams({ tags: [...selectedTags, tag].join(","), page: "1" });
+    setTagInput("");
+    setSuggestions([]);
+  };
+
+  const removeTag = (tag: string) => {
+    const nextTags = selectedTags.filter((item) => item !== tag);
+    updateParams({ tags: nextTags.length ? nextTags.join(",") : undefined, page: "1" });
+  };
 
   const canonicalParams = useMemo(
     () => ({
       page,
       limit: 30,
+      tags: tagsParam || undefined,
+      sort_by: sortBy,
+      sort_order: sortOrder,
     }),
-    [page],
+    [page, sortBy, sortOrder, tagsParam],
   );
+
+  const tagsQuery = useQuery({
+    queryKey: queryKeys.canonicalTags(""),
+    queryFn: async () => (await getCanonicalTags()).data,
+    staleTime: queryOptions.canonicalTags.staleTime,
+  });
 
   const galleryQuery = useQuery({
     queryKey: queryKeys.canonical(canonicalParams),
@@ -41,6 +78,24 @@ export default function GalleryPage() {
   const items = data?.items ?? [];
   const videoCount = items.filter((file) => file.file_type === "video").length;
   const imageCount = items.length - videoCount;
+  const allTags = (tagsQuery.data as Tag[] | undefined) ?? [];
+
+  useEffect(() => {
+    if (!tagInput) {
+      setSuggestions([]);
+      return;
+    }
+
+    const nextSuggestions = allTags
+      .map((tag) => tag.name)
+      .filter(
+        (name) =>
+          name.toLowerCase().includes(tagInput.toLowerCase()) &&
+          !selectedTags.includes(name),
+      )
+      .slice(0, 8);
+    setSuggestions(nextSuggestions);
+  }, [allTags, selectedTags, tagInput]);
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-6 p-6">
@@ -56,9 +111,8 @@ export default function GalleryPage() {
                 Gallery
               </h1>
               <p className="max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
-                Browse the current canonical media set with the existing API-backed query flow. This
-                refresh is visual only, so paging, selection, and preview behavior stay on the local
-                runtime contract.
+                Browse the current canonical media set with tag filters, sort controls, preview, and
+                a dedicated detail route while staying on the existing API-backed query flow.
               </p>
             </div>
           </div>
@@ -71,18 +125,106 @@ export default function GalleryPage() {
         </div>
       </div>
 
-      {galleryQuery.error && (
+      {galleryQuery.error ? (
         <ErrorAlert
           message={getErrorMessage(galleryQuery.error) || "Failed to load gallery"}
         />
-      )}
+      ) : null}
+
+      <div className="rounded-[28px] border border-border/70 bg-card/70 p-4 shadow-sm backdrop-blur">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-1 flex-col gap-3">
+            <div className="relative max-w-md">
+              <Input
+                value={tagInput}
+                onChange={(event) => setTagInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && tagInput) {
+                    event.preventDefault();
+                    addTag(tagInput);
+                  }
+                }}
+                placeholder="Filter gallery by tag"
+                className="pl-9"
+              />
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              {suggestions.length ? (
+                <div className="absolute left-0 right-0 top-full z-10 mt-2 overflow-hidden rounded-2xl border border-border bg-popover shadow-lg">
+                  {suggestions.map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      type="button"
+                      onClick={() => addTag(suggestion)}
+                      className="block w-full px-4 py-2 text-left text-sm hover:bg-muted"
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {selectedTags.length ? (
+                selectedTags.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => removeTag(tag)}
+                    className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-medium text-primary"
+                  >
+                    {tag}
+                    <X className="h-3 w-3" />
+                  </button>
+                ))
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  No tags selected. Use the search box to narrow the gallery.
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 self-start lg:self-auto">
+            {galleryQuery.isFetching ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
+            <select
+              value={sortBy}
+              onChange={(event) => updateParams({ sort_by: event.target.value, page: "1" })}
+              className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="created_at">Created</option>
+              <option value="tag_name">Tag</option>
+              <option value="confidence_score">Confidence</option>
+            </select>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                updateParams({
+                  sort_order: sortOrder === "asc" ? "desc" : "asc",
+                  page: "1",
+                })
+              }
+            >
+              <ArrowUpDown className="mr-2 h-4 w-4" />
+              {sortOrder === "asc" ? "Ascending" : "Descending"}
+            </Button>
+          </div>
+        </div>
+      </div>
 
       <MediaGrid
         files={items}
         loading={galleryQuery.isLoading && !data}
         emptyTitle="No media files"
-        emptyDescription="Run an ingest to populate the gallery."
-        onSelect={setSelectedFile}
+        emptyDescription={
+          selectedTags.length
+            ? "Try adjusting your tag filters or sort order."
+            : "Run an ingest to populate the gallery."
+        }
+        onPreview={setSelectedFile}
+        getDetailHref={(file) => `/gallery/${file.id}`}
       />
 
       {data && data.total_pages > 1 && (
@@ -98,9 +240,11 @@ export default function GalleryPage() {
               type="button"
               variant="outline"
               size="sm"
-            onClick={() => setSearchParams({ page: String(Math.max(1, page - 1)) })}
-            disabled={page === 1}
-          >
+              onClick={() =>
+                updateParams({ page: String(Math.max(1, page - 1)) })
+              }
+              disabled={page === 1}
+            >
               <ChevronLeft className="mr-1 h-4 w-4" />
               Prev
             </Button>
@@ -111,11 +255,11 @@ export default function GalleryPage() {
               type="button"
               variant="outline"
               size="sm"
-            onClick={() =>
-              setSearchParams({ page: String(Math.min(data.total_pages, page + 1)) })
-            }
-            disabled={page === data.total_pages}
-          >
+              onClick={() =>
+                updateParams({ page: String(Math.min(data.total_pages, page + 1)) })
+              }
+              disabled={page === data.total_pages}
+            >
               Next
               <ChevronRight className="ml-1 h-4 w-4" />
             </Button>

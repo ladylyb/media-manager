@@ -75,10 +75,15 @@ Implemented on branch `feat/gui-operations-ux-polish`:
 - preserved the current local execution model, confirmation behavior, and invalidation wiring
 - intentionally kept `/api/operations/catalog` unused in this slice
 
+Implemented on branch `feat/gui-gallery-detail-consolidation`:
+
+- merged discover filtering and sorting into `GalleryPage`
+- removed standalone discover navigation and treated `/discover` as compatibility routing into the gallery experience
+- added a dedicated client-side media detail route at `/gallery/:fileId`
+- kept the existing API-only runtime model and introduced only a thin canonical-gallery detail read for deep-link support
+
 Still intentionally not implemented:
 
-- `MediaDetail` route work
-- discover-to-gallery consolidation
 - type/module splitting into `media.ts` / `runs.ts`
 - envelope extraction or alternate data hooks
 
@@ -92,6 +97,8 @@ MTM assessment:
   entrypoints are the standard operator-console routes
 - operations-page UX adoption is now complete without moving execution control
   out of the local runtime layer
+- discover-to-gallery consolidation and media-detail adoption are now complete
+  on top of the current API-only runtime model
 - high-risk API/data/admin ownership areas remain correctly untouched
 
 ## High-Risk Local Ownership Areas
@@ -154,13 +161,13 @@ Classification legend:
 | `operator_console/gui_upstream/src/lib/api/envelope.ts` | `manual UX adaptation candidate` | Envelope factoring is structurally interesting, but only if reimplemented around the local `/api` contract rather than copied directly. |
 | `operator_console/gui_upstream/src/pages/Admin.tsx` | `do not port` | Local admin is significantly richer and bound to service-layer-backed DB reset, observability, and benchmark flows. |
 | `operator_console/gui_upstream/src/pages/Dashboard.tsx` | `manual UX adaptation candidate` | Dashboard layout ideas may be useful, but local metrics and operation wiring are now repo-specific. Implemented locally on `feat/gui-page-ux-polish` as composition-only UX refresh without API-hook changes. |
-| `operator_console/gui_upstream/src/pages/DiscoverPage.tsx` | `manual UX adaptation candidate` | Upstream removed this page, so the main question is whether local discover functionality should stay standalone or merge into gallery later. |
+| `operator_console/gui_upstream/src/pages/DiscoverPage.tsx` | `implemented` | Local UX now consolidates discover filtering into `GalleryPage` and routes `/discover` into that experience for compatibility. |
 | `operator_console/gui_upstream/src/pages/Duplicates.tsx` | `manual UX adaptation candidate` | The page refactor may improve presentation, but local duplicate-group data mapping must stay intact. Implemented locally on `feat/gui-page-ux-polish` as presentation/detail-panel refresh while preserving current duplicate-group mapping. |
 | `operator_console/gui_upstream/src/pages/Gallery.tsx` | `manual UX adaptation candidate` | Gallery UX ideas are relevant, but local gallery already maps canonical payloads and modal detail behavior. |
 | `operator_console/gui_upstream/src/pages/GalleryPage.tsx` | `ignore` | Historical upstream file removed by the refactor; no direct port needed. |
 | `operator_console/gui_upstream/src/pages/Index.tsx` | `ignore` | Historical scaffold file removed upstream; no local value. |
 | `operator_console/gui_upstream/src/pages/Ledger.tsx` | `manual UX adaptation candidate` | Page structure may inspire cleanup, but local ledger endpoints and analytics mapping are canonical. |
-| `operator_console/gui_upstream/src/pages/MediaDetail.tsx` | `manual UX adaptation candidate` | A dedicated media-detail route could be useful later, but it is a product decision and must be built around local canonical-media models. |
+| `operator_console/gui_upstream/src/pages/MediaDetail.tsx` | `implemented` | Local media detail now exists at `/gallery/:fileId`, built around the durable `file_id` model instead of upstream hash-based lookup. |
 | `operator_console/gui_upstream/src/pages/Operations.tsx` | `manual UX adaptation candidate` | The upstream reshaping of operations UI is worth reviewing, but local operation execution, invalidation, and safety affordances must remain canonical. |
 | `operator_console/gui_upstream/src/pages/OperationsPage.tsx` | `ignore` | Historical upstream file removed by the refactor; only useful as context while reviewing the new operations page. |
 | `operator_console/gui_upstream/src/pages/Policy.tsx` | `manual UX adaptation candidate` | Policy-editor presentation may be portable, but local policy payloads and save semantics are backend-owned. Implemented locally on `feat/gui-page-ux-polish` as editor/layout polish only; local save semantics remain canonical. |
@@ -182,8 +189,7 @@ Completed:
 
 Recommended next:
 
-5. optional product decision on `MediaDetail` and discover-to-gallery consolidation
-6. code-organization-only follow-up: type/module splitting and any envelope factoring, if still valuable after the UI work settles
+5. code-organization-only follow-up: type/module splitting and any envelope factoring, if still valuable after the UI work settles
 
 Do not start with API, types, admin pages, or alternate data hooks.
 
@@ -215,4 +221,10 @@ Do not start with API, types, admin pages, or alternate data hooks.
   - `bash tools/ci/check_gui_sync_boundary.sh`
   - `bash tools/ci/check_gui_app_api_client_contract.sh`
   - `bash tools/ci/check_supported_tooling_api_boundary.sh`
+  - `npm run build`
+- Gallery/detail consolidation on `feat/gui-gallery-detail-consolidation` should pass:
+  - `bash tools/ci/check_gui_sync_boundary.sh`
+  - `bash tools/ci/check_gui_app_api_client_contract.sh`
+  - `bash tools/ci/check_supported_tooling_api_boundary.sh`
+  - `pytest operator_console/tests/test_main.py -k "gallery or discover"` with a working local pytest environment
   - `npm run build`
