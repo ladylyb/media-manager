@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
@@ -52,6 +52,7 @@ import {
 } from "@/lib/api/endpoints";
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
+import { cn } from "@/lib/utils";
 import type {
   CanonicalFile,
   DirectoryPickerCapability,
@@ -539,6 +540,8 @@ export default function PipelineWizard() {
   const [confirmingStep, setConfirmingStep] = useState<ExecutionStepId | null>(null);
   const [pickerTarget, setPickerTarget] = useState<"ingest" | "plan" | null>(null);
   const [confirmAbortOpen, setConfirmAbortOpen] = useState(false);
+  const [ingestFolderValidationError, setIngestFolderValidationError] = useState<string | null>(null);
+  const ingestFolderInputRef = useRef<HTMLInputElement | null>(null);
 
   const currentStepId = wizardState.currentStepId;
   const currentMeta = STEP_META[currentStepId];
@@ -612,7 +615,20 @@ export default function PipelineWizard() {
     }));
   };
 
+  const updateIngestFolderPath = (folderPath: string) => {
+    updateStepInput("ingest", { folder_path: folderPath });
+    if (folderPath.trim()) {
+      setIngestFolderValidationError(null);
+    }
+  };
+
   const runExecutionStep = async (stepId: ExecutionStepId) => {
+    if (stepId === "ingest" && !wizardState.steps.ingest.input.folder_path.trim()) {
+      setIngestFolderValidationError("Choose a folder before running Ingest.");
+      ingestFolderInputRef.current?.focus();
+      return;
+    }
+
     setWizardState((current) => ({
       ...current,
       steps: {
@@ -1286,9 +1302,12 @@ export default function PipelineWizard() {
               <div className="flex gap-2">
                 <Input
                   id="ingest-folder"
+                  ref={ingestFolderInputRef}
                   value={state.input.folder_path}
-                  onChange={(event) => updateStepInput("ingest", { folder_path: event.target.value })}
+                  onChange={(event) => updateIngestFolderPath(event.target.value)}
                   placeholder="/media/incoming"
+                  aria-invalid={Boolean(ingestFolderValidationError)}
+                  className={cn(ingestFolderValidationError && "border-destructive focus-visible:ring-destructive")}
                 />
                 {directoryPickerEnabled && (
                   <Button type="button" variant="outline" onClick={() => setPickerTarget("ingest")}>
@@ -1297,6 +1316,9 @@ export default function PipelineWizard() {
                   </Button>
                 )}
               </div>
+              {ingestFolderValidationError && (
+                <p className="text-sm text-destructive">{ingestFolderValidationError}</p>
+              )}
               {directoryPickerCapabilityQuery.error && (
                 <p className="text-xs text-muted-foreground">
                   Directory picker unavailable: {parseError(directoryPickerCapabilityQuery.error)}
@@ -1958,6 +1980,10 @@ export default function PipelineWizard() {
         initialPath={pickerTarget ? wizardState.steps[pickerTarget].input.folder_path : ""}
         onSelect={(path) => {
           if (!pickerTarget) return;
+          if (pickerTarget === "ingest") {
+            updateIngestFolderPath(path);
+            return;
+          }
           updateStepInput(pickerTarget, { folder_path: path });
         }}
       />
