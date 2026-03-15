@@ -1,4 +1,7 @@
 export const queryOptions = {
+  home: {
+    staleTime: 30_000,
+  },
   status: {
     staleTime: 0,
   },

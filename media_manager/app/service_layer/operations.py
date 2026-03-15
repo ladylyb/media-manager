@@ -117,7 +117,7 @@ class OperationServices:
                 "summary": service.ingest_path(folder).to_dict(),
             }
             self._op_runs().complete(UUID(run_log.operation_run_id))
-            self.cache.invalidate("dashboard_summary", "latest_metrics", "status", "runs")
+            self.cache.invalidate("dashboard_summary", "latest_metrics", "status", "runs", "home")
             return result
         except Exception as exc:
             self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))
@@ -139,7 +139,7 @@ class OperationServices:
             self._op_runs().link_run(UUID(run_log.operation_run_id), linked_run_id=run.id)
             summary = planner.plan_run(run.id, files, ingest_if_needed=False, strict_missing_metadata=strict_metadata)
             self._op_runs().complete(UUID(run_log.operation_run_id))
-            self.cache.invalidate("runs", "latest_metrics", "status", "dashboard_summary")
+            self.cache.invalidate("runs", "latest_metrics", "status", "dashboard_summary", "home")
             return {
                 "operation": "PLAN",
                 "operation_run_id": run_log.operation_run_id,
@@ -166,7 +166,7 @@ class OperationServices:
         try:
             summary = ApplyService(self.session_factory).apply_run(parsed_run_id, collision_mode=collision_mode)  # type: ignore[arg-type]
             self._op_runs().complete(UUID(run_log.operation_run_id))
-            self.cache.invalidate("dashboard_summary", "latest_metrics", "runs", "status")
+            self.cache.invalidate("dashboard_summary", "latest_metrics", "runs", "status", "home")
             return {
                 "operation": "APPLY",
                 "operation_run_id": run_log.operation_run_id,
@@ -205,7 +205,7 @@ class OperationServices:
             )
             self._op_runs().complete(UUID(run_log.operation_run_id))
             if not dry_run:
-                self.cache.invalidate("latest_metrics", "status", "runs")
+                self.cache.invalidate("latest_metrics", "status", "runs", "home")
             return {
                 "operation": "CANONICAL_RECOMPUTE",
                 "operation_run_id": run_log.operation_run_id,
@@ -245,7 +245,7 @@ class OperationServices:
                 except Exception:
                     pass
             self._op_runs().complete(UUID(run_log.operation_run_id))
-            self.cache.invalidate("dashboard_summary", "latest_metrics", "status", "runs")
+            self.cache.invalidate("dashboard_summary", "latest_metrics", "status", "runs", "home")
             return {**result, "operation_run_id": run_log.operation_run_id}
         except Exception as exc:
             self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))
@@ -414,7 +414,7 @@ class OperationServices:
                 ),
             )
             self._op_runs().complete(UUID(run_log.operation_run_id))
-            self.cache.invalidate("latest_metrics", "status", "runs")
+            self.cache.invalidate("latest_metrics", "status", "runs", "home")
             return {**summary.to_dict(), "operation_run_id": run_log.operation_run_id}
         except Exception as exc:
             self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))

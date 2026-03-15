@@ -10,11 +10,13 @@ from typing import Any
 from sqlalchemy import func, select
 
 from media_manager.app.persistence.models import (
+    CanonicalTag,
     FailureEvent,
     MediaFileStatus,
     OperationRun,
     OperationRunStatus,
     OperationRunType,
+    Tag,
     TagSource,
 )
 from media_manager.app.persistence.operator_console import OperatorConsoleReadService
@@ -48,6 +50,7 @@ class ReadServices:
                 "runs",
                 "operation_runs",
                 "internal_runs",
+                "home",
                 "latest_metrics",
                 "canonical",
                 "duplicates",
@@ -67,6 +70,111 @@ class ReadServices:
         }
         self.cache.set("status", payload, ttl_s=5)
         return dict(payload)
+
+    def home(self) -> dict[str, object]:
+        cache_key = "home"
+        cached = self.cache.get(cache_key)
+        if isinstance(cached, dict):
+            return dict(cached)
+
+        summary = self._read_service.get_dashboard_summary().to_dict()
+        latest_metrics = self._read_service.get_latest_metrics().to_dict()
+        phase = compute_phase_metadata(self.session_factory)
+        recent_images_page = self._read_service.get_canonical_gallery(
+            page=1,
+            limit=4,
+            sort_by="created_at",
+            file_type="image",
+        )
+        recent_videos_page = self._read_service.get_canonical_gallery(
+            page=1,
+            limit=4,
+            sort_by="created_at",
+            file_type="video",
+        )
+        recent_activity = [item.to_dict() for item in self._read_service.get_run_history(limit=4)]
+
+        with self.session_factory() as session:
+            failed_runs = int(
+                session.scalar(
+                    select(func.count()).select_from(OperationRun).where(OperationRun.status == OperationRunStatus.FAILED)
+                )
+                or 0
+            )
+            active_runs = int(
+                session.scalar(
+                    select(func.count()).select_from(OperationRun).where(OperationRun.status == OperationRunStatus.STARTED)
+                )
+                or 0
+            )
+            tagged_canonical_assets = int(
+                session.scalar(select(func.count(func.distinct(CanonicalTag.canonical_id))).select_from(CanonicalTag))
+                or 0
+            )
+
+            tag_asset_count = func.count(func.distinct(CanonicalTag.canonical_id))
+            top_tag_rows = session.execute(
+                select(
+                    Tag.name,
+                    tag_asset_count.label("asset_count"),
+                )
+                .join(CanonicalTag, CanonicalTag.tag_id == Tag.id)
+                .group_by(Tag.id, Tag.name)
+                .order_by(tag_asset_count.desc(), Tag.name.asc())
+                .limit(6)
+            ).all()
+
+        canonical_assets = int(summary.get("canonical_files", 0) or 0)
+        untagged_assets = max(canonical_assets - tagged_canonical_assets, 0)
+        last_run_status = recent_activity[0]["status"] if recent_activity else "UNKNOWN"
+        last_run_type = recent_activity[0]["operation_type"] if recent_activity else None
+
+        payload = {
+            "library_summary": {
+                "total_assets": int(summary.get("total_files", 0) or 0),
+                "images": int(summary.get("total_images", 0) or 0),
+                "videos": int(summary.get("total_videos", 0) or 0),
+                "duplicate_groups": int(summary.get("duplicate_groups", 0) or 0),
+                "canonical_assets": canonical_assets,
+                "recent_import_count": len(recent_activity),
+            },
+            "recent_media": [
+                *[item.to_dict() for item in recent_images_page.items],
+                *[item.to_dict() for item in recent_videos_page.items],
+            ],
+            "recent_images": [item.to_dict() for item in recent_images_page.items],
+            "recent_videos": [item.to_dict() for item in recent_videos_page.items],
+            "attention_summary": {
+                "duplicate_groups": int(summary.get("duplicate_groups", 0) or 0),
+                "failed_runs": failed_runs,
+                "active_runs": active_runs,
+                "untagged_assets": untagged_assets,
+                "unresolved_items": failed_runs + active_runs + untagged_assets,
+            },
+            "recent_activity": recent_activity,
+            "collections": [
+                {
+                    "label": str(name),
+                    "kind": "tag",
+                    "asset_count": int(asset_count or 0),
+                }
+                for name, asset_count in top_tag_rows
+            ],
+            "status_strip": {
+                "workflow_label": "Guided workflow available",
+                "active_phase": phase.active_phase,
+                "last_run_status": last_run_status,
+                "last_run_type": last_run_type,
+                "regression_status": str(latest_metrics.get("last_regression_status", "UNKNOWN") or "UNKNOWN"),
+            },
+            "guided_entry": {
+                "label": "Open Organize Media",
+                "route": "/pipeline-wizard",
+                "helper": "Guided ingest, planning, apply, and review",
+            },
+        }
+        self.cache.set(cache_key, payload, ttl_s=5)
+        return payload
 
     def dashboard_summary(self) -> dict[str, object]:
         cached = self.cache.get("dashboard_summary")
