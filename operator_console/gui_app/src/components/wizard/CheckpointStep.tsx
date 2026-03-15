@@ -7,6 +7,7 @@ interface CheckpointStepProps {
   title: string;
   description: string;
   categoryLabel?: string;
+  tone?: "review" | "completion";
   onContinue: () => void;
   onRerun?: (() => void) | null;
   onAbort?: (() => void) | null;
@@ -21,6 +22,7 @@ export function CheckpointStep({
   title,
   description,
   categoryLabel = "Review Checkpoint",
+  tone = "review",
   onContinue,
   onRerun,
   onAbort,
@@ -30,8 +32,13 @@ export function CheckpointStep({
   showAbort = true,
   children,
 }: CheckpointStepProps) {
+  const cardClass =
+    tone === "completion"
+      ? "rounded-2xl border-success/20 bg-success/[0.03]"
+      : "rounded-2xl border-primary/15 bg-primary/[0.025]";
+
   return (
-    <Card className="rounded-2xl">
+    <Card className={cardClass}>
       <CardHeader>
         <CardDescription>{categoryLabel}</CardDescription>
         <CardTitle className="text-2xl">{title}</CardTitle>

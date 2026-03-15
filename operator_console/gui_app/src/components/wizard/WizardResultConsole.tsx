@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { JsonViewer } from "@/components/JsonViewer";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
@@ -49,6 +50,7 @@ export function WizardResultConsole({
 }: WizardResultConsoleProps) {
   const [technicalOpen, setTechnicalOpen] = useState(false);
   const [copiedReference, setCopiedReference] = useState<string | null>(null);
+  const [open, setOpen] = useState(true);
 
   const copyReference = async (label: string, value: string) => {
     try {
@@ -82,20 +84,35 @@ export function WizardResultConsole({
   return (
     <div className="space-y-3 rounded-xl border bg-card p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
+        <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold">{title}</p>
           <p className="text-xs text-muted-foreground">
             Stored results remain visible when revisiting a completed step.
           </p>
         </div>
-        <StatusBadge
-          label={status === "success" ? "Success" : "Failed"}
-          severity={status === "success" ? "success" : "destructive"}
-          dot
-        />
+        <div className="flex items-center gap-2">
+          <StatusBadge
+            label={status === "success" ? "Success" : "Failed"}
+            severity={status === "success" ? "success" : "destructive"}
+            dot
+          />
+          <Button type="button" variant="outline" size="sm" onClick={() => setOpen((current) => !current)}>
+            {open ? (
+              <>
+                <ChevronUp className="mr-2 h-4 w-4" />
+                Hide result
+              </>
+            ) : (
+              <>
+                <ChevronDown className="mr-2 h-4 w-4" />
+                Show result
+              </>
+            )}
+          </Button>
+        </div>
       </div>
 
-      {summaryLines.length > 0 && (
+      {open && summaryLines.length > 0 && (
         <div className={summaryClass}>
           <p className={summaryLabelClass}>
             What This Means
@@ -110,7 +127,7 @@ export function WizardResultConsole({
         </div>
       )}
 
-      {references.length > 0 && (
+      {open && references.length > 0 && (
         <div className="rounded-xl border border-border/70 bg-muted/15 p-4">
           <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
             Saved Plan
@@ -146,7 +163,7 @@ export function WizardResultConsole({
         </div>
       )}
 
-      {metrics.length > 0 && (
+      {open && metrics.length > 0 && (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {metrics.map((metric) => (
             <div key={metric.label} className="rounded-lg border bg-muted/20 p-3">
@@ -159,7 +176,7 @@ export function WizardResultConsole({
         </div>
       )}
 
-      {nextStepHint && (
+      {open && nextStepHint && (
         <div className={nextStepClass}>
           <p className={nextStepLabelClass}>
             Recommended Next Step
@@ -168,9 +185,9 @@ export function WizardResultConsole({
         </div>
       )}
 
-      {technicalDetailsMode === "inline" ? (
+      {open && technicalDetailsMode === "inline" ? (
         <JsonViewer data={payload} title="Response Payload" />
-      ) : (
+      ) : open ? (
         <>
           <div className="flex justify-start">
             <Button type="button" variant="outline" size="sm" onClick={() => setTechnicalOpen(true)}>
@@ -189,7 +206,7 @@ export function WizardResultConsole({
             </DialogContent>
           </Dialog>
         </>
-      )}
+      ) : null}
     </div>
   );
 }

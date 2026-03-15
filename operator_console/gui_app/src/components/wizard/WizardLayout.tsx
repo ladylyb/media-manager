@@ -1,17 +1,14 @@
 import type { ReactNode } from "react";
-import { WizardSidebar, type WizardSidebarItem } from "./WizardSidebar";
 
 interface WizardLayoutProps {
-  sidebarItems: WizardSidebarItem[];
+  header?: ReactNode;
   children: ReactNode;
 }
 
-export function WizardLayout({ sidebarItems, children }: WizardLayoutProps) {
+export function WizardLayout({ header, children }: WizardLayoutProps) {
   return (
-    <div className="mx-auto grid max-w-7xl gap-6 p-6 xl:grid-cols-[20rem_minmax(0,1fr)]">
-      <div className="xl:sticky xl:top-6 xl:self-start">
-        <WizardSidebar items={sidebarItems} />
-      </div>
+    <div className="mx-auto max-w-7xl space-y-6 p-6">
+      {header}
       <div className="min-w-0">{children}</div>
     </div>
   );
