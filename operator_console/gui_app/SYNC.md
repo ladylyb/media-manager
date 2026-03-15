@@ -44,7 +44,7 @@ npm ci
 npm run build
 ```
 
-4. Validate FastAPI dual-run behavior (`MEDIA_MANAGER_UI_V2_ENABLED` on/off).
+4. Validate the canonical FastAPI operator-console routes render the React shell.
 
 ## High-Risk Local Ownership Areas
 

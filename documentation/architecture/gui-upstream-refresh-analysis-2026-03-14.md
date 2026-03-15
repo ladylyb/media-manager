@@ -46,7 +46,7 @@ Implemented on branch `feat/gui-layout-and-routing-polish`:
   - `src/components/StatusBar.tsx`
 - SPA routing cleanup in `src/App.tsx`:
   - route table normalized into `appRoutes`
-  - `/console-v2` converted to a client-side compatibility redirect to `/`
+  - `/console-v2` was reduced to a temporary client-side compatibility redirect to `/` before full cutover
 
 Implemented on branch `feat/gui-page-ux-polish`:
 
@@ -61,6 +61,13 @@ Implemented on branch `feat/gui-page-ux-polish`:
   - detail/inspection panels
   - policy editor affordances and save-state clarity
 
+Implemented on branch `feat/gui-console-route-cutover`:
+
+- removed the `/console-v2` compatibility surface from both FastAPI and the SPA
+- removed the `MEDIA_MANAGER_UI_V2_ENABLED` cutover flag and legacy template fallback path
+- made the canonical operator-console HTML routes always serve the React shell
+- updated docs/tests to treat `/` and the normal operator routes as the only supported UI entrypoints
+
 Still intentionally not implemented:
 
 - `MediaDetail` route work
@@ -68,7 +75,6 @@ Still intentionally not implemented:
 - operations-page upstream UX adoption
 - type/module splitting into `media.ts` / `runs.ts`
 - envelope extraction or alternate data hooks
-- backend route-surface cleanup for `/console-v2`
 
 MTM assessment:
 
@@ -76,8 +82,8 @@ MTM assessment:
   disturbing the API adapter layer
 - medium-risk layout/routing and page-composition harvest is now substantially
   completed on the local `gui_app` runtime
-- server-side route ambiguity around `/console-v2` remains the main unfinished
-  route-surface item from this analysis
+- route-surface ambiguity around `/console-v2` is now removed; canonical UI
+  entrypoints are the standard operator-console routes
 - high-risk API/data/admin ownership areas remain correctly untouched
 
 ## High-Risk Local Ownership Areas
@@ -167,10 +173,9 @@ Completed:
 
 Recommended next:
 
-4. route-surface cleanup and product decision on `/console-v2`
-5. operations-page UX adoption using the same local-runtime-only adaptation strategy
-6. optional product decision on `MediaDetail` and discover-to-gallery consolidation
-7. code-organization-only follow-up: type/module splitting and any envelope factoring, if still valuable after the UI work settles
+4. operations-page UX adoption using the same local-runtime-only adaptation strategy
+5. optional product decision on `MediaDetail` and discover-to-gallery consolidation
+6. code-organization-only follow-up: type/module splitting and any envelope factoring, if still valuable after the UI work settles
 
 Do not start with API, types, admin pages, or alternate data hooks.
 
@@ -191,4 +196,10 @@ Do not start with API, types, admin pages, or alternate data hooks.
   - `bash tools/ci/check_gui_sync_boundary.sh`
   - `bash tools/ci/check_gui_app_api_client_contract.sh`
   - `bash tools/ci/check_supported_tooling_api_boundary.sh`
+  - `npm run build`
+- Route-surface cutover on `feat/gui-console-route-cutover` should pass:
+  - `bash tools/ci/check_gui_sync_boundary.sh`
+  - `bash tools/ci/check_gui_app_api_client_contract.sh`
+  - `bash tools/ci/check_supported_tooling_api_boundary.sh`
+  - `pytest operator_console/tests/test_main.py` with a working local pytest environment
   - `npm run build`

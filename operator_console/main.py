@@ -16,7 +16,6 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 
 from media_manager.app.observability import mount_metrics_endpoint
 from media_manager.app.persistence.base import create_db_engine, create_session_factory
@@ -199,12 +198,6 @@ def _parse_sample_limit(value: int) -> int:
     return parsed
 
 
-def _ui_v2_enabled() -> bool:
-    """Return whether v2 React console routing is enabled."""
-    raw = os.getenv("MEDIA_MANAGER_UI_V2_ENABLED", "false")
-    return raw.strip().lower() in _TRUTHY_ENV
-
-
 def _api_reload_enabled() -> bool:
     raw = os.getenv("MEDIA_MANAGER_API_RELOAD", "false")
     return raw.strip().lower() in _TRUTHY_ENV
@@ -285,35 +278,6 @@ def _execute_mutation(name: str, fn) -> JSONResponse:  # type: ignore[no-untyped
     return _v2_ok(data={"result": result})
 
 
-def _execute_compat_read(name: str, fn):  # type: ignore[no-untyped-def]
-    try:
-        return fn()
-    except Exception as exc:
-        mapped = map_exception(exc)
-        LOGGER.warning(
-            "compat read rejected",
-            extra={"operation": name, "error_code": mapped.code, "phase": "operator_console", "action": "COMPAT_READ"},
-        )
-        raise HTTPException(status_code=mapped.http_status, detail=mapped.message) from exc
-
-
-def _execute_compat_mutation(name: str, fn):  # type: ignore[no-untyped-def]
-    if not _MUTATION_SEMAPHORE.acquire(blocking=False):
-        raise HTTPException(status_code=503, detail="Mutation concurrency limit reached.")
-    try:
-        return fn()
-    except Exception as exc:
-        mapped = map_exception(exc)
-        log_extra = {"operation": name, "error_code": mapped.code, "phase": "operator_console", "action": "COMPAT_MUTATION"}
-        if 400 <= mapped.http_status < 500:
-            LOGGER.warning("compat mutation rejected", extra=log_extra)
-        else:
-            LOGGER.exception("compat mutation failed", extra=log_extra)
-        raise HTTPException(status_code=mapped.http_status, detail=mapped.message) from exc
-    finally:
-        _MUTATION_SEMAPHORE.release()
-
-
 def _parse_discovery_query_args(
     *,
     page: int,
@@ -363,14 +327,10 @@ def _parse_discovery_query_args(
 def create_app() -> FastAPI:
     """Create and configure the Operator Console FastAPI application."""
     package_root = Path(__file__).parent
-    templates_dir = package_root / "templates"
-    static_dir = package_root / "static"
     static_v2_dir = package_root / "static_v2"
     static_v2_index = static_v2_dir / "index.html"
 
     app = FastAPI(title="Media Manager Operator Console")
-    templates = Jinja2Templates(directory=str(templates_dir))
-    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
     app.mount("/static-v2", StaticFiles(directory=str(static_v2_dir)), name="static-v2")
     mount_metrics_endpoint(app)
 
@@ -403,128 +363,56 @@ def create_app() -> FastAPI:
             )
         return FileResponse(path=static_v2_index)
 
-    @app.get("/console-v2", response_class=HTMLResponse)
-    def console_v2_entry() -> Response:
-        """Serve v2 React operator console shell regardless of feature-flag state."""
+    @app.get("/", response_class=HTMLResponse)
+    def dashboard() -> Response:
+        """Render the Operator Console dashboard page."""
         return _render_console_v2_shell()
 
-    @app.get("/", response_class=HTMLResponse)
-    def dashboard(request: Request) -> Response:
-        """Render the Operator Console dashboard page."""
-        if _ui_v2_enabled():
-            return _render_console_v2_shell()
-        return templates.TemplateResponse(request, "dashboard.html", {})
-
     @app.get("/runs", response_class=HTMLResponse)
-    def runs_page(request: Request) -> Response:
+    def runs_page() -> Response:
         """Render the Operator Console run history page."""
-        if _ui_v2_enabled():
-            return _render_console_v2_shell()
-        return templates.TemplateResponse(request, "runs.html", {})
+        return _render_console_v2_shell()
 
     @app.get("/policy", response_class=HTMLResponse)
-    def policy_page(request: Request) -> Response:
+    def policy_page() -> Response:
         """Render the Operator Console policy management page."""
-        if _ui_v2_enabled():
-            return _render_console_v2_shell()
-        return templates.TemplateResponse(request, "policy.html", {})
+        return _render_console_v2_shell()
 
     @app.get("/admin", response_class=HTMLResponse)
-    def admin_page(request: Request) -> Response:
+    def admin_page() -> Response:
         """Render Operator Console admin page."""
-        if _ui_v2_enabled():
-            return _render_console_v2_shell()
-        return templates.TemplateResponse(request, "admin.html", {})
+        return _render_console_v2_shell()
 
     @app.get("/operations", response_class=HTMLResponse)
-    def operations_page(request: Request) -> Response:
+    def operations_page() -> Response:
         """Render explicit operation controls for the supported API workflows."""
-        if _ui_v2_enabled():
-            return _render_console_v2_shell()
-        return templates.TemplateResponse(request, "operations.html", {})
+        return _render_console_v2_shell()
 
     @app.get("/duplicates", response_class=HTMLResponse)
-    def duplicates_page(request: Request) -> Response:
+    def duplicates_page() -> Response:
         """Render the Operator Console duplicate group browser page."""
-        if _ui_v2_enabled():
-            return _render_console_v2_shell()
-        return templates.TemplateResponse(request, "duplicates.html", {})
+        return _render_console_v2_shell()
 
     @app.get("/gallery", response_class=HTMLResponse)
-    def gallery_page(request: Request) -> Response:
+    def gallery_page() -> Response:
         """Render the Operator Console canonical gallery page."""
-        if _ui_v2_enabled():
-            return _render_console_v2_shell()
-        return templates.TemplateResponse(request, "gallery.html", {})
+        return _render_console_v2_shell()
 
     @app.get("/ledger", response_class=HTMLResponse)
-    def ledger_page(request: Request) -> Response:
+    def ledger_page() -> Response:
         """Render read-only media_file ledger explorer page."""
-        if _ui_v2_enabled():
-            return _render_console_v2_shell()
-        return templates.TemplateResponse(request, "ledger.html", {})
+        return _render_console_v2_shell()
 
     @app.get("/discover", response_class=HTMLResponse)
-    def discover_page(
-        request: Request,
-        page: int = 1,
-        limit: int = 30,
-        tags: str | None = Query(default=None),
-        sort_by: str = Query(default="created_at"),
-        sort_order: str | None = Query(default=None),
-        service: OperatorConsoleReadService = Depends(get_operator_console_service),
-    ) -> Response:
-        """Render read-only discovery explorer with initial SSR payload."""
-        if _ui_v2_enabled():
-            return _render_console_v2_shell()
-        parsed = _parse_discovery_query_args(
-            page=page,
-            limit=limit,
-            tags=tags,
-            sort_by=sort_by,
-            sort_order=sort_order,
-            source=None,
-            min_confidence=None,
-        )
-        payload = service.get_canonical_gallery(
-            page=parsed.page,
-            limit=parsed.limit,
-            tags=parsed.tags,
-            sort_by=parsed.sort_by,
-            sort_order=parsed.sort_order,
-        ).to_dict()
-        return templates.TemplateResponse(
-            request,
-            "discover.html",
-            {
-                "initial_payload": payload,
-                "initial_tags_csv": ",".join(parsed.tags),
-                "initial_sort_by": parsed.sort_by,
-                "initial_sort_order": parsed.sort_order,
-            },
-        )
+    def discover_page() -> Response:
+        """Render read-only discovery explorer page."""
+        return _render_console_v2_shell()
 
     @app.get("/gallery/{file_id}", response_class=HTMLResponse)
-    def gallery_detail_page(
-        file_id: UUID,
-        request: Request,
-        page: int = 1,
-        service: OperatorConsoleReadService = Depends(get_operator_console_service),
-    ) -> Response:
-        """Render full-page canonical media detail with a gallery back link."""
-        if _ui_v2_enabled():
-            return _render_console_v2_shell()
-        detail = service.get_canonical_gallery_detail(file_id)
-        if detail is None:
-            raise HTTPException(status_code=404, detail="Canonical media not found.")
-        return templates.TemplateResponse(
-            request,
-            "gallery_detail.html",
-            {
-                "item": detail.to_dict(),
-                "return_page": max(1, int(page)),
-            },
-        )
+    def gallery_detail_page(file_id: UUID) -> Response:
+        """Render canonical media detail page shell."""
+        _ = file_id
+        return _render_console_v2_shell()
 
     @app.get("/api/dashboard-summary")
     def dashboard_summary(
