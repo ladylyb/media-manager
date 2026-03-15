@@ -408,6 +408,11 @@ def create_app() -> FastAPI:
         """Render read-only discovery explorer page."""
         return _render_console_v2_shell()
 
+    @app.get("/pipeline-wizard", response_class=HTMLResponse)
+    def pipeline_wizard_page() -> Response:
+        """Render pipeline wizard page shell."""
+        return _render_console_v2_shell()
+
     @app.get("/gallery/{file_id}", response_class=HTMLResponse)
     def gallery_detail_page(file_id: UUID) -> Response:
         """Render canonical media detail page shell."""

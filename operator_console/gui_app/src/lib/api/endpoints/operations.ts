@@ -10,6 +10,12 @@ export const runIngest = async (params: { folder_path?: string; dry_run?: boolea
   return withData(envelope, mapOperationResult(envelope.data));
 };
 
+export const runWizardIngest = async (params: { folder_path?: string; dry_run?: boolean }) =>
+  apiPost<Record<string, unknown>>("/ingest", {
+    folder_path: params.folder_path ?? "",
+    dry_run: Boolean(params.dry_run),
+  });
+
 export const runPlan = async (params?: { folder_path?: string; strict_metadata?: boolean }) => {
   const envelope = await apiPost<Record<string, unknown>>("/plan", {
     folder_path: params?.folder_path ?? "",
@@ -18,6 +24,12 @@ export const runPlan = async (params?: { folder_path?: string; strict_metadata?:
   return withData(envelope, mapOperationResult(envelope.data));
 };
 
+export const runWizardPlan = async (params?: { folder_path?: string; strict_metadata?: boolean }) =>
+  apiPost<Record<string, unknown>>("/plan", {
+    folder_path: params?.folder_path ?? "",
+    strict_metadata: Boolean(params?.strict_metadata),
+  });
+
 export const runApply = async (params?: { run_id?: string; collision_mode?: string }) => {
   const envelope = await apiPost<Record<string, unknown>>("/apply", {
     run_id: params?.run_id ?? "",
@@ -25,6 +37,12 @@ export const runApply = async (params?: { run_id?: string; collision_mode?: stri
   });
   return withData(envelope, mapOperationResult(envelope.data));
 };
+
+export const runWizardApply = async (params?: { run_id?: string; collision_mode?: string }) =>
+  apiPost<Record<string, unknown>>("/apply", {
+    run_id: params?.run_id ?? "",
+    collision_mode: params?.collision_mode ?? "rename",
+  });
 
 export const runCanonicalRecompute = async (params?: {
   policy_name?: string;
@@ -38,6 +56,17 @@ export const runCanonicalRecompute = async (params?: {
   });
   return withData(envelope, mapOperationResult(envelope.data));
 };
+
+export const runWizardCanonicalRecompute = async (params?: {
+  policy_name?: string;
+  dry_run?: boolean;
+  preferred_roots?: string[];
+}) =>
+  apiPost<Record<string, unknown>>("/canonical/recompute", {
+    policy_name: params?.policy_name ?? "FIRST_SEEN",
+    dry_run: params?.dry_run ?? true,
+    preferred_roots: params?.preferred_roots ?? [],
+  });
 
 export const runOperatorRun = async (params?: {
   folder_path?: string;
@@ -66,3 +95,16 @@ export const runTagEnrichment = async (params?: {
   });
   return withData(envelope, mapOperationResult(envelope.data));
 };
+
+export const runWizardTagEnrichment = async (params?: {
+  all?: boolean;
+  canonical_id?: string | null;
+  batch_size?: number;
+  source?: string;
+}) =>
+  apiPost<Record<string, unknown>>("/tag-enrichment", {
+    all: params?.all ?? true,
+    canonical_id: params?.canonical_id ?? null,
+    batch_size: params?.batch_size ?? 100,
+    source: params?.source ?? "system",
+  });
