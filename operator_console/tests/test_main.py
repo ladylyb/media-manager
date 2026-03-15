@@ -48,6 +48,7 @@ def test_canonical_api_route_inventory_and_v1_removal() -> None:
         "/api/admin/benchmarks/runs",
         "/api/admin/benchmarks/runs/{operation_run_id}",
         "/api/admin/benchmarks/runs/{operation_run_id}/cancel",
+        "/api/gallery/{file_id}",
     }
 
     assert expected_canonical_paths.issubset(route_paths)
@@ -62,6 +63,7 @@ class _FakeService:
         self.last_gallery_call: dict[str, Any] | None = None
         self.last_tag_suggestions_call: dict[str, Any] | None = None
         self.last_media_file_call: dict[str, Any] | None = None
+        self.last_gallery_detail_id: str | None = None
 
     def get_dashboard_summary(self) -> "_FakePayload":
         return _FakePayload(
@@ -224,6 +226,20 @@ class _FakeService:
         self.last_tag_suggestions_call = {"q": q, "limit": limit}
         base = ("city", "city night", "travel", "wildlife")
         return tuple(base[: max(1, min(50, int(limit)))])
+
+    def get_canonical_gallery_detail(self, file_id: UUID) -> "_FakePayload | None":
+        self.last_gallery_detail_id = str(file_id)
+        if str(file_id) != "33333333-0000-0000-0000-000000000001":
+            return None
+        return _FakePayload(
+            {
+                "id": "33333333-0000-0000-0000-000000000001",
+                "filename": "canon-a.jpg",
+                "file_type": "image",
+                "media_url": "/media/33333333-0000-0000-0000-000000000001",
+                "absolute_path": "/gallery/canon-a.jpg",
+            }
+        )
 
     def _ledger_payload(self, *, page: int, limit: int) -> _FakePayload:
         return _FakePayload(
@@ -1672,6 +1688,38 @@ def test_gallery_detail_page_unknown_id_still_serves_spa_shell() -> None:
     assert response.status_code == 200
     assert '<div id="root"></div>' in response.text
     assert "/static-v2/assets/" in response.text
+
+
+def test_gallery_detail_endpoint_returns_json() -> None:
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/api/gallery/33333333-0000-0000-0000-000000000001")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"] == {
+        "id": "33333333-0000-0000-0000-000000000001",
+        "filename": "canon-a.jpg",
+        "file_type": "image",
+        "media_url": "/media/33333333-0000-0000-0000-000000000001",
+        "absolute_path": "/dataset/canon-a.jpg",
+    }
+
+
+def test_gallery_detail_endpoint_returns_404_for_unknown_item() -> None:
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/api/gallery/33333333-0000-0000-0000-000000000099")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404
+    assert response.json()["ok"] is False
+    assert response.json()["errors"][0]["message"] == "Canonical media item not found."
 
 
 def test_duplicates_page_serves_spa_shell() -> None:

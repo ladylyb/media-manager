@@ -66,6 +66,14 @@ export interface CanonicalFile {
   sort_tag_name?: string | null;
 }
 
+export interface CanonicalFileDetail {
+  id: string;
+  filename: string;
+  file_type: "image" | "video";
+  media_url: string;
+  absolute_path: string;
+}
+
 export interface Tag {
   name: string;
   confidence: number;

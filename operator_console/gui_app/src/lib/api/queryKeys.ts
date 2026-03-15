@@ -14,6 +14,7 @@ export const queryKeys = {
   runs: (limit = 200) => ["runs", { limit }] as const,
   canonicalRoot: ["canonical"] as const,
   canonical: (params: CanonicalQueryParams) => ["canonical", params] as const,
+  canonicalDetail: (fileId: string) => ["canonical", "detail", fileId] as const,
   canonicalTagsRoot: ["canonical-tags"] as const,
   canonicalTags: (q = "") => ["canonical-tags", { q }] as const,
   duplicates: ["duplicates"] as const,

@@ -55,9 +55,9 @@ src/
 | `/operations` | Pipeline operations with risk labels |
 | `/runs` | Sortable/filterable run history |
 | `/ledger` | Analytics, hash queries, audit |
-| `/discover` | Tag-based media filtering |
 | `/duplicates` | Split-pane duplicate group browser |
-| `/gallery` | Responsive media grid + detail modal |
+| `/gallery` | Responsive media grid with tag filters, sort controls, and detail modal |
+| `/gallery/:fileId` | Full-page canonical media detail |
 | `/policy` | Policy configuration editor |
 | `/admin` | Destructive operations with challenge confirmation |
 

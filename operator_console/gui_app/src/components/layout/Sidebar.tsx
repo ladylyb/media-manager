@@ -6,7 +6,6 @@ import {
   LayoutDashboard,
   type LucideIcon,
   PlayCircle,
-  Search,
   Settings,
   Shield,
 } from "lucide-react";
@@ -36,7 +35,6 @@ const mainNav = [
 
 const mediaNav = [
   { title: "Gallery", url: "/gallery", icon: Image },
-  { title: "Discover", url: "/discover", icon: Search },
   { title: "Duplicates", url: "/duplicates", icon: Copy },
 ];
 

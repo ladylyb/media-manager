@@ -6,6 +6,7 @@ import type {
   BenchmarkQueueResult,
   BenchmarkRun,
   CanonicalFile,
+  CanonicalFileDetail,
   DbResetPreview,
   DbResetResult,
   DuplicateFile,
@@ -77,6 +78,16 @@ function mapCanonicalItems(items: unknown[]): CanonicalFile[] {
       sort_tag_name: row.sort_tag_name ? String(row.sort_tag_name) : null,
     };
   });
+}
+
+function mapCanonicalDetail(payload: Record<string, unknown>): CanonicalFileDetail {
+  return {
+    id: String(payload.id ?? ""),
+    filename: String(payload.filename ?? ""),
+    file_type: String(payload.file_type ?? "image") === "video" ? "video" : "image",
+    media_url: String(payload.media_url ?? ""),
+    absolute_path: String(payload.absolute_path ?? ""),
+  };
 }
 
 function mapDuplicateGroups(payload: Record<string, unknown>): DuplicateGroup[] {
@@ -170,6 +181,11 @@ export const getCanonical = async (params?: {
   const payload = (envelope.data ?? {}) as Record<string, unknown>;
   const items = Array.isArray(payload.items) ? payload.items : [];
   return withData(envelope, mapPagination(payload, mapCanonicalItems(items)));
+};
+
+export const getCanonicalDetail = async (fileId: string) => {
+  const envelope = await apiGet<Record<string, unknown>>(`/gallery/${fileId}`);
+  return withData(envelope, mapCanonicalDetail((envelope.data ?? {}) as Record<string, unknown>));
 };
 
 export const getCanonicalTags = async (q?: string) => {

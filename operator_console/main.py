@@ -414,6 +414,17 @@ def create_app() -> FastAPI:
         _ = file_id
         return _render_console_v2_shell()
 
+    @app.get("/api/gallery/{file_id}")
+    def canonical_gallery_detail(
+        file_id: UUID,
+        service: OperatorConsoleReadService = Depends(get_operator_console_service),
+    ) -> JSONResponse:
+        """Return detail for a canonical gallery item by durable file instance identifier."""
+        detail = service.get_canonical_gallery_detail(file_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="Canonical media item not found.")
+        return _execute_read("canonical-gallery-detail", detail.to_dict)
+
     @app.get("/api/dashboard-summary")
     def dashboard_summary(
         services: ReadServices = Depends(get_read_services),
