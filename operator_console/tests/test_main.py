@@ -1089,76 +1089,43 @@ class _FakeAdminServices:
         }
 
 
-def test_dashboard_route_renders_template() -> None:
-    """GET / should render the dashboard template through the base layout."""
+def test_dashboard_route_serves_spa_shell() -> None:
+    """GET / should serve the operator console SPA shell."""
     client = TestClient(app)
 
     response = client.get("/")
-
-    assert response.status_code == 200
-    assert "Dashboard" in response.text
-    assert "Quick Operations" in response.text
-    assert "Validate Ingest (dry-run)" in response.text
-    assert "Composite Run (compatibility workflow)" in response.text
-    assert "Folder Path" in response.text
-    assert "Execute" in response.text
-    assert "Open Operations" in response.text
-    assert "Total Files" in response.text
-    assert "Performance Metrics" in response.text
-    assert "Media Manager Operator Console" in response.text
-    assert "Dashboard</a>" in response.text
-    assert "Operations</a>" in response.text
-    assert "Runs</a>" in response.text
-    assert "Duplicates</a>" in response.text
-    assert "Policy</a>" in response.text
-    assert "https://cdn.tailwindcss.com" in response.text
-
-
-def test_operations_page_renders_template() -> None:
-    client = TestClient(app)
-
-    response = client.get("/operations")
-
-    assert response.status_code == 200
-    assert "Operations" in response.text
-    assert "Run Ingest" in response.text
-    assert "Run Plan" in response.text
-    assert "Run Apply" in response.text
-    assert "Run Canonical Recompute" in response.text
-    assert "Run Tag Enrichment" in response.text
-    assert "Run Composite" in response.text
-
-
-def test_console_v2_route_serves_spa_shell() -> None:
-    client = TestClient(app)
-
-    response = client.get("/console-v2")
 
     assert response.status_code == 200
     assert '<div id="root"></div>' in response.text
     assert "/static-v2/assets/" in response.text
 
 
-def test_legacy_routes_remain_template_based_when_v2_flag_off(monkeypatch) -> None:
-    monkeypatch.setenv("MEDIA_MANAGER_UI_V2_ENABLED", "0")
-    flagged_app = main_module.create_app()
-    client = TestClient(flagged_app)
+def test_operations_page_serves_spa_shell() -> None:
+    client = TestClient(app)
 
-    response = client.get("/")
+    response = client.get("/operations")
 
     assert response.status_code == 200
-    assert "Dashboard" in response.text
-    assert "Quick Operations" in response.text
+    assert '<div id="root"></div>' in response.text
+    assert "/static-v2/assets/" in response.text
 
 
-def test_legacy_routes_cutover_to_v2_when_flag_enabled_including_admin(monkeypatch) -> None:
-    monkeypatch.setenv("MEDIA_MANAGER_UI_V2_ENABLED", "1")
-    flagged_app = main_module.create_app()
-    client = TestClient(flagged_app)
+def test_console_v2_route_is_not_supported() -> None:
+    client = TestClient(app)
+
+    response = client.get("/console-v2")
+
+    assert response.status_code == 404
+
+
+def test_canonical_operator_routes_serve_spa_shell() -> None:
+    client = TestClient(app)
 
     dashboard = client.get("/")
     operations = client.get("/operations")
     admin = client.get("/admin")
+    gallery = client.get("/gallery")
+    discover = client.get("/discover")
 
     assert dashboard.status_code == 200
     assert '<div id="root"></div>' in dashboard.text
@@ -1171,6 +1138,14 @@ def test_legacy_routes_cutover_to_v2_when_flag_enabled_including_admin(monkeypat
     assert admin.status_code == 200
     assert '<div id="root"></div>' in admin.text
     assert "/static-v2/assets/" in admin.text
+
+    assert gallery.status_code == 200
+    assert '<div id="root"></div>' in gallery.text
+    assert "/static-v2/assets/" in gallery.text
+
+    assert discover.status_code == 200
+    assert '<div id="root"></div>' in discover.text
+    assert "/static-v2/assets/" in discover.text
 
 
 def test_dashboard_summary_endpoint_returns_json() -> None:
@@ -1215,99 +1190,46 @@ def test_latest_metrics_endpoint_returns_json() -> None:
     }
 
 
-def test_runs_page_renders_template() -> None:
-    """GET /runs should render the run history page template."""
+def test_runs_page_serves_spa_shell() -> None:
+    """GET /runs should serve the operator console SPA shell."""
     client = TestClient(app)
 
     response = client.get("/runs")
 
     assert response.status_code == 200
-    assert "Run History" in response.text
-    assert "Operation Type" in response.text
-    assert "Linked Run ID" in response.text
-    assert "Apply Filters" in response.text
+    assert '<div id="root"></div>' in response.text
+    assert "/static-v2/assets/" in response.text
 
 
-def test_gallery_page_renders_template() -> None:
-    """GET /gallery should render the canonical gallery page template."""
+def test_gallery_page_serves_spa_shell() -> None:
+    """GET /gallery should serve the operator console SPA shell."""
     client = TestClient(app)
 
     response = client.get("/gallery")
 
     assert response.status_code == 200
-    assert "Canonical Gallery" in response.text
-    assert "Browse canonical media currently stored in the database." in response.text
-    assert "Previous" in response.text
-    assert "Next" in response.text
+    assert '<div id="root"></div>' in response.text
+    assert "/static-v2/assets/" in response.text
 
 
-def test_discover_page_renders_template_with_ssr_content() -> None:
-    app.dependency_overrides[get_operator_console_service] = _FakeService
+def test_discover_page_serves_spa_shell() -> None:
     client = TestClient(app)
-    try:
-        response = client.get("/discover")
-    finally:
-        app.dependency_overrides.clear()
+
+    response = client.get("/discover")
 
     assert response.status_code == 200
-    assert "Discover" in response.text
-    assert "discover-grid" in response.text
-    assert "discover-tag-input" in response.text
-    assert "discover-sort-by" in response.text
-    assert "Top 0.9200" in response.text
+    assert '<div id="root"></div>' in response.text
+    assert "/static-v2/assets/" in response.text
 
 
-def test_discover_page_uses_tag_name_default_sort_order_asc() -> None:
-    fake = _FakeService()
-    app.dependency_overrides[get_operator_console_service] = lambda: fake
-    client = TestClient(app)
-    try:
-        response = client.get("/discover?sort_by=tag_name")
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert fake.last_gallery_call is not None
-    assert fake.last_gallery_call["sort_by"] == "tag_name"
-    assert fake.last_gallery_call["sort_order"] == "asc"
-
-
-def test_discover_page_rejects_invalid_sort_order() -> None:
-    app.dependency_overrides[get_operator_console_service] = _FakeService
-    client = TestClient(app)
-    try:
-        response = client.get("/discover?sort_order=sideways")
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 400
-    assert "sort_order" in response.json()["detail"]
-
-
-def test_discover_page_rejects_invalid_sort_by() -> None:
-    app.dependency_overrides[get_operator_console_service] = _FakeService
-    client = TestClient(app)
-    try:
-        response = client.get("/discover?sort_by=broken")
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 400
-    assert "sort_by" in response.json()["detail"]
-
-
-def test_ledger_page_renders_template() -> None:
+def test_ledger_page_serves_spa_shell() -> None:
     client = TestClient(app)
 
     response = client.get("/ledger")
 
     assert response.status_code == 200
-    assert "MediaFile Ledger" in response.text
-    assert "Ledger Health Check" in response.text
-    assert "Run Hash Audit" in response.text
-    assert "By Hash" in response.text
-    assert "Path History" in response.text
-    assert "Reappearances" in response.text
+    assert '<div id="root"></div>' in response.text
+    assert "/static-v2/assets/" in response.text
 
 
 def test_runs_endpoint_returns_json() -> None:
@@ -1730,43 +1652,37 @@ def test_media_endpoint_returns_404_for_missing() -> None:
     assert response.status_code == 404
 
 
-def test_gallery_detail_page_renders_template() -> None:
-    """GET /gallery/{id} should render detailed canonical media page."""
-    app.dependency_overrides[get_operator_console_service] = _FakeService
+def test_gallery_detail_page_serves_spa_shell() -> None:
+    """GET /gallery/{id} should serve the operator console SPA shell."""
     client = TestClient(app)
-    try:
-        response = client.get("/gallery/33333333-0000-0000-0000-000000000001?page=3")
-    finally:
-        app.dependency_overrides.clear()
+
+    response = client.get("/gallery/33333333-0000-0000-0000-000000000001?page=3")
 
     assert response.status_code == 200
-    assert "Canonical Media Detail" in response.text
-    assert "canon-a.jpg" in response.text
-    assert "/gallery?page=3" in response.text
+    assert '<div id="root"></div>' in response.text
+    assert "/static-v2/assets/" in response.text
 
 
-def test_gallery_detail_page_returns_404_for_unknown() -> None:
-    """GET /gallery/{id} should return 404 when no canonical detail row exists."""
-    app.dependency_overrides[get_operator_console_service] = _FakeService
+def test_gallery_detail_page_unknown_id_still_serves_spa_shell() -> None:
+    """GET /gallery/{id} should defer unknown-detail handling to the SPA."""
     client = TestClient(app)
-    try:
-        response = client.get("/gallery/33333333-0000-0000-0000-000000000099")
-    finally:
-        app.dependency_overrides.clear()
 
-    assert response.status_code == 404
+    response = client.get("/gallery/33333333-0000-0000-0000-000000000099")
+
+    assert response.status_code == 200
+    assert '<div id="root"></div>' in response.text
+    assert "/static-v2/assets/" in response.text
 
 
-def test_duplicates_page_renders_template() -> None:
-    """GET /duplicates should render the duplicate group browser page template."""
+def test_duplicates_page_serves_spa_shell() -> None:
+    """GET /duplicates should serve the operator console SPA shell."""
     client = TestClient(app)
 
     response = client.get("/duplicates")
 
     assert response.status_code == 200
-    assert "Duplicate Group Browser" in response.text
-    assert "Group Details" in response.text
-    assert "Loading duplicate groups" in response.text
+    assert '<div id="root"></div>' in response.text
+    assert "/static-v2/assets/" in response.text
 
 
 def test_duplicates_endpoint_returns_json() -> None:
@@ -1834,25 +1750,23 @@ def test_thumbnail_endpoint_returns_404_for_missing_or_ineligible() -> None:
     assert response.status_code == 404
 
 
-def test_policy_page_renders_template() -> None:
-    """GET /policy should render the policy management page template."""
+def test_policy_page_serves_spa_shell() -> None:
+    """GET /policy should serve the operator console SPA shell."""
     client = TestClient(app)
 
     response = client.get("/policy")
 
     assert response.status_code == 200
-    assert "Policy Configuration" in response.text
-    assert "Canonical Priority Rules" in response.text
-    assert "Tie-breaker Rules" in response.text
-    assert "Recanonicalization" in response.text
+    assert '<div id="root"></div>' in response.text
+    assert "/static-v2/assets/" in response.text
 
 
-def test_admin_page_renders_template() -> None:
+def test_admin_page_serves_spa_shell() -> None:
     client = TestClient(app)
     response = client.get("/admin")
     assert response.status_code == 200
-    assert "Reset Database" in response.text
-    assert "Dry-run complete. Review affected tables." in response.text
+    assert '<div id="root"></div>' in response.text
+    assert "/static-v2/assets/" in response.text
 
 
 def test_get_policy_endpoint_returns_structured_json() -> None:

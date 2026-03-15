@@ -49,7 +49,7 @@ export function Sidebar() {
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
   const location = useLocation();
-  const currentPath = location.pathname === "/console-v2" ? "/" : location.pathname;
+  const currentPath = location.pathname;
 
   const renderGroup = (
     label: string,

@@ -1,4 +1,4 @@
-# Media Manager Operator Console v2 (Integration Layer)
+# Media Manager Operator Console (Integration Layer)
 
 Supported integration layer for the operator console. Built with React + Vite + TypeScript + Tailwind CSS.
 
@@ -34,7 +34,8 @@ Build output is written directly to:
 - `operator_console/static_v2/`
 
 Serve via FastAPI route:
-- `/console-v2`
+- `/`
+- and the canonical operator-console routes such as `/operations`, `/runs`, `/gallery`, and `/admin`
 
 ## Architecture
 
