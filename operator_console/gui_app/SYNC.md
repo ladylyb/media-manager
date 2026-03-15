@@ -46,6 +46,10 @@ npm run build
 
 4. Validate the canonical FastAPI operator-console routes render the React shell.
 
+The March 2026 upstream refresh and selective-adaptation sequence is complete.
+Use this file as the long-lived source of truth for future upstream syncs rather
+than the retired one-off analysis report.
+
 ## High-Risk Local Ownership Areas
 
 The following areas in `gui_app` are canonical to this repository and should not

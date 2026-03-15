@@ -76,7 +76,6 @@ nav:
       - Invariants: architecture/invariants.md
       - Run Lifecycle: architecture/run-lifecycle.md
       - API-Only Transition: architecture/api-only-transition.md
-      - GUI Upstream Refresh Analysis (2026-03-14): architecture/gui-upstream-refresh-analysis-2026-03-14.md
       - ADR:
           - ADR Index: architecture/adr/index.md
           - ADR-0001 Runtime Invariants: architecture/adr/0001-runtime-invariants-hard-constraints.md
