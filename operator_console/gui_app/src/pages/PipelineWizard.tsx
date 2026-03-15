@@ -299,27 +299,27 @@ const STEP_GUIDANCE: Record<
   },
   apply: {
     description:
-      "Execute the current plan using the run ID from Plan so the prepared actions become real system outcomes.",
+      "Make the saved plan real so the changes prepared in Plan are actually carried out.",
     sections: [
       {
         title: "What this step does",
         content:
-          "Apply is where planned actions stop being hypothetical. The system uses the selected run ID to execute the work that planning prepared.",
+          "Apply is the first point where the wizard stops preparing and starts making real changes. The system uses the saved plan from the previous step to carry out the work that planning prepared.",
       },
       {
         title: "Before you run",
         content:
-          "Confirm the run ID came from the plan you just reviewed and that the collision mode matches how you want conflicting file targets handled.",
+          "Confirm you are ready for the wizard to apply the saved plan it just created. In the guided flow, the wizard automatically uses the same plan reference from the previous step.",
       },
       {
         title: "What success looks like",
         content:
-          "The result shows how many actions were applied and whether any errors occurred. After this step, the pipeline can safely recalculate canonical selections against the new state.",
+          "You receive a plain-English summary of how many planned actions were carried out, how many moves happened, and whether any errors were reported. After this step, the pipeline can safely recalculate canonical selections against the new state.",
       },
       {
         title: "Risk level",
         content:
-          "This is a high-risk mutation step. It executes durable planning outcomes and is the stage where the pipeline begins carrying out real changes rather than preparing them.",
+          "This step makes real file and ledger changes. It is the first stage where the guided flow stops being preparatory and starts carrying out the saved plan.",
       },
     ],
   },
@@ -644,7 +644,10 @@ export default function PipelineWizard() {
         });
         payload = response.data;
       } else if (stepId === "apply") {
-        const response = await runWizardApply(wizardState.steps.apply.input);
+        const response = await runWizardApply({
+          run_id: wizardState.steps.apply.input.run_id,
+          collision_mode: "rename",
+        });
         payload = response.data;
       } else if (stepId === "canonical") {
         const response = await runWizardCanonicalRecompute({
@@ -854,6 +857,39 @@ export default function PipelineWizard() {
     };
   };
 
+  const buildReviewApplySummary = () => {
+    const appliedCount = asNumber(applySummary.applied_count) ?? 0;
+    const movesCount = asNumber(applySummary.moves_count) ?? 0;
+    const duplicateCount = asNumber(applySummary.duplicates_count) ?? 0;
+    const errorsCount = asNumber(applySummary.errors_count) ?? 0;
+
+    if (appliedCount === 0 && movesCount === 0 && errorsCount === 0) {
+      return {
+        lines: [
+          "Apply completed, but it did not carry out any planned changes.",
+          "This often means the same folder or a very similar plan was effectively processed again.",
+          "If that was not your intention, pause and inspect before moving on to canonical recomputation.",
+        ],
+        caution: true,
+      };
+    }
+
+    const lines = [
+      "Apply completed successfully.",
+      `${appliedCount} planned action${appliedCount === 1 ? "" : "s"} were carried out.`,
+      `${movesCount} file move${movesCount === 1 ? "" : "s"} were completed.`,
+      `${duplicateCount} duplicate-related action${duplicateCount === 1 ? "" : "s"} were handled.`,
+      errorsCount === 0
+        ? "No errors were reported."
+        : `${errorsCount} error${errorsCount === 1 ? " was" : "s were"} reported.`,
+    ];
+
+    return {
+      lines,
+      caution: errorsCount > 0,
+    };
+  };
+
   const renderResultConsole = (stepId: ExecutionStepId) => {
     const state = wizardState.steps[stepId];
     if (!state.result) return null;
@@ -913,17 +949,47 @@ export default function PipelineWizard() {
     }
 
     if (stepId === "apply") {
+      const runId = asString(state.result.run_id);
       return (
         <WizardResultConsole
           title="Apply Result"
           status="success"
+          references={
+            runId
+              ? [
+                  {
+                    label: "Run ID",
+                    value: runId,
+                    helperText: "This is the saved plan that was just applied.",
+                    copyable: true,
+                  },
+                ]
+              : []
+          }
           metrics={summarizeMetrics([
-            { label: "Applied", value: asNumber(applySummary.applied_count) },
-            { label: "Moves", value: asNumber(applySummary.moves_count) },
-            { label: "Duplicates", value: asNumber(applySummary.duplicates_count) },
-            { label: "Errors", value: asNumber(applySummary.errors_count) },
+            { label: "Planned actions completed", value: asNumber(applySummary.applied_count) },
+            { label: "File moves completed", value: asNumber(applySummary.moves_count) },
+            { label: "Duplicate actions handled", value: asNumber(applySummary.duplicates_count) },
+            { label: "Errors reported", value: asNumber(applySummary.errors_count) },
           ])}
+          summaryLines={[
+            "Apply completed the saved plan for the batch you just reviewed.",
+            ...(asNumber(applySummary.applied_count) !== null
+              ? [`${asNumber(applySummary.applied_count)} planned action${asNumber(applySummary.applied_count) === 1 ? "" : "s"} were carried out.`]
+              : []),
+            ...(asNumber(applySummary.moves_count) !== null
+              ? [`${asNumber(applySummary.moves_count)} file move${asNumber(applySummary.moves_count) === 1 ? "" : "s"} were completed.`]
+              : []),
+            ...(asNumber(applySummary.duplicates_count) !== null
+              ? [`${asNumber(applySummary.duplicates_count)} duplicate-related action${asNumber(applySummary.duplicates_count) === 1 ? "" : "s"} were handled.`]
+              : []),
+            (asNumber(applySummary.errors_count) ?? 0) === 0
+              ? "No errors were reported."
+              : `${asNumber(applySummary.errors_count)} error${asNumber(applySummary.errors_count) === 1 ? " was" : "s were"} reported.`,
+          ]}
+          nextStepHint="If this looks right, continue to Review Apply Results before moving on to canonical recomputation."
           payload={state.result}
+          technicalDetailsMode="modal"
         />
       );
     }
@@ -1143,7 +1209,7 @@ export default function PipelineWizard() {
         <ExecutionStep
           title="Apply"
           description={guidance.description}
-          riskLabel="High Risk Mutation"
+          riskLabel="Makes real changes"
           strongRisk
           loading={state.status === "running"}
           error={state.error}
@@ -1153,52 +1219,69 @@ export default function PipelineWizard() {
           guidance={<WizardGuidancePanel sections={guidance.sections} />}
           result={renderResultConsole("apply")}
         >
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div className="space-y-2 lg:col-span-2">
-              <Label htmlFor="apply-run-id">Run ID</Label>
-              <Input
-                id="apply-run-id"
-                value={state.input.run_id}
-                onChange={(event) => updateStepInput("apply", { run_id: event.target.value })}
-                placeholder="00000000-0000-0000-0000-000000000000"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="apply-collision">Collision Mode</Label>
-              <Input
-                id="apply-collision"
-                value={state.input.collision_mode}
-                onChange={(event) => updateStepInput("apply", { collision_mode: event.target.value })}
-                placeholder="rename"
-              />
-            </div>
+          <div className="rounded-xl border bg-muted/15 p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+              Applying This Plan
+            </p>
+            <p className="mt-3 break-all rounded-lg border bg-background px-3 py-2 font-mono text-sm">
+              {state.input.run_id || "--"}
+            </p>
+            <p className="mt-3 text-sm text-muted-foreground">
+              This saved plan reference was carried forward from the previous Plan step. In the wizard, Apply uses the default guided collision handling automatically.
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-primary/15 bg-primary/[0.04] p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary/80">
+              What Will Happen Next
+            </p>
+            <p className="mt-3 text-sm leading-6 text-foreground/90">
+              The system will now carry out the saved changes from Plan. This is the first stage where file operations and durable ledger updates become real outcomes instead of proposed ones.
+            </p>
           </div>
         </ExecutionStep>
       );
     }
 
     if (currentStepId === "review-apply") {
-      const guidance = STEP_GUIDANCE["review-apply"];
+      const applyReviewSummary = buildReviewApplySummary();
       return (
         <CheckpointStep
           title="Review Apply Results"
-          description={guidance.description}
+          description="This checkpoint explains what Apply just did before the wizard moves on to canonical recomputation."
           onContinue={goToNextStep}
           onRerun={() => goToStep("apply")}
           onAbort={abortWizard}
-          guidance={<WizardGuidancePanel sections={guidance.sections} />}
         >
           {applyResult ? (
             <div className="space-y-4">
+              <RestPointSummaryCard
+                title="Apply Outcome"
+                lines={applyReviewSummary.lines}
+                tone={applyReviewSummary.caution ? "caution" : "default"}
+              />
+              {asString(applyResult.run_id) && (
+                <PlanReferenceStrip
+                  label="Run ID"
+                  value={asString(applyResult.run_id) ?? ""}
+                  helperText="This is the saved plan reference that Apply just executed."
+                />
+              )}
               <MetricGrid
                 items={summarizeMetrics([
-                  { label: "Run ID", value: asString(applyResult.run_id) },
-                  { label: "Applied", value: asNumber(applySummary.applied_count) },
-                  { label: "Moves", value: asNumber(applySummary.moves_count) },
-                  { label: "Errors", value: asNumber(applySummary.errors_count) },
+                  { label: "Actions completed", value: asNumber(applySummary.applied_count) },
+                  { label: "File moves completed", value: asNumber(applySummary.moves_count) },
+                  { label: "Duplicate actions handled", value: asNumber(applySummary.duplicates_count) },
+                  { label: "Errors reported", value: asNumber(applySummary.errors_count) },
                 ])}
               />
-              <WizardResultConsole title="Apply Review" status="success" payload={applyResult} />
+              <WizardResultConsole
+                title="Apply Review"
+                status="success"
+                nextStepHint="If this outcome looks right, continue to canonical recomputation so the wizard can recalculate canonical selections on top of the new state."
+                payload={applyResult}
+                technicalDetailsMode="modal"
+              />
             </div>
           ) : (
             <ErrorAlert message="No apply result is available yet. Re-run Apply to continue." severity="warning" />
@@ -1414,7 +1497,7 @@ export default function PipelineWizard() {
         open={confirmingStep === "apply"}
         onOpenChange={(open) => setConfirmingStep(open ? "apply" : null)}
         title="Execute Apply?"
-        description="Apply mutates durable state and filesystem-backed planning outcomes."
+        description="This step starts making the saved plan real. Files and records may now be changed based on the plan you just reviewed."
         destructive
         onConfirm={() => runExecutionStep("apply")}
         loading={wizardState.steps.apply.status === "running"}
@@ -1539,12 +1622,26 @@ function ReviewDecisionCard({
   );
 }
 
-function RestPointSummaryCard({ title, lines }: { title: string; lines: string[] }) {
+function RestPointSummaryCard({
+  title,
+  lines,
+  tone = "default",
+}: {
+  title: string;
+  lines: string[];
+  tone?: "default" | "caution";
+}) {
+  const containerClass =
+    tone === "caution"
+      ? "border-caution/30 bg-caution/[0.08]"
+      : "border-primary/20 bg-primary/[0.04]";
+  const eyebrowClass = tone === "caution" ? "text-caution" : "text-primary/80";
+
   return (
-    <Card className="border-primary/20 bg-primary/[0.04]">
+    <Card className={containerClass}>
       <CardContent className="space-y-4 p-5">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-primary/80">
+          <p className={`text-xs font-semibold uppercase tracking-[0.22em] ${eyebrowClass}`}>
             Progress Checkpoint
           </p>
           <h3 className="mt-2 text-lg font-semibold text-foreground">{title}</h3>

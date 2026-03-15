@@ -53,7 +53,7 @@ export function ExecutionStep({
           <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-muted-foreground">
             <div className="flex items-start gap-2">
               <AlertTriangle className="mt-0.5 h-4 w-4 text-destructive" />
-              <p>This step mutates durable system state. Review inputs carefully before running it.</p>
+              <p>This is the point where the wizard starts making real changes. Review the details carefully before you continue.</p>
             </div>
           </div>
         )}
