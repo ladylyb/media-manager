@@ -4,6 +4,7 @@ import {
   Copy,
   Image,
   LayoutDashboard,
+  Route,
   type LucideIcon,
   PlayCircle,
   Settings,
@@ -29,6 +30,7 @@ import { cn } from "@/lib/utils";
 const mainNav = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
   { title: "Operations", url: "/operations", icon: Cog },
+  { title: "Pipeline Wizard", url: "/pipeline-wizard", icon: Route },
   { title: "Runs", url: "/runs", icon: PlayCircle },
   { title: "Ledger", url: "/ledger", icon: BookOpen },
 ];

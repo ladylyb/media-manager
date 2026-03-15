@@ -6,6 +6,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-route
 import { AppLayout } from "@/components/AppLayout";
 import DashboardPage from "@/pages/DashboardPage";
 import OperationsPage from "@/pages/OperationsPage";
+import PipelineWizard from "@/pages/PipelineWizard";
 import RunsPage from "@/pages/RunsPage";
 import LedgerPage from "@/pages/LedgerPage";
 import DuplicatesPage from "@/pages/DuplicatesPage";
@@ -30,6 +31,7 @@ const queryClient = new QueryClient({
 const appRoutes = [
   { path: "/", element: <DashboardPage /> },
   { path: "/operations", element: <OperationsPage /> },
+  { path: "/pipeline-wizard", element: <PipelineWizard /> },
   { path: "/runs", element: <RunsPage /> },
   { path: "/ledger", element: <LedgerPage /> },
   { path: "/duplicates", element: <DuplicatesPage /> },
