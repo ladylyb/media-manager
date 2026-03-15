@@ -563,6 +563,13 @@ def create_app() -> FastAPI:
         """Return aggregate library counters in the canonical API envelope."""
         return _execute_read("dashboard-summary", services.dashboard_summary)
 
+    @app.get("/api/home")
+    def home(
+        services: ReadServices = Depends(get_read_services),
+    ) -> JSONResponse:
+        """Return media-first home page data in the canonical API envelope."""
+        return _execute_read("home", services.home)
+
     @app.get("/api/latest-metrics")
     def latest_metrics(
         services: ReadServices = Depends(get_read_services),

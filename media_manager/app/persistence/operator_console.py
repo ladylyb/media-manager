@@ -643,6 +643,7 @@ class OperatorConsoleReadService:
         tags: tuple[str, ...] = (),
         sort_by: str = "created_at",
         sort_order: str | None = None,
+        file_type: str | None = None,
         source: TagSource | None = None,
         min_confidence: float | None = None,
     ) -> CanonicalGalleryPage:
@@ -656,6 +657,7 @@ class OperatorConsoleReadService:
             tags=tags,
             sort_by=sort_by,  # type: ignore[arg-type]
             sort_order=normalized_sort_order,  # type: ignore[arg-type]
+            file_type=file_type if file_type in {"image", "video"} else None,
             source=source,
             min_confidence=min_confidence,
         )

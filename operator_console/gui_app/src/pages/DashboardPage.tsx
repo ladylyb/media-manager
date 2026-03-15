@@ -1,36 +1,17 @@
-import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { MetricCard } from "@/components/MetricCard";
-import { StatusBadge } from "@/components/StatusBadge";
+import { useEffect, useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { ErrorAlert } from "@/components/ErrorAlert";
-import { OperationRiskLabel } from "@/components/OperationRiskLabel";
-import { JsonViewer } from "@/components/JsonViewer";
+import { MediaPreviewModal } from "@/components/media/MediaPreviewModal";
+import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import {
-  getDashboardSummary,
-  getLatestMetrics,
-  invalidateReadsAfterOperation,
-  runIngest,
-  runOperatorRun,
-} from "@/lib/api/endpoints";
+import { Skeleton } from "@/components/ui/skeleton";
+import { getHome } from "@/lib/api/endpoints";
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
-import type { DashboardSummary, LatestMetrics, OperationResult } from "@/types";
-import {
-  ArrowRight,
-  Crown,
-  Database,
-  Files,
-  ImageIcon,
-  Layers,
-  Loader2,
-  PlayCircle,
-  Timer,
-  Video,
-  Zap,
-} from "lucide-react";
+import type { CanonicalFile, HomePageData } from "@/types";
+import { ArrowRight, Copy, ImageIcon, Images, Sparkles, Video } from "lucide-react";
 
 function getErrorMessage(err: unknown): string | null {
   if (!err) return null;
@@ -38,254 +19,347 @@ function getErrorMessage(err: unknown): string | null {
   return String(err);
 }
 
-export default function DashboardPage() {
-  const queryClient = useQueryClient();
-  const [actionMode, setActionMode] = useState<"validate" | "composite">("validate");
-  const [actionLoading, setActionLoading] = useState(false);
-  const [actionResult, setActionResult] = useState<OperationResult | null>(null);
-  const [rootPath, setRootPath] = useState("");
-  const [actionError, setActionError] = useState<string | null>(null);
+function MediaThumbCard({
+  file,
+  onPreview,
+}: {
+  file: CanonicalFile;
+  onPreview: (file: CanonicalFile) => void;
+}) {
+  const previewSrc = file.file_type === "video" ? file.poster_url ?? null : file.media_url;
+  const [imageSrc, setImageSrc] = useState(previewSrc);
 
-  const summaryQuery = useQuery({
-    queryKey: queryKeys.dashboardSummary,
-    queryFn: async () => (await getDashboardSummary()).data as DashboardSummary,
-    staleTime: queryOptions.dashboardSummary.staleTime,
-  });
-
-  const metricsQuery = useQuery({
-    queryKey: queryKeys.latestMetrics,
-    queryFn: async () => (await getLatestMetrics()).data as LatestMetrics,
-    staleTime: queryOptions.latestMetrics.staleTime,
-  });
-
-  const summary = summaryQuery.data;
-  const metrics = metricsQuery.data;
-  const loading = summaryQuery.isLoading || metricsQuery.isLoading;
-  const error =
-    actionError || getErrorMessage(summaryQuery.error) || getErrorMessage(metricsQuery.error);
-
-  const performanceCards = [
-    {
-      title: "Ingest",
-      value: `${metrics?.ingest_time_ms ?? 0}ms`,
-      subtitle: "Discovery and metadata load",
-      icon: <Timer className="h-4 w-4" />,
-    },
-    {
-      title: "Plan",
-      value: `${metrics?.plan_time_ms ?? 0}ms`,
-      subtitle: "Planner runtime",
-      icon: <Timer className="h-4 w-4" />,
-    },
-    {
-      title: "Apply",
-      value: `${metrics?.apply_time_ms ?? 0}ms`,
-      subtitle: "Apply engine runtime",
-      icon: <Timer className="h-4 w-4" />,
-    },
-    {
-      title: "DB",
-      value: `${metrics?.db_time_ms ?? 0}ms`,
-      subtitle: "Durable write time",
-      icon: <Database className="h-4 w-4" />,
-    },
-    {
-      title: "Cache Hit",
-      value: `${(metrics?.cache_hit_rate ?? 0).toFixed(1)}%`,
-      subtitle: "Read-path efficiency",
-      icon: <Zap className="h-4 w-4" />,
-    },
-  ];
-
-  const handleQuickAction = async () => {
-    setActionLoading(true);
-    setActionResult(null);
-    setActionError(null);
-    try {
-      if (actionMode === "validate") {
-        const res = await runIngest({ folder_path: rootPath || undefined, dry_run: true });
-        setActionResult(res.data);
-        await invalidateReadsAfterOperation(queryClient, "ingest");
-      } else {
-        const res = await runOperatorRun({
-          folder_path: rootPath || undefined,
-          policy_name: "FIRST_SEEN",
-          dry_run: false,
-        });
-        setActionResult(res.data);
-        await invalidateReadsAfterOperation(queryClient, "operatorRun");
-      }
-    } catch (err: unknown) {
-      setActionError(getErrorMessage(err) || "Operation failed");
-    } finally {
-      setActionLoading(false);
-    }
-  };
+  useEffect(() => {
+    setImageSrc(previewSrc);
+  }, [previewSrc]);
 
   return (
-    <div className="max-w-7xl space-y-6 p-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            System overview, runtime health, and the fastest path into validate or composite runs.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <StatusBadge
-            label={`Regression: ${metrics?.last_regression_status ?? "UNKNOWN"}`}
-            severity={
-              metrics?.last_regression_status === "PASS"
-                ? "success"
-                : metrics?.last_regression_status === "FAIL"
-                  ? "destructive"
-                  : "caution"
-            }
-            dot
+    <button
+      type="button"
+      onClick={() => onPreview(file)}
+      className="group overflow-hidden rounded-[24px] border border-border/80 bg-card text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-lg hover:shadow-primary/10"
+    >
+      <div className="relative aspect-[5/4] overflow-hidden bg-gradient-to-br from-muted via-muted to-secondary/60">
+        {imageSrc ? (
+          <img
+            src={imageSrc}
+            alt={file.filename}
+            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+            onError={() => setImageSrc(null)}
           />
-          <StatusBadge
-            label={actionMode === "validate" ? "Safe Validate Mode" : "Mutating Composite Mode"}
-            severity={actionMode === "validate" ? "info" : "caution"}
-          />
-        </div>
-      </div>
-
-      {error && <ErrorAlert message={error} onDismiss={() => setActionError(null)} />}
-
-      <div className="grid gap-4 xl:grid-cols-[1.4fr_0.9fr]">
-        <Card className="border-primary/15 bg-gradient-to-br from-card via-card to-primary/5">
-          <CardHeader className="pb-4">
-            <CardDescription>Pipeline Summary</CardDescription>
-            <CardTitle className="text-xl">Current media system posture</CardTitle>
-          </CardHeader>
-          <CardContent className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
-            <MetricCard title="Total Files" value={summary?.total_files ?? 0} icon={<Files className="h-4 w-4" />} loading={loading} />
-            <MetricCard title="Images" value={summary?.total_images ?? 0} icon={<ImageIcon className="h-4 w-4" />} loading={loading} />
-            <MetricCard title="Videos" value={summary?.total_videos ?? 0} icon={<Video className="h-4 w-4" />} loading={loading} />
-            <MetricCard title="Dup Groups" value={summary?.duplicate_groups ?? 0} icon={<Layers className="h-4 w-4" />} loading={loading} />
-            <MetricCard title="Canonical" value={summary?.canonical_files ?? 0} icon={<Crown className="h-4 w-4" />} loading={loading} />
-            <MetricCard title="Total Runs" value={summary?.total_runs ?? 0} icon={<PlayCircle className="h-4 w-4" />} loading={loading} />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-4">
-            <CardDescription>Quick Action</CardDescription>
-            <CardTitle className="text-xl">Execute the next operation</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="flex overflow-hidden rounded-md border">
-                <button
-                  onClick={() => setActionMode("validate")}
-                  className={`px-3 py-1.5 text-xs font-medium transition-colors ${actionMode === "validate" ? "bg-primary text-primary-foreground" : "bg-card hover:bg-muted"}`}
-                >
-                  Validate Ingest
-                </button>
-                <button
-                  onClick={() => setActionMode("composite")}
-                  className={`px-3 py-1.5 text-xs font-medium transition-colors ${actionMode === "composite" ? "bg-primary text-primary-foreground" : "bg-card hover:bg-muted"}`}
-                >
-                  Composite Run
-                </button>
-              </div>
-              <OperationRiskLabel mutating={actionMode === "composite"} />
-            </div>
-            <p className="text-sm text-muted-foreground">
-              {actionMode === "validate"
-                ? "Performs a dry-run ingest to validate files without modifying durable state."
-                : "Runs the ingest, plan, and apply pipeline. This is a mutating operation."}
-            </p>
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <Input
-                value={rootPath}
-                onChange={e => setRootPath(e.target.value)}
-                placeholder="Root path (optional)"
-                className="max-w-xl font-mono"
-              />
-              <Button
-                onClick={handleQuickAction}
-                disabled={actionLoading}
-                variant={actionMode === "composite" ? "destructive" : "default"}
-              >
-                {actionLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Execute
-              </Button>
-            </div>
-            {actionResult ? (
-              <div className="space-y-3 rounded-lg border bg-muted/30 p-4">
-                <div className="flex flex-wrap items-center gap-3">
-                  <StatusBadge label={actionResult.success ? "Success" : "Failed"} severity={actionResult.success ? "success" : "destructive"} dot />
-                  <span className="font-mono text-xs text-muted-foreground">{actionResult.duration_ms}ms</span>
-                </div>
-                <p className="text-sm">{actionResult.summary}</p>
-                <JsonViewer data={actionResult.details} title="Operation Details" />
-              </div>
+        ) : (
+          <div className="flex h-full items-center justify-center">
+            {file.file_type === "video" ? (
+              <Video className="h-10 w-10 text-muted-foreground" />
             ) : (
-              <div className="rounded-lg border border-dashed bg-muted/20 p-4 text-sm text-muted-foreground">
-                Execute a quick action to inspect the latest result payload without leaving the dashboard.
-              </div>
+              <ImageIcon className="h-10 w-10 text-muted-foreground" />
             )}
-          </CardContent>
-        </Card>
+          </div>
+        )}
+        <div className="absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/65 via-black/15 to-transparent" />
+        <div className="absolute left-3 top-3">
+          <StatusBadge
+            label={file.file_type === "video" ? "Video" : "Image"}
+            severity="neutral"
+            className="border-white/20 bg-background/85 text-foreground"
+          />
+        </div>
       </div>
+      <div className="space-y-1 p-3">
+        <p className="truncate text-sm font-semibold text-foreground">{file.filename}</p>
+        <p className="truncate text-xs text-muted-foreground">
+          {file.sort_tag_name ?? file.matched_tags[0] ?? "Ready for review"}
+        </p>
+      </div>
+    </button>
+  );
+}
 
+function SectionHeader({
+  title,
+  description,
+  actionLabel,
+  actionHref,
+}: {
+  title: string;
+  description: string;
+  actionLabel?: string;
+  actionHref?: string;
+}) {
+  return (
+    <div className="flex items-end justify-between gap-3">
       <div>
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Performance</h2>
-          <span className="text-xs text-muted-foreground">Latest recorded timings</span>
-        </div>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-          {performanceCards.map(card => (
-            <MetricCard
-              key={card.title}
-              title={card.title}
-              value={card.value}
-              subtitle={card.subtitle}
-              icon={card.icon}
-              loading={loading}
-            />
-          ))}
-          <Card className="flex items-center justify-center p-4">
-            {loading ? (
-              <div className="h-8 w-16 animate-pulse rounded bg-muted" />
-            ) : (
-              <div className="space-y-2 text-center">
-                <StatusBadge
-                  label={`Regression: ${metrics?.last_regression_status ?? "UNKNOWN"}`}
-                  severity={metrics?.last_regression_status === "PASS" ? "success" : metrics?.last_regression_status === "FAIL" ? "destructive" : "caution"}
-                  dot
-                />
-                <p className="text-xs text-muted-foreground">Latest benchmark regression signal</p>
-              </div>
-            )}
-          </Card>
+        <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
+        <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+      </div>
+      {actionLabel && actionHref ? (
+        <Button asChild variant="ghost" size="sm">
+          <Link to={actionHref}>
+            {actionLabel}
+            <ArrowRight className="ml-2 h-4 w-4" />
+          </Link>
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function QuickLinkCard({
+  title,
+  description,
+  href,
+  icon,
+}: {
+  title: string;
+  description: string;
+  href: string;
+  icon: ReactNode;
+}) {
+  return (
+    <Link
+      to={href}
+      className="rounded-2xl border border-border/70 bg-background/80 p-4 shadow-sm transition-colors hover:border-primary/35 hover:bg-primary/5"
+    >
+      <div className="flex items-start gap-3">
+        <div className="rounded-xl border border-border/70 bg-card p-2">{icon}</div>
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-foreground">{title}</p>
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">{description}</p>
         </div>
       </div>
+    </Link>
+  );
+}
 
-      <Card>
-        <CardHeader className="pb-3">
-          <CardDescription>Operator workflow</CardDescription>
-          <CardTitle className="text-xl">Suggested operating sequence</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-3">
-          <div className="rounded-lg border bg-muted/20 p-4">
-            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">1. Validate</p>
-            <p className="mt-2 text-sm">Start with a dry-run ingest when checking a new root path or recent file drop.</p>
+function HeroSkeleton() {
+  return (
+    <div className="overflow-hidden rounded-[30px] border border-border/70 bg-card p-6 shadow-sm">
+      <div className="space-y-4">
+        <Skeleton className="h-4 w-32" />
+        <Skeleton className="h-10 w-72" />
+        <Skeleton className="h-5 w-full max-w-2xl" />
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, index) => (
+            <Skeleton key={index} className="h-24 rounded-2xl" />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EmptyMediaRow({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
+  return (
+    <Card className="rounded-[28px] border-dashed">
+      <CardContent className="p-6">
+        <p className="text-sm font-medium">{title}</p>
+        <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+export default function DashboardPage() {
+  const [selectedFile, setSelectedFile] = useState<CanonicalFile | null>(null);
+
+  const homeQuery = useQuery({
+    queryKey: queryKeys.home,
+    queryFn: async () => (await getHome()).data as HomePageData,
+    staleTime: queryOptions.home.staleTime,
+  });
+
+  const home = homeQuery.data;
+  const error = getErrorMessage(homeQuery.error);
+  const recentImages =
+    home?.recent_images ?? home?.recent_media.filter((file) => file.file_type === "image") ?? [];
+  const recentVideos =
+    home?.recent_videos ?? home?.recent_media.filter((file) => file.file_type === "video") ?? [];
+
+  return (
+    <div className="mx-auto flex max-w-7xl flex-col gap-6 p-6">
+      {homeQuery.isLoading && !home ? <HeroSkeleton /> : null}
+      {error ? <ErrorAlert message={error} /> : null}
+
+      {home ? (
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_22rem]">
+          <div className="space-y-6">
+            <section className="overflow-hidden rounded-[30px] border border-border/70 bg-[linear-gradient(135deg,hsl(var(--card))_0%,hsl(var(--card))_48%,hsl(var(--secondary)/0.55)_100%)] shadow-sm">
+              <div className="space-y-5 px-6 py-6 lg:px-8">
+                <div className="inline-flex items-center gap-2 rounded-full border border-border/80 bg-background/85 px-3 py-1 text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Library Overview
+                </div>
+                <div className="space-y-2">
+                  <h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
+                    Media Manager
+                  </h1>
+                  <p className="max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
+                    Browse recent media, review what needs attention, and jump into the guided
+                    workflow when you&apos;re ready.
+                  </p>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className="rounded-2xl border border-border/70 bg-background/85 p-4 shadow-sm">
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                      Total assets
+                    </p>
+                    <p className="mt-2 text-2xl font-semibold">{home.library_summary.total_assets}</p>
+                  </div>
+                  <div className="rounded-2xl border border-border/70 bg-background/85 p-4 shadow-sm">
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                      Images
+                    </p>
+                    <p className="mt-2 text-2xl font-semibold">{home.library_summary.images}</p>
+                  </div>
+                  <div className="rounded-2xl border border-border/70 bg-background/85 p-4 shadow-sm">
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                      Videos
+                    </p>
+                    <p className="mt-2 text-2xl font-semibold">{home.library_summary.videos}</p>
+                  </div>
+                  <div className="rounded-2xl border border-border/70 bg-background/85 p-4 shadow-sm">
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                      Duplicate groups
+                    </p>
+                    <p className="mt-2 text-2xl font-semibold">{home.library_summary.duplicate_groups}</p>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="space-y-4">
+              <SectionHeader
+                title="Recent Images"
+                description="Newest image items ready for review."
+                actionLabel="View All Media"
+                actionHref="/gallery"
+              />
+              {recentImages.length ? (
+                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                  {recentImages.map((file) => (
+                    <MediaThumbCard key={file.id} file={file} onPreview={setSelectedFile} />
+                  ))}
+                </div>
+              ) : (
+                <EmptyMediaRow
+                  title="No recent images yet"
+                  description="Image uploads will appear here once they are added to the library."
+                />
+              )}
+            </section>
+
+            <section className="space-y-4">
+              <SectionHeader
+                title="Recent Videos"
+                description="Newest video items ready for review."
+                actionLabel="View All Media"
+                actionHref="/gallery"
+              />
+              {recentVideos.length ? (
+                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                  {recentVideos.map((file) => (
+                    <MediaThumbCard key={file.id} file={file} onPreview={setSelectedFile} />
+                  ))}
+                </div>
+              ) : (
+                <EmptyMediaRow
+                  title="No recent videos yet"
+                  description="Video uploads will appear here once they are added to the library."
+                />
+              )}
+            </section>
           </div>
-          <div className="rounded-lg border bg-muted/20 p-4">
-            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">2. Review</p>
-            <p className="mt-2 text-sm">Inspect duplicates, gallery output, and recent runs before making a mutating pass.</p>
+
+          <div className="space-y-6 xl:sticky xl:top-6 xl:self-start">
+            <Card className="rounded-[28px] border-border/70 bg-background/90 shadow-sm">
+              <CardHeader className="pb-3">
+                <CardDescription>Go where you need to work</CardDescription>
+                <CardTitle className="text-xl">Quick Links</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Button asChild className="w-full justify-between">
+                  <Link to={home.guided_entry?.route ?? "/pipeline-wizard"}>
+                    {home.guided_entry?.label ?? "Open Organize Media"}
+                    <ArrowRight className="h-4 w-4" />
+                  </Link>
+                </Button>
+                <p className="text-sm leading-6 text-muted-foreground">
+                  {home.guided_entry?.helper ?? "Guided ingest, planning, apply, and review"}
+                </p>
+                <div className="grid gap-3 pt-2">
+                  <QuickLinkCard
+                    title="Review Duplicates"
+                    description="Inspect duplicate groups and confirm which items need review."
+                    href="/duplicates"
+                    icon={<Copy className="h-4 w-4" />}
+                  />
+                  <QuickLinkCard
+                    title="Open Library"
+                    description="Browse canonical media with previews, filters, and detail pages."
+                    href="/gallery"
+                    icon={<Images className="h-4 w-4" />}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="rounded-[28px] border-border/70 shadow-sm">
+              <CardHeader className="pb-3">
+                <CardDescription>Items that need review before you continue</CardDescription>
+                <CardTitle className="text-xl">Needs Attention</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Link
+                  to="/duplicates"
+                  className="flex items-center justify-between rounded-2xl border border-border/70 bg-background/80 p-4 transition-colors hover:border-primary/35 hover:bg-primary/5"
+                >
+                  <div>
+                    <p className="text-sm font-semibold">Duplicate groups</p>
+                    <p className="mt-1 text-sm text-muted-foreground">Review likely duplicate clusters.</p>
+                  </div>
+                  <span className="text-2xl font-semibold">{home.attention_summary.duplicate_groups}</span>
+                </Link>
+                <Link
+                  to="/runs"
+                  className="flex items-center justify-between rounded-2xl border border-border/70 bg-background/80 p-4 transition-colors hover:border-primary/35 hover:bg-primary/5"
+                >
+                  <div>
+                    <p className="text-sm font-semibold">Failed runs</p>
+                    <p className="mt-1 text-sm text-muted-foreground">Check runs that need follow-up.</p>
+                  </div>
+                  <span className="text-2xl font-semibold">{home.attention_summary.failed_runs}</span>
+                </Link>
+                <div className="flex items-center justify-between rounded-2xl border border-border/70 bg-background/80 p-4">
+                  <div>
+                    <p className="text-sm font-semibold">Untagged assets</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Canonical items that still need metadata enrichment.
+                    </p>
+                  </div>
+                  <span className="text-2xl font-semibold">{home.attention_summary.untagged_assets}</span>
+                </div>
+                <div className="rounded-2xl border border-primary/15 bg-primary/5 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+                    Recommended workflow
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-foreground/90">
+                    Start in Organize Media for guided ingest and review, then use Duplicates and
+                    Gallery as follow-up tools when you want more detail.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
           </div>
-          <div className="rounded-lg border bg-muted/20 p-4">
-            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">3. Apply</p>
-            <p className="mt-2 flex items-center gap-2 text-sm">
-              Run the composite pipeline only when the validation signal looks healthy.
-              <ArrowRight className="h-4 w-4 text-muted-foreground" />
-            </p>
-          </div>
-        </CardContent>
-      </Card>
+        </div>
+      ) : null}
+
+      <MediaPreviewModal file={selectedFile} onClose={() => setSelectedFile(null)} />
     </div>
   );
 }

@@ -14,6 +14,7 @@ export async function invalidateReadsAfterOperation(
   _operation: OperationInvalidationTarget,
 ) {
   await Promise.all([
+    queryClient.invalidateQueries({ queryKey: queryKeys.home }),
     queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary }),
     queryClient.invalidateQueries({ queryKey: queryKeys.latestMetrics }),
     queryClient.invalidateQueries({ queryKey: queryKeys.runsRoot }),

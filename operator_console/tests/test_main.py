@@ -23,6 +23,7 @@ def test_canonical_api_route_inventory_and_v1_removal() -> None:
 
     expected_canonical_paths = {
         "/api/status",
+        "/api/home",
         "/api/dashboard-summary",
         "/api/latest-metrics",
         "/api/directory-picker/capability",
@@ -557,6 +558,79 @@ class _FakeReadServices:
 
     def status(self) -> dict[str, object]:
         return {"active_phase": "phase13"}
+
+    def home(self) -> dict[str, object]:
+        return {
+            "library_summary": {
+                "total_assets": 10,
+                "images": 6,
+                "videos": 4,
+                "duplicate_groups": 2,
+                "canonical_assets": 8,
+                "recent_import_count": 3,
+            },
+            "recent_media": [
+                {
+                    "id": "33333333-0000-0000-0000-000000000001",
+                    "filename": "canon-a.jpg",
+                    "file_type": "image",
+                    "media_url": "/media/33333333-0000-0000-0000-000000000001",
+                    "poster_url": None,
+                    "matched_tags": ["city", "travel"],
+                    "top_confidence_score": 0.92,
+                    "sort_tag_name": "city",
+                }
+            ],
+            "recent_images": [
+                {
+                    "id": "33333333-0000-0000-0000-000000000001",
+                    "filename": "canon-a.jpg",
+                    "file_type": "image",
+                    "media_url": "/media/33333333-0000-0000-0000-000000000001",
+                    "poster_url": None,
+                    "matched_tags": ["city", "travel"],
+                    "top_confidence_score": 0.92,
+                    "sort_tag_name": "city",
+                }
+            ],
+            "recent_videos": [],
+            "attention_summary": {
+                "duplicate_groups": 2,
+                "failed_runs": 1,
+                "active_runs": 0,
+                "untagged_assets": 3,
+                "unresolved_items": 4,
+            },
+            "recent_activity": [
+                {
+                    "operation_run_id": "abc",
+                    "operation_type": "INGEST",
+                    "status": "COMPLETED",
+                    "started_at": "2026-03-01T09:30:00+00:00",
+                    "completed_at": "2026-03-01T09:31:00+00:00",
+                    "duration_ms": 60000.0,
+                    "linked_run_id": None,
+                    "context": {"folder_path": "/dataset"},
+                    "error_message": None,
+                }
+            ],
+            "collections": [
+                {"label": "city", "kind": "tag", "asset_count": 4},
+                {"label": "travel", "kind": "tag", "asset_count": 2},
+            ],
+            "status_strip": {
+                "workflow_label": "Guided workflow available",
+                "active_phase": "phase13",
+                "last_run_status": "COMPLETED",
+                "last_run_type": "INGEST",
+                "regression_status": "PASS",
+            },
+            "guided_entry": {
+                "label": "Open Organize Media",
+                "route": "/pipeline-wizard",
+                "helper": "Guided ingest, planning, apply, and review",
+            },
+        }
 
     def dashboard_summary(self) -> dict[str, object]:
         return {
@@ -1196,6 +1270,23 @@ def test_dashboard_summary_endpoint_returns_json() -> None:
     }
 
 
+def test_home_endpoint_returns_media_first_payload() -> None:
+    app.dependency_overrides[get_read_services] = _FakeReadServices
+    client = TestClient(app)
+    try:
+        response = client.get("/api/home")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    result = response.json()["data"]["result"]
+    assert result["library_summary"]["total_assets"] == 10
+    assert result["guided_entry"]["route"] == "/pipeline-wizard"
+    assert result["status_strip"]["regression_status"] == "PASS"
+    assert result["recent_media"][0]["filename"] == "canon-a.jpg"
+
+
 def test_latest_metrics_endpoint_returns_json() -> None:
     """GET /api/latest-metrics should return metrics fields as JSON."""
     app.dependency_overrides[get_read_services] = _FakeReadServices
@@ -1290,15 +1381,18 @@ def test_read_endpoints_use_canonical_api_base() -> None:
     app.dependency_overrides[get_read_services] = _FakeReadServices
     client = TestClient(app)
     try:
+        home = client.get("/api/home")
         summary = client.get("/api/dashboard-summary")
         metrics = client.get("/api/latest-metrics")
         runs = client.get("/api/runs?limit=25")
     finally:
         app.dependency_overrides.clear()
 
+    assert home.status_code == 200
     assert summary.status_code == 200
     assert metrics.status_code == 200
     assert runs.status_code == 200
+    assert home.json()["data"]["result"]["guided_entry"]["route"] == "/pipeline-wizard"
     assert summary.json()["data"]["result"]["total_files"] == 10
     assert metrics.json()["data"]["result"]["ingest_time_ms"] == 12.5
     assert runs.json()["data"]["result"][0]["operation_run_id"] == "abc"

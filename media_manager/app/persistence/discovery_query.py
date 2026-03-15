@@ -51,6 +51,7 @@ class DiscoveryQueryParams:
     tags: tuple[str, ...] = ()
     sort_by: SortBy = "created_at"
     sort_order: SortOrder = "desc"
+    file_type: Literal["image", "video"] | None = None
     source: TagSource | None = None
     min_confidence: float | None = None
 
@@ -92,6 +93,8 @@ class DiscoveryQueryService:
         sort_order: SortOrder = params.sort_order
         if sort_order not in {"asc", "desc"}:
             raise ValueError("sort_order must be one of: asc, desc.")
+        if params.file_type is not None and params.file_type not in {"image", "video"}:
+            raise ValueError("file_type must be one of: image, video.")
 
         normalized_tags = self._normalize_tags(params.tags)
         if params.min_confidence is not None and not 0.0 <= float(params.min_confidence) <= 1.0:
@@ -101,6 +104,7 @@ class DiscoveryQueryService:
 
         with self._session_factory() as session:
             aggregated = self._aggregated_subquery(
+                file_type=params.file_type,
                 source_value=source_value,
                 min_confidence=params.min_confidence,
                 normalized_tags=normalized_tags,
@@ -175,6 +179,7 @@ class DiscoveryQueryService:
     def _aggregated_subquery(
         self,
         *,
+        file_type: Literal["image", "video"] | None,
         source_value: str | None,
         min_confidence: float | None,
         normalized_tags: tuple[str, ...],
@@ -239,6 +244,8 @@ class DiscoveryQueryService:
             stmt = stmt.where(CanonicalTag.source == source_value)
         if min_confidence is not None:
             stmt = stmt.where(CanonicalTag.confidence_score >= float(min_confidence))
+        if file_type is not None:
+            stmt = stmt.where(media_type_expr == file_type)
         if normalized_tags:
             stmt = stmt.where(Tag.normalized_name.in_(normalized_tags))
 

@@ -56,7 +56,7 @@ src/
 
 | Route | Description |
 |---|---|
-| `/` | Dashboard - KPIs, performance, quick actions |
+| `/` | Dashboard - media-first home, review queues, and guided workflow entry |
 | `/operations` | Pipeline operations with risk labels |
 | `/pipeline-wizard` | Guided pipeline workflow with review checkpoints |
 | `/runs` | Sortable/filterable run history |

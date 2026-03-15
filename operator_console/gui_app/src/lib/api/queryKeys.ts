@@ -8,6 +8,7 @@ export interface CanonicalQueryParams {
 
 export const queryKeys = {
   status: ["status"] as const,
+  home: ["home"] as const,
   dashboardSummary: ["dashboard-summary"] as const,
   latestMetrics: ["latest-metrics"] as const,
   runsRoot: ["runs"] as const,
@@ -41,6 +42,7 @@ export const queryKeys = {
 
 export const allReadQueryRoots = [
   queryKeys.status,
+  queryKeys.home,
   queryKeys.dashboardSummary,
   queryKeys.latestMetrics,
   queryKeys.runsRoot,
