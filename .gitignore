@@ -69,3 +69,6 @@ media-manager.db-wal
 # Benchmark artifacts
 artifacts/perf/
 artifacts/
+
+# Local manual-QA media fixture output
+testdata/manual-qa/

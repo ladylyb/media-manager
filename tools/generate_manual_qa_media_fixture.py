@@ -1,3 +1,10 @@
+"""Generate a local manual-QA media fixture under `testdata/manual-qa/`.
+
+The generated files are intentionally local-only and are ignored by git. Use
+this when you want a repeatable media dataset for planner/apply testing without
+checking binary fixture payloads into source control.
+"""
+
 from __future__ import annotations
 
 import sys
