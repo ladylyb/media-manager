@@ -2,7 +2,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AppLayout } from "@/components/AppLayout";
 import DashboardPage from "@/pages/DashboardPage";
 import OperationsPage from "@/pages/OperationsPage";
@@ -27,6 +27,18 @@ const queryClient = new QueryClient({
   },
 });
 
+const appRoutes = [
+  { path: "/", element: <DashboardPage /> },
+  { path: "/operations", element: <OperationsPage /> },
+  { path: "/runs", element: <RunsPage /> },
+  { path: "/ledger", element: <LedgerPage /> },
+  { path: "/discover", element: <DiscoverPage /> },
+  { path: "/duplicates", element: <DuplicatesPage /> },
+  { path: "/policy", element: <PolicyPage /> },
+  { path: "/admin", element: <AdminPage /> },
+  { path: "/gallery", element: <GalleryPage /> },
+] as const;
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
@@ -35,16 +47,10 @@ const App = () => (
       <BrowserRouter>
         <AppLayout>
           <Routes>
-            <Route path="/" element={<DashboardPage />} />
-            <Route path="/console-v2" element={<DashboardPage />} />
-            <Route path="/operations" element={<OperationsPage />} />
-            <Route path="/runs" element={<RunsPage />} />
-            <Route path="/ledger" element={<LedgerPage />} />
-            <Route path="/discover" element={<DiscoverPage />} />
-            <Route path="/duplicates" element={<DuplicatesPage />} />
-            <Route path="/policy" element={<PolicyPage />} />
-            <Route path="/admin" element={<AdminPage />} />
-            <Route path="/gallery" element={<GalleryPage />} />
+            {appRoutes.map((route) => (
+              <Route key={route.path} path={route.path} element={route.element} />
+            ))}
+            <Route path="/console-v2" element={<Navigate to="/" replace />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AppLayout>

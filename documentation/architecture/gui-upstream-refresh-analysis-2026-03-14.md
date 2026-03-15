@@ -21,6 +21,51 @@ after manual review because the local `gui_app` has diverged into a
 repo-specific integration layer with canonical `/api/*` mapping, operation-run
 semantics, benchmark and observability flows, and destructive admin safeguards.
 
+## Implementation Status (MTM)
+
+This section tracks movement from analysis to implementation.
+
+Implemented and merged to `develop`:
+
+- policy/docs/CI guardrail work that formalized `gui_upstream` as reference-only
+- media/gallery presentation harvest:
+  - `src/components/media/MediaCard.tsx`
+  - `src/components/media/MediaGrid.tsx`
+  - `src/components/media/MediaPreviewModal.tsx`
+  - refreshed `src/pages/GalleryPage.tsx`
+
+Implemented on branch `feat/gui-layout-and-routing-polish`:
+
+- low-risk layout adoption from upstream `layout/*`:
+  - `src/components/layout/Sidebar.tsx`
+  - `src/components/layout/StatusStrip.tsx`
+  - `src/components/layout/TopBar.tsx`
+- compatibility wrappers so existing imports keep working:
+  - `src/components/AppLayout.tsx`
+  - `src/components/AppSidebar.tsx`
+  - `src/components/StatusBar.tsx`
+- SPA routing cleanup in `src/App.tsx`:
+  - route table normalized into `appRoutes`
+  - `/console-v2` converted to a client-side compatibility redirect to `/`
+
+Still intentionally not implemented:
+
+- page UX refactors for dashboard, runs, duplicates, policy
+- `MediaDetail` route work
+- discover-to-gallery consolidation
+- operations-page upstream UX adoption
+- type/module splitting into `media.ts` / `runs.ts`
+- envelope extraction or alternate data hooks
+- backend route-surface cleanup for `/console-v2`
+
+MTM assessment:
+
+- low-risk visual harvest from upstream has been successfully applied without
+  disturbing the API adapter layer
+- medium-risk layout/routing polish is now partially completed, but server-side
+  route ambiguity around `/console-v2` remains
+- high-risk API/data/admin ownership areas remain correctly untouched
+
 ## High-Risk Local Ownership Areas
 
 Treat the following `gui_app` areas as canonical local code. Do not overwrite
@@ -66,12 +111,12 @@ Classification legend:
 | `operator_console/gui_upstream/bun.lock` | `ignore` | Local frontend build currently uses the existing Node/npm workflow; do not introduce a second package-manager baseline from upstream analysis alone. |
 | `operator_console/gui_upstream/index.html` | `visual-only candidate` | Safe to mine for site metadata or small branding changes, but do not let it redefine runtime assumptions. |
 | `operator_console/gui_upstream/src/App.tsx` | `manual UX adaptation candidate` | Upstream route and layout refactor is useful as a reference, but local routing still needs to preserve current `gui_app` pages and API-backed flows. |
-| `operator_console/gui_upstream/src/components/layout/Sidebar.tsx` | `visual-only candidate` | Layout rename and nav styling are portable, but menu structure changes must be reviewed against local route coverage. |
-| `operator_console/gui_upstream/src/components/layout/StatusStrip.tsx` | `visual-only candidate` | Status-strip presentation may be reusable, but data fetching behavior should stay aligned with the local API client. |
-| `operator_console/gui_upstream/src/components/layout/TopBar.tsx` | `visual-only candidate` | Header/layout styling is a low-risk source of ideas if kept separate from route or data changes. |
-| `operator_console/gui_upstream/src/components/media/MediaCard.tsx` | `visual-only candidate` | Media card rendering is a good UI harvest candidate for the local gallery. |
-| `operator_console/gui_upstream/src/components/media/MediaGrid.tsx` | `visual-only candidate` | Grid composition is reusable if wired to local canonical-media queries. |
-| `operator_console/gui_upstream/src/components/media/MediaPreviewModal.tsx` | `visual-only candidate` | Preview/modal UX is a good candidate if adapted to local media fields and routing decisions. |
+| `operator_console/gui_upstream/src/components/layout/Sidebar.tsx` | `visual-only candidate` | Implemented as local layout harvest on `feat/gui-layout-and-routing-polish`; preserve local route coverage and discover entry until product changes are intentional. |
+| `operator_console/gui_upstream/src/components/layout/StatusStrip.tsx` | `visual-only candidate` | Implemented as local layout harvest on `feat/gui-layout-and-routing-polish`, but with local status semantics preserved. |
+| `operator_console/gui_upstream/src/components/layout/TopBar.tsx` | `visual-only candidate` | Implemented as local layout harvest on `feat/gui-layout-and-routing-polish`. |
+| `operator_console/gui_upstream/src/components/media/MediaCard.tsx` | `visual-only candidate` | Implemented locally and merged as gallery/media presentation work. |
+| `operator_console/gui_upstream/src/components/media/MediaGrid.tsx` | `visual-only candidate` | Implemented locally and merged as gallery/media presentation work. |
+| `operator_console/gui_upstream/src/components/media/MediaPreviewModal.tsx` | `visual-only candidate` | Implemented locally and merged as gallery/media presentation work. |
 | `operator_console/gui_upstream/src/components/ui/LoadingSkeleton.tsx` | `visual-only candidate` | Simple skeleton rename/export cleanup; safe only if it fits existing local component conventions. |
 | `operator_console/gui_upstream/src/components/ui/OperationCard.tsx` | `manual UX adaptation candidate` | The generic card pattern is interesting, but local operations already encode invalidation targets and canonical backend semantics in `OperationsPage.tsx`. |
 | `operator_console/gui_upstream/src/hooks/useApi.ts` | `do not port` | This introduces an alternate data-access abstraction and risks bypassing the repo-owned API adapter layer. |
@@ -100,14 +145,18 @@ Classification legend:
 
 ## Recommended Next Port Order
 
-If and when local UI adaptation is desired, review in this order:
+Completed:
 
 1. media components and gallery preview UX
-2. layout polish from `layout/*`
-3. selected page-level UX improvements for dashboard, runs, duplicates, and policy
-4. optional product decision on `MediaDetail` and discover-to-gallery consolidation
+2. layout polish from `layout/*` (implemented on `feat/gui-layout-and-routing-polish`)
 
-Do not start with API, types, or admin pages.
+Recommended next:
+
+3. route-surface cleanup and product decision on `/console-v2`
+4. selected page-level UX improvements for dashboard, runs, duplicates, and policy
+5. optional product decision on `MediaDetail` and discover-to-gallery consolidation
+
+Do not start with API, types, admin pages, or alternate data hooks.
 
 ## Verification Notes
 
@@ -115,3 +164,9 @@ Do not start with API, types, or admin pages.
 - `gui_app` remained unchanged during this phase.
 - Existing boundary guards should remain the acceptance gate before any later
   adaptation into `gui_app`.
+- Gallery/media harvest passed guard checks and build before merge to `develop`.
+- Layout/routing polish on `feat/gui-layout-and-routing-polish` passes:
+  - `bash tools/ci/check_gui_sync_boundary.sh`
+  - `bash tools/ci/check_gui_app_api_client_contract.sh`
+  - `bash tools/ci/check_supported_tooling_api_boundary.sh`
+  - `npm run build`
