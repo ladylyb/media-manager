@@ -1391,7 +1391,12 @@ export default function PipelineWizard() {
         >
           {duplicatesQuery.error && <ErrorAlert message={parseError(duplicatesQuery.error)} />}
           <div className="space-y-4">
-            <RestPointSummaryCard title="Duplicate Summary" lines={duplicateSummary.whatPlanningFound} />
+            <RestPointSummaryCard
+              title="Duplicate Summary"
+              lines={duplicateSummary.whatPlanningFound}
+              sectionLabel="What Planning Found"
+              description="This step is informational. It gives you a plain-English summary of the duplicate picture before the wizard continues."
+            />
             <MetricGrid
               items={summarizeMetrics([
                 { label: "Duplicate groups", value: duplicates.length },
@@ -1483,6 +1488,7 @@ export default function PipelineWizard() {
                 title="Apply Outcome"
                 lines={applyReviewSummary.lines}
                 tone={applyReviewSummary.caution ? "caution" : "default"}
+                description="This checkpoint explains what Apply just did before the wizard moves on to canonical recomputation."
               />
               {asString(applyResult.run_id) && (
                 <PlanReferenceStrip
@@ -1592,6 +1598,7 @@ export default function PipelineWizard() {
                       ]
                 }
                 tone={zeroOutcome ? "caution" : "default"}
+                description="This checkpoint explains which file the system now treats as the chosen version before enrichment begins."
               />
               {asString(canonicalResult.policy_name) && (
                 <PlanReferenceStrip
@@ -1718,6 +1725,7 @@ export default function PipelineWizard() {
       <CheckpointStep
         title="Guided Run Complete"
         description="The guided run is finished. This page gives you a quick plain-English wrap-up of what happened and what you can do next."
+        categoryLabel="Completion Screen"
         onContinue={() => {
           setWizardState(INITIAL_STATE);
           navigate("/pipeline-wizard");
@@ -1730,6 +1738,9 @@ export default function PipelineWizard() {
           title="Run Outcome"
           lines={completionSummary.lines}
           tone={completionSummary.caution ? "caution" : "default"}
+          eyebrow="Completion Summary"
+          description="This is the plain-English wrap-up of the guided run, highlighting the outcomes that matter most."
+          sectionLabel="What This Run Did"
         />
         <MetricGrid
           items={summarizeMetrics([
@@ -1949,10 +1960,16 @@ function RestPointSummaryCard({
   title,
   lines,
   tone = "default",
+  eyebrow = "Progress Checkpoint",
+  description = "This step is informational. It gives you a plain-English summary before the wizard continues.",
+  sectionLabel = "What This Means",
 }: {
   title: string;
   lines: string[];
   tone?: "default" | "caution";
+  eyebrow?: string;
+  description?: string;
+  sectionLabel?: string;
 }) {
   const containerClass =
     tone === "caution"
@@ -1965,16 +1982,14 @@ function RestPointSummaryCard({
       <CardContent className="space-y-4 p-5">
         <div>
           <p className={`text-xs font-semibold uppercase tracking-[0.22em] ${eyebrowClass}`}>
-            Progress Checkpoint
+            {eyebrow}
           </p>
           <h3 className="mt-2 text-lg font-semibold text-foreground">{title}</h3>
-          <p className="mt-1 text-sm text-muted-foreground">
-            This step is informational. It gives you a plain-English summary of the duplicate picture before the wizard continues.
-          </p>
+          <p className="mt-1 text-sm text-muted-foreground">{description}</p>
         </div>
         <div className="rounded-xl border border-border/70 bg-background/80 p-4 shadow-sm">
           <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-            What Planning Found
+            {sectionLabel}
           </p>
           <div className="mt-3 space-y-2">
             {lines.map((line, index) => (

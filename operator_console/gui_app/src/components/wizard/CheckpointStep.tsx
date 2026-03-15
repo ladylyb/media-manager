@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 interface CheckpointStepProps {
   title: string;
   description: string;
+  categoryLabel?: string;
   onContinue: () => void;
   onRerun?: (() => void) | null;
   onAbort?: (() => void) | null;
@@ -19,6 +20,7 @@ interface CheckpointStepProps {
 export function CheckpointStep({
   title,
   description,
+  categoryLabel = "Review Checkpoint",
   onContinue,
   onRerun,
   onAbort,
@@ -31,7 +33,7 @@ export function CheckpointStep({
   return (
     <Card className="rounded-2xl">
       <CardHeader>
-        <CardDescription>Review Checkpoint</CardDescription>
+        <CardDescription>{categoryLabel}</CardDescription>
         <CardTitle className="text-2xl">{title}</CardTitle>
         <p className="max-w-3xl text-sm text-muted-foreground">{description}</p>
       </CardHeader>
