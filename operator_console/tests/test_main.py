@@ -207,6 +207,7 @@ class _FakeService:
                         "filename": "canon-a.jpg",
                         "file_type": "image",
                         "media_url": "/media/33333333-0000-0000-0000-000000000001",
+                        "poster_url": None,
                         "matched_tags": ["city", "travel"],
                         "top_confidence_score": 0.92,
                         "sort_tag_name": "city",
@@ -216,6 +217,7 @@ class _FakeService:
                         "filename": "canon-b.mov",
                         "file_type": "video",
                         "media_url": "/media/33333333-0000-0000-0000-000000000002",
+                        "poster_url": "/api/video-thumbnail/33333333-0000-0000-0000-000000000002",
                         "matched_tags": [],
                         "top_confidence_score": None,
                         "sort_tag_name": None,
@@ -346,6 +348,11 @@ class _FakeService:
 
     def resolve_thumbnail_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:
         if str(file_instance_id) == "aaaaaaaa-0000-0000-0000-000000000001":
+            return Path(__file__), "image/jpeg"
+        return None
+
+    def resolve_video_thumbnail_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:
+        if str(file_instance_id) == "33333333-0000-0000-0000-000000000002":
             return Path(__file__), "image/jpeg"
         return None
 
@@ -616,6 +623,7 @@ class _FakeReadServices:
                     "filename": "canon-a.jpg",
                     "file_type": "image",
                     "media_url": "/media/33333333-0000-0000-0000-000000000001",
+                    "poster_url": None,
                     "matched_tags": ["city", "travel"],
                     "top_confidence_score": 0.92,
                     "sort_tag_name": "city",
@@ -625,6 +633,7 @@ class _FakeReadServices:
                     "filename": "canon-b.mov",
                     "file_type": "video",
                     "media_url": "/media/33333333-0000-0000-0000-000000000002",
+                    "poster_url": "/api/video-thumbnail/33333333-0000-0000-0000-000000000002",
                     "matched_tags": [],
                     "top_confidence_score": None,
                     "sort_tag_name": None,
@@ -1541,6 +1550,7 @@ def test_api_canonical_returns_paginated_shape() -> None:
                 "filename": "canon-a.jpg",
                 "file_type": "image",
                 "media_url": "/media/33333333-0000-0000-0000-000000000001",
+                "poster_url": None,
                 "matched_tags": ["city", "travel"],
                 "top_confidence_score": 0.92,
                 "sort_tag_name": "city",
@@ -1550,6 +1560,7 @@ def test_api_canonical_returns_paginated_shape() -> None:
                 "filename": "canon-b.mov",
                 "file_type": "video",
                 "media_url": "/media/33333333-0000-0000-0000-000000000002",
+                "poster_url": "/api/video-thumbnail/33333333-0000-0000-0000-000000000002",
                 "matched_tags": [],
                 "top_confidence_score": None,
                 "sort_tag_name": None,
@@ -1794,6 +1805,31 @@ def test_thumbnail_endpoint_returns_404_for_missing_or_ineligible() -> None:
     client = TestClient(app)
     try:
         response = client.get("/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000099")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404
+
+
+def test_video_thumbnail_endpoint_returns_file_response() -> None:
+    """GET /api/video-thumbnail/{id} should stream poster bytes when eligible."""
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/api/video-thumbnail/33333333-0000-0000-0000-000000000002")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/jpeg")
+
+
+def test_video_thumbnail_endpoint_returns_404_for_missing_or_ineligible() -> None:
+    """GET /api/video-thumbnail/{id} should return 404 when poster is unavailable."""
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/api/video-thumbnail/33333333-0000-0000-0000-000000000099")
     finally:
         app.dependency_overrides.clear()
 

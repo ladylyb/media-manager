@@ -7,6 +7,7 @@ from uuid import UUID
 from uuid import uuid4
 
 import pytest
+import subprocess
 
 from media_manager.app.persistence.models import CanonicalAssignment, FileContent, FileInstance, FileInstanceStatus, Tag
 from media_manager.app.persistence.models import TagSource
@@ -133,6 +134,41 @@ def test_get_canonical_gallery_orders_latest_assignments_and_maps_media_types(se
     assert [item.id for item in page.items] == [str(a_img), str(b_vid)]
     assert [item.file_type for item in page.items] == ["image", "video"]
     assert page.items[0].media_url == f"/media/{a_img}"
+    assert page.items[0].poster_url is None
+    assert page.items[1].poster_url is None
+
+
+def test_get_canonical_gallery_sets_video_poster_url_when_enabled(session_factory, monkeypatch: pytest.MonkeyPatch) -> None:
+    service = OperatorConsoleReadService(session_factory)
+    base = datetime(2026, 3, 2, 10, 0, tzinfo=UTC)
+
+    monkeypatch.setenv("MEDIA_MANAGER_VIDEO_THUMBNAILS_ENABLED", "true")
+
+    content_id = UUID("10000000-0000-0000-0000-000000000010")
+    video_id = UUID("20000000-0000-0000-0000-000000000010")
+
+    with session_factory.begin() as session:
+        _add_content(session, content_id, "hash-video", base)
+        session.flush()
+        _add_instance(
+            session,
+            file_instance_id=video_id,
+            content_id=content_id,
+            absolute_path="/gallery/clip.mov",
+            first_seen_at=base,
+        )
+        _add_assignment(
+            session,
+            assignment_id=UUID("30000000-0000-0000-0000-000000000010"),
+            content_id=content_id,
+            canonical_instance_id=video_id,
+            assigned_at=base,
+        )
+
+    page = service.get_canonical_gallery(page=1, limit=30)
+
+    assert len(page.items) == 1
+    assert page.items[0].poster_url == f"/api/video-thumbnail/{video_id}"
 
 
 def test_get_canonical_gallery_uses_latest_assignment_per_content(session_factory) -> None:
@@ -511,6 +547,170 @@ def test_resolve_media_source_returns_none_for_invalid_rows_or_paths(session_fac
     assert service.resolve_media_source(missing_id) is None
     assert service.resolve_media_source(unsupported_id) is None
     assert service.resolve_media_source(UUID("ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb")) is None
+
+
+def test_resolve_video_thumbnail_source_generates_and_reuses_cache(
+    session_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = OperatorConsoleReadService(session_factory)
+    now = datetime(2026, 3, 2, 15, 30, tzinfo=UTC)
+    content_id = UUID("82000000-0000-0000-0000-000000000001")
+    file_id = UUID("82000000-0000-0000-0000-000000000002")
+    video_path = tmp_path / "video.mov"
+    cache_dir = tmp_path / "thumb-cache"
+    video_path.write_bytes(b"video-bytes")
+
+    monkeypatch.setenv("MEDIA_MANAGER_VIDEO_THUMBNAILS_ENABLED", "true")
+    monkeypatch.setenv("MEDIA_MANAGER_VIDEO_THUMBNAIL_CACHE_DIR", str(cache_dir))
+
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], check: bool, capture_output: bool, text: bool):
+        calls.append(command)
+        output_path = Path(command[-1])
+        output_path.write_bytes(b"jpeg-bytes")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("media_manager.app.persistence.operator_console.shutil.which", lambda _: "/usr/bin/ffmpeg")
+    monkeypatch.setattr("media_manager.app.persistence.operator_console.subprocess.run", fake_run)
+
+    with session_factory.begin() as session:
+        _add_content(session, content_id, "hash-video-cache", now)
+        session.flush()
+        _add_instance(
+            session,
+            file_instance_id=file_id,
+            content_id=content_id,
+            absolute_path=str(video_path),
+            first_seen_at=now,
+        )
+
+    first = service.resolve_video_thumbnail_source(file_id)
+    second = service.resolve_video_thumbnail_source(file_id)
+
+    assert first is not None
+    assert second is not None
+    assert first[0] == second[0]
+    assert first[0].exists()
+    assert first[1] == "image/jpeg"
+    assert len(calls) == 1
+
+
+def test_resolve_video_thumbnail_source_regenerates_when_source_changes(
+    session_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = OperatorConsoleReadService(session_factory)
+    now = datetime(2026, 3, 2, 15, 40, tzinfo=UTC)
+    content_id = UUID("82500000-0000-0000-0000-000000000001")
+    file_id = UUID("82500000-0000-0000-0000-000000000002")
+    video_path = tmp_path / "video-refresh.mov"
+    cache_dir = tmp_path / "thumb-cache-refresh"
+    video_path.write_bytes(b"video-v1")
+
+    monkeypatch.setenv("MEDIA_MANAGER_VIDEO_THUMBNAILS_ENABLED", "true")
+    monkeypatch.setenv("MEDIA_MANAGER_VIDEO_THUMBNAIL_CACHE_DIR", str(cache_dir))
+
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], check: bool, capture_output: bool, text: bool):
+        calls.append(command)
+        output_path = Path(command[-1])
+        output_path.write_bytes(f"jpeg-{len(calls)}".encode("utf-8"))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("media_manager.app.persistence.operator_console.shutil.which", lambda _: "/usr/bin/ffmpeg")
+    monkeypatch.setattr("media_manager.app.persistence.operator_console.subprocess.run", fake_run)
+
+    with session_factory.begin() as session:
+        _add_content(session, content_id, "hash-video-refresh", now)
+        session.flush()
+        _add_instance(
+            session,
+            file_instance_id=file_id,
+            content_id=content_id,
+            absolute_path=str(video_path),
+            first_seen_at=now,
+        )
+
+    first = service.resolve_video_thumbnail_source(file_id)
+    assert first is not None
+
+    video_path.write_bytes(b"video-v2-with-different-size")
+    refreshed = service.resolve_video_thumbnail_source(file_id)
+
+    assert refreshed is not None
+    assert len(calls) == 2
+    assert refreshed[0].exists()
+
+
+def test_resolve_video_thumbnail_source_returns_none_without_ffmpeg(
+    session_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = OperatorConsoleReadService(session_factory)
+    now = datetime(2026, 3, 2, 15, 45, tzinfo=UTC)
+    content_id = UUID("83000000-0000-0000-0000-000000000001")
+    file_id = UUID("83000000-0000-0000-0000-000000000002")
+    video_path = tmp_path / "missing-ffmpeg.mov"
+    video_path.write_bytes(b"video-bytes")
+
+    monkeypatch.setenv("MEDIA_MANAGER_VIDEO_THUMBNAILS_ENABLED", "true")
+    monkeypatch.setattr("media_manager.app.persistence.operator_console.shutil.which", lambda _: None)
+
+    with session_factory.begin() as session:
+        _add_content(session, content_id, "hash-video-no-ffmpeg", now)
+        session.flush()
+        _add_instance(
+            session,
+            file_instance_id=file_id,
+            content_id=content_id,
+            absolute_path=str(video_path),
+            first_seen_at=now,
+        )
+
+    assert service.resolve_video_thumbnail_source(file_id) is None
+
+
+def test_resolve_video_thumbnail_source_returns_none_for_non_video_or_missing(
+    session_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = OperatorConsoleReadService(session_factory)
+    now = datetime(2026, 3, 2, 15, 55, tzinfo=UTC)
+    content_id = UUID("84000000-0000-0000-0000-000000000001")
+    image_id = UUID("84000000-0000-0000-0000-000000000002")
+    missing_id = UUID("84000000-0000-0000-0000-000000000003")
+    image_path = tmp_path / "poster.jpg"
+    image_path.write_bytes(b"img")
+
+    monkeypatch.setenv("MEDIA_MANAGER_VIDEO_THUMBNAILS_ENABLED", "true")
+
+    with session_factory.begin() as session:
+        _add_content(session, content_id, "hash-not-video", now)
+        session.flush()
+        _add_instance(
+            session,
+            file_instance_id=image_id,
+            content_id=content_id,
+            absolute_path=str(image_path),
+            first_seen_at=now,
+        )
+        _add_instance(
+            session,
+            file_instance_id=missing_id,
+            content_id=content_id,
+            absolute_path=str(tmp_path / "missing.mov"),
+            first_seen_at=now + timedelta(seconds=1),
+        )
+
+    assert service.resolve_video_thumbnail_source(image_id) is None
+    assert service.resolve_video_thumbnail_source(missing_id) is None
 
 
 def test_resolve_media_source_supports_windows_path_wsl_fallback(

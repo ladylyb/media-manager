@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import mimetypes
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -48,6 +53,21 @@ from media_manager.app.persistence.models import (
 PERF_RUN_DIR = Path("artifacts/perf/runs")
 _WINDOWS_DRIVE_PATH_RE = re.compile(r"^([A-Za-z]):[\\/](.*)$")
 logger = get_logger(__name__)
+
+
+def _env_truthy(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _video_thumbnails_enabled() -> bool:
+    return _env_truthy("MEDIA_MANAGER_VIDEO_THUMBNAILS_ENABLED")
+
+
+def _video_thumbnail_cache_dir() -> Path:
+    raw = (os.getenv("MEDIA_MANAGER_VIDEO_THUMBNAIL_CACHE_DIR", "") or "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return Path(tempfile.gettempdir()) / "media-manager" / "video-thumbnails"
 
 
 @dataclass(frozen=True)
@@ -200,6 +220,7 @@ class CanonicalGalleryItem:
     filename: str
     file_type: str
     media_url: str
+    poster_url: str | None = None
     matched_tags: tuple[str, ...] = ()
     top_confidence_score: float | None = None
     sort_tag_name: str | None = None
@@ -211,6 +232,7 @@ class CanonicalGalleryItem:
             "filename": self.filename,
             "file_type": self.file_type,
             "media_url": self.media_url,
+            "poster_url": self.poster_url,
             "matched_tags": list(self.matched_tags),
             "top_confidence_score": self.top_confidence_score,
             "sort_tag_name": self.sort_tag_name,
@@ -644,6 +666,7 @@ class OperatorConsoleReadService:
                 filename=item.filename,
                 file_type=item.file_type,
                 media_url=item.media_url,
+                poster_url=self._poster_url_for_gallery_item(item.id, item.file_type),
                 matched_tags=item.matched_tags,
                 top_confidence_score=item.top_confidence_score,
                 sort_tag_name=item.sort_tag_name,
@@ -929,50 +952,36 @@ class OperatorConsoleReadService:
 
     def resolve_thumbnail_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:
         """Resolve an active image file path and media type for thumbnail streaming."""
-        with self._session_factory() as session:
-            instance = session.scalar(
-                select(FileInstance).where(
-                    FileInstance.file_instance_id == file_instance_id,
-                    FileInstance.status == FileInstanceStatus.ACTIVE.value,
-                )
-            )
-            if instance is None:
-                return None
-
-        path = self._resolve_existing_instance_path(instance.absolute_path)
+        path = self._resolve_active_instance_path(file_instance_id)
         if path is None:
             return None
         if infer_media_type_from_extension(path) != "IMG":
             return None
-        try:
-            with path.open("rb"):
-                pass
-        except OSError:
-            return None
         mime, _ = mimetypes.guess_type(path.name)
         return path, (mime or "image/jpeg")
 
+    def resolve_video_thumbnail_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:
+        """Resolve or generate a cached video thumbnail for an active video instance."""
+        if not _video_thumbnails_enabled():
+            return None
+
+        path = self._resolve_active_instance_path(file_instance_id)
+        if path is None:
+            return None
+        if self._path_to_gallery_file_type(path) != "video":
+            return None
+
+        thumbnail_path = self._resolve_or_generate_video_thumbnail(path, file_instance_id)
+        if thumbnail_path is None:
+            return None
+        return thumbnail_path, "image/jpeg"
+
     def resolve_media_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:
         """Resolve an active canonical media path and MIME type for secure streaming."""
-        with self._session_factory() as session:
-            instance = session.scalar(
-                select(FileInstance).where(
-                    FileInstance.file_instance_id == file_instance_id,
-                    FileInstance.status == FileInstanceStatus.ACTIVE.value,
-                )
-            )
-            if instance is None:
-                return None
-
-        path = self._resolve_existing_instance_path(instance.absolute_path)
+        path = self._resolve_active_instance_path(file_instance_id)
         if path is None:
             return None
         if self._path_to_gallery_file_type(path) is None:
-            return None
-        try:
-            with path.open("rb"):
-                pass
-        except OSError:
             return None
         mime, _ = mimetypes.guess_type(path.name)
         return path, (mime or "application/octet-stream")
@@ -1027,6 +1036,142 @@ class OperatorConsoleReadService:
             media_url=f"/media/{canonical_instance_id}",
             absolute_path=absolute_path,
         )
+
+    def _poster_url_for_gallery_item(self, file_id: str, file_type: str) -> str | None:
+        if file_type != "video" or not _video_thumbnails_enabled():
+            return None
+        return f"/api/video-thumbnail/{file_id}"
+
+    def _resolve_active_instance_path(self, file_instance_id: UUID) -> Path | None:
+        with self._session_factory() as session:
+            instance = session.scalar(
+                select(FileInstance).where(
+                    FileInstance.file_instance_id == file_instance_id,
+                    FileInstance.status == FileInstanceStatus.ACTIVE.value,
+                )
+            )
+            if instance is None:
+                return None
+
+        path = self._resolve_existing_instance_path(instance.absolute_path)
+        if path is None:
+            return None
+        try:
+            with path.open("rb"):
+                pass
+        except OSError:
+            return None
+        return path
+
+    def _resolve_or_generate_video_thumbnail(self, source_path: Path, file_instance_id: UUID) -> Path | None:
+        cache_dir = self._ensure_video_thumbnail_cache_dir()
+        if cache_dir is None:
+            return None
+
+        try:
+            source_stat = source_path.stat()
+        except OSError:
+            return None
+
+        cache_key = self._video_thumbnail_cache_key(file_instance_id, source_path, source_stat)
+        cached_path = cache_dir / f"{cache_key}.jpg"
+        if cached_path.exists() and cached_path.is_file():
+            return cached_path
+
+        ffmpeg_path = shutil.which("ffmpeg")
+        if not ffmpeg_path:
+            logger.info(
+                "Video thumbnail unavailable because ffmpeg is not installed",
+                extra={"file_instance_id": str(file_instance_id), "path": str(source_path)},
+            )
+            return None
+
+        temp_path = cached_path.with_suffix(".tmp.jpg")
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+        for offset in ("1", "0"):
+            if self._run_ffmpeg_thumbnail(ffmpeg_path, source_path, temp_path, offset):
+                try:
+                    temp_path.replace(cached_path)
+                except OSError:
+                    logger.warning(
+                        "Video thumbnail generation succeeded but cache write failed",
+                        extra={"file_instance_id": str(file_instance_id), "cache_path": str(cached_path)},
+                    )
+                    return None
+                return cached_path
+
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+
+    def _ensure_video_thumbnail_cache_dir(self) -> Path | None:
+        cache_dir = _video_thumbnail_cache_dir()
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            logger.warning("Video thumbnail cache directory is unavailable", extra={"cache_dir": str(cache_dir)})
+            return None
+        return cache_dir
+
+    def _video_thumbnail_cache_key(self, file_instance_id: UUID, source_path: Path, source_stat: os.stat_result) -> str:
+        raw_key = "|".join(
+            (
+                str(file_instance_id),
+                str(source_path),
+                str(source_stat.st_mtime_ns),
+                str(source_stat.st_size),
+            )
+        )
+        return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+    def _run_ffmpeg_thumbnail(
+        self,
+        ffmpeg_path: str,
+        source_path: Path,
+        target_path: Path,
+        offset_seconds: str,
+    ) -> bool:
+        command = [
+            ffmpeg_path,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-ss",
+            offset_seconds,
+            "-i",
+            str(source_path),
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=640:-1",
+            str(target_path),
+        ]
+        try:
+            completed = subprocess.run(command, check=False, capture_output=True, text=True)
+        except OSError:
+            logger.warning(
+                "Video thumbnail generation failed to start",
+                extra={"source_path": str(source_path), "offset_seconds": offset_seconds},
+            )
+            return False
+        if completed.returncode != 0:
+            logger.info(
+                "Video thumbnail frame extraction failed",
+                extra={
+                    "source_path": str(source_path),
+                    "offset_seconds": offset_seconds,
+                    "stderr": (completed.stderr or "").strip(),
+                },
+            )
+            return False
+        return target_path.exists() and target_path.is_file()
 
     def _resolve_existing_instance_path(self, raw_path: str) -> Path | None:
         """Resolve a durable file path with optional Windows->WSL fallback."""

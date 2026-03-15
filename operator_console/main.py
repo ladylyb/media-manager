@@ -355,7 +355,9 @@ def _v2_error(*, http_status: int, code: str, message: str, details: dict[str, o
 
 def _api_json_envelope_enabled(path: str) -> bool:
     """Return whether a path should use the canonical JSON service envelope on errors."""
-    return path.startswith("/api/") and not path.startswith("/api/thumbnail/")
+    return path.startswith("/api/") and not (
+        path.startswith("/api/thumbnail/") or path.startswith("/api/video-thumbnail/")
+    )
 
 
 def _execute_read(name: str, fn) -> JSONResponse:  # type: ignore[no-untyped-def]
@@ -845,6 +847,18 @@ def create_app() -> FastAPI:
         resolved = service.resolve_thumbnail_source(file_instance_id)
         if resolved is None:
             raise HTTPException(status_code=404, detail="Thumbnail not available.")
+        path, media_type = resolved
+        return FileResponse(path=path, media_type=media_type)
+
+    @app.get("/api/video-thumbnail/{file_instance_id}")
+    def video_thumbnail(
+        file_instance_id: UUID,
+        service: OperatorConsoleReadService = Depends(get_operator_console_service),
+    ) -> FileResponse:
+        """Return generated poster bytes for an active video instance when available."""
+        resolved = service.resolve_video_thumbnail_source(file_instance_id)
+        if resolved is None:
+            raise HTTPException(status_code=404, detail="Video thumbnail not available.")
         path, media_type = resolved
         return FileResponse(path=path, media_type=media_type)
 

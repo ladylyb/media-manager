@@ -6,6 +6,7 @@ from pathlib import Path
 RE_GETENV = re.compile(r"""os\.getenv\(\s*["']([A-Z][A-Z0-9_]*)["']""")
 RE_ENVIRON = re.compile(r"""os\.environ\[\s*["']([A-Z][A-Z0-9_]*)["']\s*\]""")
 RE_FLAG_ENABLED = re.compile(r"""_flag_enabled\(\s*["']([A-Z][A-Z0-9_]*)["']\s*\)""")
+RE_ENV_TRUTHY = re.compile(r"""_env_truthy\(\s*["']([A-Z][A-Z0-9_]*)["']\s*\)""")
 RE_ENV_LINE = re.compile(r"""^([A-Z][A-Z0-9_]*)\s*=""")
 
 SCAN_DIRS = ("media_manager", "migrations", "operator_console", "tools")
@@ -44,6 +45,7 @@ def _discovered_env_vars(files: list[Path]) -> set[str]:
         discovered.update(RE_GETENV.findall(text))
         discovered.update(RE_ENVIRON.findall(text))
         discovered.update(RE_FLAG_ENABLED.findall(text))
+        discovered.update(RE_ENV_TRUTHY.findall(text))
     return discovered
 
 
