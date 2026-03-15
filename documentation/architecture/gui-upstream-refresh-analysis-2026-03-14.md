@@ -68,11 +68,17 @@ Implemented on branch `feat/gui-console-route-cutover`:
 - made the canonical operator-console HTML routes always serve the React shell
 - updated docs/tests to treat `/` and the normal operator routes as the only supported UI entrypoints
 
+Implemented on branch `feat/gui-operations-ux-polish`:
+
+- extracted the local operations card into a reusable `gui_app` component
+- refreshed operations-page hierarchy with summary framing and guided vs high-impact grouping
+- preserved the current local execution model, confirmation behavior, and invalidation wiring
+- intentionally kept `/api/operations/catalog` unused in this slice
+
 Still intentionally not implemented:
 
 - `MediaDetail` route work
 - discover-to-gallery consolidation
-- operations-page upstream UX adoption
 - type/module splitting into `media.ts` / `runs.ts`
 - envelope extraction or alternate data hooks
 
@@ -84,6 +90,8 @@ MTM assessment:
   completed on the local `gui_app` runtime
 - route-surface ambiguity around `/console-v2` is now removed; canonical UI
   entrypoints are the standard operator-console routes
+- operations-page UX adoption is now complete without moving execution control
+  out of the local runtime layer
 - high-risk API/data/admin ownership areas remain correctly untouched
 
 ## High-Risk Local Ownership Areas
@@ -170,10 +178,10 @@ Completed:
 1. media components and gallery preview UX
 2. layout polish from `layout/*` (implemented on `feat/gui-layout-and-routing-polish`)
 3. selected page-level UX improvements for dashboard, runs, duplicates, and policy (implemented on `feat/gui-page-ux-polish`)
+4. operations-page UX adoption using the same local-runtime-only adaptation strategy (implemented on `feat/gui-operations-ux-polish`)
 
 Recommended next:
 
-4. operations-page UX adoption using the same local-runtime-only adaptation strategy
 5. optional product decision on `MediaDetail` and discover-to-gallery consolidation
 6. code-organization-only follow-up: type/module splitting and any envelope factoring, if still valuable after the UI work settles
 
@@ -202,4 +210,9 @@ Do not start with API, types, admin pages, or alternate data hooks.
   - `bash tools/ci/check_gui_app_api_client_contract.sh`
   - `bash tools/ci/check_supported_tooling_api_boundary.sh`
   - `pytest operator_console/tests/test_main.py` with a working local pytest environment
+  - `npm run build`
+- Operations-page UX polish on `feat/gui-operations-ux-polish` should pass:
+  - `bash tools/ci/check_gui_sync_boundary.sh`
+  - `bash tools/ci/check_gui_app_api_client_contract.sh`
+  - `bash tools/ci/check_supported_tooling_api_boundary.sh`
   - `npm run build`
