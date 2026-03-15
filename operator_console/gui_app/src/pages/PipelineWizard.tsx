@@ -1869,7 +1869,7 @@ export default function PipelineWizard() {
           </CardContent>
         </Card>
         <TechnicalResponseButton
-          title="Pipeline Summary"
+          title="Run Summary"
           payload={{
             ingest: ingestResult ?? {},
             plan: planResult ?? {},
@@ -1888,7 +1888,7 @@ export default function PipelineWizard() {
         <div className="mx-auto max-w-7xl space-y-1">
           <p className="text-xs font-semibold uppercase tracking-[0.3em] text-muted-foreground">Operator Console</p>
           <div className="flex flex-wrap items-end justify-between gap-3">
-            <h1 className="text-3xl font-semibold tracking-tight">Pipeline Wizard</h1>
+            <h1 className="text-3xl font-semibold tracking-tight">Organize Media</h1>
             <p className="max-w-3xl text-sm text-muted-foreground">
               Guided ingest, planning, apply, chosen-version review, and enrichment with short checkpoints between stages.
             </p>

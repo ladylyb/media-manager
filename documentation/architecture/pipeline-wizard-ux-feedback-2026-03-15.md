@@ -1,10 +1,10 @@
-# Pipeline Wizard UX Feedback
+# Organize Media UX Feedback
 
 Date: 2026-03-15
 
 ## Context
 
-The current Pipeline Wizard is functionally capable, but the operator experience
+The current Organize Media flow is functionally capable, but the operator experience
 still feels disjointed. The main issue is not missing backend capability. The
 main issue is operator confidence and continuity while moving through the
 workflow.
