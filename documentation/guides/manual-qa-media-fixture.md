@@ -36,7 +36,9 @@ Requirements:
 
 Point the Pipeline Wizard or other local testing flow at:
 
-`/home/harish/projects/media-manager/testdata/manual-qa/media-manager-v1`
+`testdata/manual-qa/media-manager-v1`
+
+Interpret that path relative to the repository root.
 
 Suggested checks:
 

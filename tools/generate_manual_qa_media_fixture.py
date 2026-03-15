@@ -7,8 +7,8 @@ checking binary fixture payloads into source control.
 
 from __future__ import annotations
 
-import sys
 import hashlib
+import importlib.util
 import json
 import shutil
 import subprocess
@@ -18,35 +18,24 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURE_ROOT = REPO_ROOT / "testdata" / "manual-qa" / "media-manager-v1"
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 
-def infer_media_type_from_extension(path: Path) -> str | None:
-    suffix = path.suffix.lower()
-    if suffix in {".jpg", ".jpeg", ".png", ".heic", ".heif", ".gif", ".bmp", ".tif", ".tiff", ".webp"}:
-        return "IMG"
-    if suffix in {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".wmv", ".3gp", ".webm"}:
-        return "VID"
-    return None
+def _load_filename_helpers() -> tuple[object, object]:
+    module_path = REPO_ROOT / "media_manager" / "app" / "core" / "filenames.py"
+    spec = importlib.util.spec_from_file_location("manual_qa_filenames", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"unable to load canonical filename helpers from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    infer_helper = getattr(module, "infer_media_type_from_extension", None)
+    filename_helper = getattr(module, "generate_canonical_filename", None)
+    if not callable(infer_helper) or not callable(filename_helper):
+        raise RuntimeError("canonical filename helpers are missing expected callables")
+    return infer_helper, filename_helper
 
 
-def generate_canonical_filename(
-    *,
-    media_type: str,
-    taken_datetime: datetime,
-    extension: str,
-    owner: str = "LL",
-    context: str = "General",
-) -> str:
-    ext = extension.lower()
-    if ext.startswith("."):
-        ext = ext[1:]
-    return (
-        f"{media_type.upper()}_"
-        f"{taken_datetime.astimezone(UTC).strftime('%Y%m%d_%H%M%S')}_"
-        f"{owner}_{context}.{ext}"
-    )
+infer_media_type_from_extension, generate_canonical_filename = _load_filename_helpers()
 
 
 @dataclass(frozen=True)
