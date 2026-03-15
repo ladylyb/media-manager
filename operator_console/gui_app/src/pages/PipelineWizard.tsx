@@ -28,8 +28,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import { CheckpointStep } from "@/components/wizard/CheckpointStep";
 import { DirectoryPickerDialog } from "@/components/wizard/DirectoryPickerDialog";
 import { ExecutionStep } from "@/components/wizard/ExecutionStep";
@@ -351,27 +349,27 @@ const STEP_GUIDANCE: Record<
   },
   canonical: {
     description:
-      "Recalculate canonical selections after Apply so the system knows which files should now be treated as canonical.",
+      "Choose which file becomes the main version after Apply so later steps know which version to keep referring to.",
     sections: [
       {
         title: "What this step does",
         content:
-          "Canonical Recompute reassesses canonical assignments using the current post-Apply state. This stage decides which instances should be treated as the canonical versions going forward.",
+          "This step chooses which file the system will treat as the main version going forward. Later views and enrichment use that chosen version instead of treating all duplicates equally.",
       },
       {
         title: "Before you run",
         content:
-          "Confirm the policy and any preferred roots match the selection behavior you want. Use Dry Run if you want to preview canonical changes before writing them.",
+          "The wizard uses its default guided choice here, so there is nothing extra to configure. Just confirm you are ready for the system to choose the main version for the files you just applied.",
       },
       {
         title: "What success looks like",
         content:
-          "You receive changed, applied, and failed counts that show whether canonical assignments would change or were updated successfully.",
+          "You receive a plain-English summary of how many chosen-version decisions changed, how many updates were applied, and whether any failed.",
       },
       {
         title: "Risk level",
         content:
-          "This is a high-risk mutation step when Dry Run is off because it updates durable canonical selection state that later operator views and enrichment steps depend on.",
+          "This step changes which file the system treats as the chosen version. It does not move files, but it does change which version later steps and views will prefer.",
       },
     ],
   },
@@ -403,27 +401,22 @@ const STEP_GUIDANCE: Record<
   },
   tag: {
     description:
-      "Apply metadata and tagging enrichment to the canonical media set after the upstream organization decisions are settled.",
+      "Optionally add searchable tags and metadata to the chosen media items now that the main organization work is complete.",
     sections: [
       {
-        title: "What this step does",
+        title: "What enrichment does",
         content:
-          "Tag Enrichment adds or refreshes enrichment results for canonical media. It is intentionally last because it should operate on the final canonical set, not on files that may still be moving or changing roles.",
+          "Tag Enrichment adds or refreshes metadata for the chosen media items. This can make later browsing, search, and discovery easier without changing the organization decisions you already made.",
       },
       {
-        title: "Before you run",
+        title: "Why you might run it now",
         content:
-          "Choose whether enrichment should run across all canonical items or target one canonical ID. Confirm batch size and source values before starting.",
+          "Running it now gives you a more complete library right away. If you would rather finish the guided workflow first, you can skip this step and run enrichment later from Operations.",
       },
       {
-        title: "What success looks like",
+        title: "If you skip it",
         content:
-          "You receive a final enrichment result showing how many items were processed, which becomes part of the final guided-run summary.",
-      },
-      {
-        title: "Risk level",
-        content:
-          "This is a high-risk mutation step because it updates stored enrichment results that other operator views may surface later.",
+          "Skipping enrichment does not undo your ingest, planning, apply, or chosen-version work. It only means extra tags and metadata will not be refreshed in this wizard run.",
       },
     ],
   },
@@ -651,12 +644,9 @@ export default function PipelineWizard() {
         payload = response.data;
       } else if (stepId === "canonical") {
         const response = await runWizardCanonicalRecompute({
-          policy_name: wizardState.steps.canonical.input.policy_name,
-          dry_run: wizardState.steps.canonical.input.dry_run,
-          preferred_roots: wizardState.steps.canonical.input.preferred_roots_csv
-            .split(",")
-            .map((item) => item.trim())
-            .filter(Boolean),
+          policy_name: "FIRST_SEEN",
+          dry_run: false,
+          preferred_roots: [],
         });
         payload = response.data;
       } else {
@@ -890,6 +880,53 @@ export default function PipelineWizard() {
     };
   };
 
+  const buildTagResultSummary = () => {
+    const result = asRecord(tagResult);
+    const status = asString(result.status);
+    const processedCount = asNumber(result.number_of_items_processed) ?? 0;
+    const failedItems = asNumber(result.failed_items) ?? 0;
+    const averageConfidence = asNumber(result.average_confidence);
+
+    if (status === "SKIPPED") {
+      return {
+        lines: [
+          "Tag enrichment was skipped in this wizard run.",
+          "Your main organization work is still complete.",
+          "You can run enrichment later from Operations if you want to add searchable tags and metadata.",
+        ],
+        caution: false,
+      };
+    }
+
+    if (processedCount === 0 && failedItems === 0) {
+      return {
+        lines: [
+          "Tag enrichment finished, but it did not process any chosen media items.",
+          "This often means there was nothing new to enrich, or the current chosen media set was already up to date.",
+          "If you expected new tagging work here, pause before continuing.",
+        ],
+        caution: true,
+      };
+    }
+
+    const lines = [
+      "Tag enrichment refreshed searchable metadata for the chosen media items.",
+      `${processedCount} chosen media item${processedCount === 1 ? "" : "s"} were processed.`,
+      failedItems === 0
+        ? "No enrichment failures were reported."
+        : `${failedItems} item${failedItems === 1 ? "" : "s"} could not be enriched.`,
+    ];
+
+    if (averageConfidence !== null) {
+      lines.push(`Average confidence was ${Math.round(averageConfidence * 100)}%.`);
+    }
+
+    return {
+      lines,
+      caution: failedItems > 0,
+    };
+  };
+
   const renderResultConsole = (stepId: ExecutionStepId) => {
     const state = wizardState.steps[stepId];
     if (!state.result) return null;
@@ -950,6 +987,11 @@ export default function PipelineWizard() {
 
     if (stepId === "apply") {
       const runId = asString(state.result.run_id);
+      const appliedCount = asNumber(applySummary.applied_count) ?? 0;
+      const movesCount = asNumber(applySummary.moves_count) ?? 0;
+      const duplicateCount = asNumber(applySummary.duplicates_count) ?? 0;
+      const errorsCount = asNumber(applySummary.errors_count) ?? 0;
+      const zeroOutcome = appliedCount === 0 && movesCount === 0 && errorsCount === 0;
       return (
         <WizardResultConsole
           title="Apply Result"
@@ -967,27 +1009,35 @@ export default function PipelineWizard() {
               : []
           }
           metrics={summarizeMetrics([
-            { label: "Planned actions completed", value: asNumber(applySummary.applied_count) },
-            { label: "File moves completed", value: asNumber(applySummary.moves_count) },
-            { label: "Duplicate actions handled", value: asNumber(applySummary.duplicates_count) },
-            { label: "Errors reported", value: asNumber(applySummary.errors_count) },
+            { label: "Planned actions completed", value: appliedCount },
+            { label: "File moves completed", value: movesCount },
+            { label: "Duplicate actions handled", value: duplicateCount },
+            { label: "Errors reported", value: errorsCount },
           ])}
-          summaryLines={[
-            "Apply completed the saved plan for the batch you just reviewed.",
-            ...(asNumber(applySummary.applied_count) !== null
-              ? [`${asNumber(applySummary.applied_count)} planned action${asNumber(applySummary.applied_count) === 1 ? "" : "s"} were carried out.`]
-              : []),
-            ...(asNumber(applySummary.moves_count) !== null
-              ? [`${asNumber(applySummary.moves_count)} file move${asNumber(applySummary.moves_count) === 1 ? "" : "s"} were completed.`]
-              : []),
-            ...(asNumber(applySummary.duplicates_count) !== null
-              ? [`${asNumber(applySummary.duplicates_count)} duplicate-related action${asNumber(applySummary.duplicates_count) === 1 ? "" : "s"} were handled.`]
-              : []),
-            (asNumber(applySummary.errors_count) ?? 0) === 0
-              ? "No errors were reported."
-              : `${asNumber(applySummary.errors_count)} error${asNumber(applySummary.errors_count) === 1 ? " was" : "s were"} reported.`,
-          ]}
-          nextStepHint="If this looks right, continue to Review Apply Results before moving on to canonical recomputation."
+          summaryLines={
+            zeroOutcome
+              ? [
+                  "Apply finished, but it did not carry out any planned changes.",
+                  "This often means the same folder or a very similar plan was processed again.",
+                  "If that was not your intention, pause before continuing.",
+                ]
+              : [
+                  "Apply completed the saved plan for the batch you just reviewed.",
+                  `${appliedCount} planned action${appliedCount === 1 ? "" : "s"} were carried out.`,
+                  `${movesCount} file move${movesCount === 1 ? "" : "s"} were completed.`,
+                  `${duplicateCount} duplicate-related action${duplicateCount === 1 ? "" : "s"} were handled.`,
+                  errorsCount === 0
+                    ? "No errors were reported."
+                    : `${errorsCount} error${errorsCount === 1 ? " was" : "s were"} reported.`,
+                ]
+          }
+          summaryTone={zeroOutcome ? "caution" : "default"}
+          nextStepHint={
+            zeroOutcome
+              ? "If this was unexpected, pause before continuing to Review Apply Results. If you intended to reprocess the same folder, you can continue."
+              : "If this looks right, continue to Review Apply Results before moving on to canonical recomputation."
+          }
+          nextStepTone={zeroOutcome ? "caution" : "default"}
           payload={state.result}
           technicalDetailsMode="modal"
         />
@@ -995,31 +1045,103 @@ export default function PipelineWizard() {
     }
 
     if (stepId === "canonical") {
+      const policyName = asString(state.result.policy_name);
+      const changedCount = asNumber(canonicalSummary.changed_count) ?? 0;
+      const appliedCount = asNumber(canonicalSummary.applied_count) ?? 0;
+      const failedCount = asNumber(canonicalSummary.failed_count) ?? 0;
+      const zeroOutcome = changedCount === 0 && appliedCount === 0 && failedCount === 0;
       return (
         <WizardResultConsole
           title="Canonical Result"
           status="success"
+          references={
+            policyName
+              ? [
+                  {
+                    label: "Selection policy",
+                    value: policyName,
+                    helperText: "This is the guided policy the wizard used to choose the main version.",
+                  },
+                ]
+              : []
+          }
           metrics={summarizeMetrics([
-            { label: "Policy", value: asString(state.result.policy_name) },
-            { label: "Changed", value: asNumber(canonicalSummary.changed_count) },
-            { label: "Applied", value: asNumber(canonicalSummary.applied_count) },
-            { label: "Failed", value: asNumber(canonicalSummary.failed_count) },
+            { label: "Chosen versions changed", value: changedCount },
+            { label: "Updates applied", value: appliedCount },
+            { label: "Failures", value: failedCount },
           ])}
+          summaryLines={
+            zeroOutcome
+              ? [
+                  "Canonical recompute finished, but it did not change any chosen-version decisions.",
+                  "This often means the current post-Apply state already matched the wizard's default chosen-version rules.",
+                  "If you expected different chosen versions, pause before continuing.",
+                ]
+              : [
+                  "The system chose which file should be treated as the main version for the current post-Apply state.",
+                  `${changedCount} chosen-version decision${changedCount === 1 ? "" : "s"} changed.`,
+                  `${appliedCount} update${appliedCount === 1 ? "" : "s"} were applied successfully.`,
+                  failedCount === 0
+                    ? "No failures were reported."
+                    : `${failedCount} failure${failedCount === 1 ? " was" : "s were"} reported.`,
+                ]
+          }
+          summaryTone={zeroOutcome ? "caution" : "default"}
+          nextStepHint={
+            zeroOutcome
+              ? "If this was unexpected, pause before continuing to Review Canonical Results. If you expected no change here, you can continue."
+              : "If this looks right, continue to Review Canonical Results before moving on to enrichment."
+          }
+          nextStepTone={zeroOutcome ? "caution" : "default"}
           payload={state.result}
+          technicalDetailsMode="modal"
         />
       );
     }
 
+    const result = asRecord(state.result);
+    const status = asString(result.status);
+    const processedCount = asNumber(result.number_of_items_processed) ?? 0;
+    const failedItems = asNumber(result.failed_items) ?? 0;
+    const averageConfidence = asNumber(result.average_confidence);
+    const tagSummary = buildTagResultSummary();
+    const operationRunId = asString(result.operation_run_id);
     return (
       <WizardResultConsole
         title="Tag Result"
         status="success"
+        references={
+          operationRunId && status !== "SKIPPED"
+            ? [
+                {
+                  label: "Enrichment run",
+                  value: operationRunId,
+                  helperText: "This is the stored enrichment run reference for this optional step.",
+                  copyable: true,
+                },
+              ]
+            : []
+        }
         metrics={summarizeMetrics([
-          { label: "Scope", value: asString(state.result.scope) },
-          { label: "Items Processed", value: asNumber(state.result.number_of_items_processed) },
-          { label: "Operation Run", value: asString(state.result.operation_run_id) },
+          { label: "Items processed", value: status === "SKIPPED" ? null : processedCount },
+          { label: "Failed items", value: status === "SKIPPED" ? null : failedItems },
+          {
+            label: "Average confidence",
+            value: status === "SKIPPED" || averageConfidence === null ? null : `${Math.round(averageConfidence * 100)}%`,
+          },
         ])}
+        summaryLines={tagSummary.lines}
+        summaryTone={tagSummary.caution ? "caution" : "default"}
+        nextStepHint={
+          status === "SKIPPED"
+            ? "Continue to the final summary. You can always run enrichment later from Operations."
+            : tagSummary.caution
+              ? "If this was unexpected, pause before continuing to the final summary. Otherwise, you can continue."
+              : "If this looks right, continue to the final summary to review the guided run."
+        }
+        nextStepTone={tagSummary.caution ? "caution" : "default"}
         payload={state.result}
+        technicalDetailsMode="modal"
       />
     );
   };
@@ -1297,7 +1419,7 @@ export default function PipelineWizard() {
         <ExecutionStep
           title="Canonical Recompute"
           description={guidance.description}
-          riskLabel="High Risk Mutation"
+          riskLabel="Chooses the main version"
           strongRisk
           loading={state.status === "running"}
           error={state.error}
@@ -1307,62 +1429,91 @@ export default function PipelineWizard() {
           guidance={<WizardGuidancePanel sections={guidance.sections} />}
           result={renderResultConsole("canonical")}
         >
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="canonical-policy">Policy Name</Label>
-              <Input
-                id="canonical-policy"
-                value={state.input.policy_name}
-                onChange={(event) => updateStepInput("canonical", { policy_name: event.target.value })}
-                placeholder="FIRST_SEEN"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="canonical-roots">Preferred Roots</Label>
-              <Textarea
-                id="canonical-roots"
-                value={state.input.preferred_roots_csv}
-                onChange={(event) => updateStepInput("canonical", { preferred_roots_csv: event.target.value })}
-                placeholder="/mnt/media/a, /mnt/media/b"
-                rows={4}
-              />
-            </div>
-            <div className="flex items-center justify-between rounded-xl border p-4">
-              <div>
-                <p className="text-sm font-medium">Dry Run</p>
-                <p className="text-xs text-muted-foreground">Preview canonical changes without durable writes.</p>
-              </div>
-              <Switch checked={state.input.dry_run} onCheckedChange={(checked) => updateStepInput("canonical", { dry_run: checked })} />
-            </div>
+          <div className="rounded-xl border bg-muted/15 p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+              Using The Updated Post-Apply State
+            </p>
+            <p className="mt-3 text-sm leading-6 text-foreground/90">
+              Apply has already finished. This step now chooses which file should be treated as the main version for each set of related files.
+            </p>
+            <p className="mt-3 text-sm text-muted-foreground">
+              The wizard uses its default guided policy here and keeps the more advanced canonical options on the Operations page.
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-primary/15 bg-primary/[0.04] p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary/80">
+              What This Means
+            </p>
+            <p className="mt-3 text-sm leading-6 text-foreground/90">
+              After files have been applied, the system still needs to decide which version should be treated as the chosen one going forward. Later views and enrichment steps will use that chosen version.
+            </p>
           </div>
         </ExecutionStep>
       );
     }
 
     if (currentStepId === "review-canonical") {
-      const guidance = STEP_GUIDANCE["review-canonical"];
+      const changedCount = asNumber(canonicalSummary.changed_count) ?? 0;
+      const appliedCount = asNumber(canonicalSummary.applied_count) ?? 0;
+      const failedCount = asNumber(canonicalSummary.failed_count) ?? 0;
+      const zeroOutcome = changedCount === 0 && appliedCount === 0 && failedCount === 0;
       return (
         <CheckpointStep
           title="Review Canonical Results"
-          description={guidance.description}
+          description="This checkpoint explains what the system chose as the main version before the wizard moves into enrichment."
           onContinue={goToNextStep}
           onRerun={() => goToStep("canonical")}
           onAbort={abortWizard}
-          guidance={<WizardGuidancePanel sections={guidance.sections} />}
         >
           {canonicalReviewQuery.error && <ErrorAlert message={parseError(canonicalReviewQuery.error)} />}
           {canonicalResult ? (
             <div className="space-y-4">
+              <RestPointSummaryCard
+                title="Chosen Version Summary"
+                lines={
+                  zeroOutcome
+                    ? [
+                        "Canonical recompute finished, but it did not change any chosen-version decisions.",
+                        "This often means the current post-Apply state already matched the wizard's default chosen-version rules.",
+                        "If that was not your expectation, pause before continuing.",
+                        "Enrichment will use the currently chosen versions next.",
+                      ]
+                    : [
+                        "The system checked which file should be treated as the chosen version going forward.",
+                        `${changedCount} chosen-version decision${changedCount === 1 ? "" : "s"} changed.`,
+                        `${appliedCount} update${appliedCount === 1 ? "" : "s"} were applied successfully.`,
+                        failedCount === 0
+                          ? "No failures were reported."
+                          : `${failedCount} failure${failedCount === 1 ? " was" : "s were"} reported.`,
+                        "Enrichment will use these chosen versions next.",
+                      ]
+                }
+                tone={zeroOutcome ? "caution" : "default"}
+              />
+              {asString(canonicalResult.policy_name) && (
+                <PlanReferenceStrip
+                  label="Selection policy"
+                  value={asString(canonicalResult.policy_name) ?? ""}
+                  helperText="This is the guided policy the wizard used to choose the main version."
+                />
+              )}
               <MetricGrid
                 items={summarizeMetrics([
-                  { label: "Policy", value: asString(canonicalResult.policy_name) },
-                  { label: "Changed", value: asNumber(canonicalSummary.changed_count) },
-                  { label: "Applied", value: asNumber(canonicalSummary.applied_count) },
-                  { label: "Visible Canonical", value: canonicalPage?.total },
+                  { label: "Chosen versions changed", value: changedCount },
+                  { label: "Updates applied", value: appliedCount },
+                  { label: "Failures", value: failedCount },
+                  { label: "Visible chosen items", value: canonicalPage?.total },
                 ])}
               />
-              <WizardResultConsole title="Canonical Review" status="success" payload={canonicalResult} />
-              <InlineLinks links={[{ label: "Open Gallery", to: "/gallery" }]} />
+              <WizardResultConsole
+                title="Canonical Review"
+                status="success"
+                nextStepHint="If this looks right, continue to enrichment so the wizard can build on the chosen versions."
+                nextStepTone={zeroOutcome ? "caution" : "default"}
+                payload={canonicalResult}
+                technicalDetailsMode="modal"
+              />
             </div>
           ) : (
             <ErrorAlert message="No canonical recompute result is available yet. Re-run the step to continue." severity="warning" />
@@ -1374,64 +1525,93 @@ export default function PipelineWizard() {
     if (currentStepId === "tag") {
       const state = wizardState.steps.tag;
       const guidance = STEP_GUIDANCE.tag;
+      const chosenItems = asNumber(canonicalReviewQuery.data?.total);
+      const continueLabel = state.status === "completed" ? "Continue" : "Skip for now";
       return (
         <ExecutionStep
-          title="Tag Enrichment"
+          title="Add Searchable Tags"
           description={guidance.description}
-          riskLabel="High Risk Mutation"
-          strongRisk
+          riskLabel="Writes tag results"
           loading={state.status === "running"}
           error={state.error}
           onRun={() => setConfirmingStep("tag")}
-          onContinue={goToNextStep}
-          continueDisabled={state.status !== "completed"}
-          guidance={<WizardGuidancePanel sections={guidance.sections} />}
+          onContinue={() => {
+            if (state.status === "completed") {
+              goToNextStep();
+              return;
+            }
+
+            setWizardState((current) => ({
+              ...current,
+              currentStepId: "summary",
+              steps: {
+                ...current.steps,
+                tag: {
+                  ...current.steps.tag,
+                  status: "completed",
+                  result: {
+                    status: "SKIPPED",
+                    all: true,
+                    batch_size: 100,
+                    source: "system",
+                    note: "Tag enrichment was skipped in the wizard. It can be run later from Operations.",
+                  },
+                  error: null,
+                },
+              },
+            }));
+          }}
+          continueLabel={continueLabel}
+          continueDisabled={false}
+          guidance={
+            <div className="space-y-4">
+              <ReviewSupportNote
+                title="Using the chosen media set"
+                content={
+                  chosenItems !== null
+                    ? `Canonical selection has already finished. If you run enrichment now, the wizard will add or refresh searchable tags for ${chosenItems} chosen media item${chosenItems === 1 ? "" : "s"}.`
+                    : "Canonical selection has already finished. If you run enrichment now, the wizard will add or refresh searchable tags for the chosen media items."
+                }
+              />
+              <Card className="border-primary/20 bg-primary/[0.04]">
+                <CardContent className="space-y-4 p-5">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-primary/80">
+                      Optional Final Step
+                    </p>
+                    <h3 className="mt-2 text-lg font-semibold text-foreground">Add extra metadata now, or skip for later</h3>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Your main organization work is already complete. This step is optional and only affects searchable tags and metadata.
+                    </p>
+                  </div>
+                  <div className="grid gap-3 xl:grid-cols-3">
+                    {guidance.sections.map((section) => (
+                      <div key={section.title} className="rounded-xl border border-border/70 bg-background/80 p-4 shadow-sm">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                          {section.title}
+                        </p>
+                        <p className="mt-3 text-sm leading-6 text-foreground/90">{section.content}</p>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+              <ReviewSupportNote
+                title="What will change"
+                content="This step writes or refreshes stored tag and metadata results. It does not move files or change duplicate decisions or chosen-version decisions."
+              />
+            </div>
+          }
           result={renderResultConsole("tag")}
-        >
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div className="flex items-center justify-between rounded-xl border p-4 lg:col-span-2">
-              <div>
-                <p className="text-sm font-medium">Run Across All Canonical Items</p>
-                <p className="text-xs text-muted-foreground">Disable this to target a single canonical ID.</p>
-              </div>
-              <Switch checked={state.input.all} onCheckedChange={(checked) => updateStepInput("tag", { all: checked })} />
-            </div>
-            {!state.input.all && (
-              <div className="space-y-2 lg:col-span-2">
-                <Label htmlFor="tag-canonical-id">Canonical ID</Label>
-                <Input
-                  id="tag-canonical-id"
-                  value={state.input.canonical_id}
-                  onChange={(event) => updateStepInput("tag", { canonical_id: event.target.value })}
-                  placeholder="00000000-0000-0000-0000-000000000000"
-                />
-              </div>
-            )}
-            <div className="space-y-2">
-              <Label htmlFor="tag-batch-size">Batch Size</Label>
-              <Input
-                id="tag-batch-size"
-                type="number"
-                value={String(state.input.batch_size)}
-                min={1}
-                onChange={(event) => updateStepInput("tag", { batch_size: Number(event.target.value || 0) })}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="tag-source">Source</Label>
-              <Input
-                id="tag-source"
-                value={state.input.source}
-                onChange={(event) => updateStepInput("tag", { source: event.target.value })}
-                placeholder="system"
-              />
-            </div>
-          </div>
-        </ExecutionStep>
+        />
       );
     }
 
     const guidance = STEP_GUIDANCE.summary;
+    const tagSummary = buildTagResultSummary();
+    const tagStatus = asString(tagResult?.status);
+    const tagProcessed = asNumber(tagResult?.number_of_items_processed);
+    const tagFailed = asNumber(tagResult?.failed_items);
     return (
       <CheckpointStep
         title="Pipeline Summary"
@@ -1450,12 +1630,26 @@ export default function PipelineWizard() {
             { label: "Files Scanned", value: asNumber(ingestPayload.files_scanned) },
             { label: "Duplicate Actions", value: asNumber(planSummary.duplicate_actions) },
             { label: "Canonical Changes", value: asNumber(canonicalSummary.changed_count) },
-            { label: "Tags Processed", value: asNumber(tagResult?.number_of_items_processed) },
+            {
+              label: tagStatus === "SKIPPED" ? "Tag Enrichment" : "Tags Processed",
+              value: tagStatus === "SKIPPED" ? "Skipped" : tagProcessed,
+            },
           ])}
         />
         <div className="grid gap-4 xl:grid-cols-2">
           <WizardResultConsole title="Plan Snapshot" status="success" payload={planResult ?? {}} />
-          <WizardResultConsole title="Tag Snapshot" status="success" payload={tagResult ?? {}} />
+          <WizardResultConsole
+            title="Tag Snapshot"
+            status="success"
+            metrics={summarizeMetrics([
+              { label: "Items processed", value: tagStatus === "SKIPPED" ? null : tagProcessed },
+              { label: "Failed items", value: tagStatus === "SKIPPED" ? null : tagFailed },
+            ])}
+            summaryLines={tagSummary.lines}
+            summaryTone={tagSummary.caution ? "caution" : "default"}
+            technicalDetailsMode="modal"
+            payload={tagResult ?? {}}
+          />
         </div>
         <InlineLinks
           links={[
@@ -1506,7 +1700,7 @@ export default function PipelineWizard() {
         open={confirmingStep === "canonical"}
         onOpenChange={(open) => setConfirmingStep(open ? "canonical" : null)}
         title="Execute Canonical Recompute?"
-        description="Canonical recompute will update durable canonical selection state."
+        description="This step chooses which file should be treated as the main version going forward. Later views and enrichment will use that chosen version."
         destructive
         onConfirm={() => runExecutionStep("canonical")}
         loading={wizardState.steps.canonical.status === "running"}
@@ -1515,7 +1709,7 @@ export default function PipelineWizard() {
         open={confirmingStep === "tag"}
         onOpenChange={(open) => setConfirmingStep(open ? "tag" : null)}
         title="Execute Tag Enrichment?"
-        description="Tag enrichment mutates stored enrichment results for canonical media."
+        description="This step adds or refreshes searchable tags and metadata for the chosen media items. It does not move files or change the chosen versions you already reviewed."
         destructive
         onConfirm={() => runExecutionStep("tag")}
         loading={wizardState.steps.tag.status === "running"}

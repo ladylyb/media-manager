@@ -28,7 +28,9 @@ interface WizardResultConsoleProps {
   metrics?: WizardMetric[];
   references?: WizardReferenceItem[];
   summaryLines?: string[];
+  summaryTone?: "default" | "caution";
   nextStepHint?: string;
+  nextStepTone?: "default" | "caution";
   payload: unknown;
   technicalDetailsMode?: "inline" | "modal";
 }
@@ -39,7 +41,9 @@ export function WizardResultConsole({
   metrics = [],
   references = [],
   summaryLines = [],
+  summaryTone = "default",
   nextStepHint,
+  nextStepTone = "default",
   payload,
   technicalDetailsMode = "inline",
 }: WizardResultConsoleProps) {
@@ -58,6 +62,23 @@ export function WizardResultConsole({
     }
   };
 
+  const summaryClass =
+    summaryTone === "caution"
+      ? "rounded-xl border border-caution/30 bg-caution/[0.08] p-4"
+      : "rounded-xl border border-primary/15 bg-primary/[0.04] p-4";
+  const summaryLabelClass =
+    summaryTone === "caution"
+      ? "text-[11px] font-semibold uppercase tracking-[0.2em] text-caution"
+      : "text-[11px] font-semibold uppercase tracking-[0.2em] text-primary/80";
+  const nextStepClass =
+    nextStepTone === "caution"
+      ? "rounded-xl border border-caution/30 bg-caution/[0.08] p-4"
+      : "rounded-xl border border-success/20 bg-success/[0.05] p-4";
+  const nextStepLabelClass =
+    nextStepTone === "caution"
+      ? "text-[11px] font-semibold uppercase tracking-[0.2em] text-caution"
+      : "text-[11px] font-semibold uppercase tracking-[0.2em] text-success";
+
   return (
     <div className="space-y-3 rounded-xl border bg-card p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -75,8 +96,8 @@ export function WizardResultConsole({
       </div>
 
       {summaryLines.length > 0 && (
-        <div className="rounded-xl border border-primary/15 bg-primary/[0.04] p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary/80">
+        <div className={summaryClass}>
+          <p className={summaryLabelClass}>
             What This Means
           </p>
           <div className="mt-3 space-y-2">
@@ -139,8 +160,8 @@ export function WizardResultConsole({
       )}
 
       {nextStepHint && (
-        <div className="rounded-xl border border-success/20 bg-success/[0.05] p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-success">
+        <div className={nextStepClass}>
+          <p className={nextStepLabelClass}>
             Recommended Next Step
           </p>
           <p className="mt-2 text-sm leading-6 text-foreground/90">{nextStepHint}</p>

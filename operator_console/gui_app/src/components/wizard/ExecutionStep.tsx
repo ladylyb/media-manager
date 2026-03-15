@@ -14,6 +14,7 @@ interface ExecutionStepProps {
   error?: string | null;
   onRun: () => void;
   onContinue: () => void;
+  continueLabel?: string;
   continueDisabled: boolean;
   guidance?: ReactNode;
   children?: ReactNode;
@@ -30,6 +31,7 @@ export function ExecutionStep({
   error,
   onRun,
   onContinue,
+  continueLabel = "Continue",
   continueDisabled,
   guidance,
   children,
@@ -67,7 +69,7 @@ export function ExecutionStep({
             Run Step
           </Button>
           <Button variant="outline" onClick={onContinue} disabled={continueDisabled || loading}>
-            Continue
+            {continueLabel}
           </Button>
         </div>
 
