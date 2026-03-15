@@ -1,10 +1,11 @@
 import { apiGet, apiPost } from "./client";
 import type {
-  SystemStatus, DashboardSummary, LatestMetrics, Run,
+  SystemStatus, DashboardSummary, LatestMetrics,
   CanonicalFile, Tag, DuplicateGroup, MediaFileRecord,
   AnalyticsSummary, HashAuditResult, Policy, OperationResult,
-  DbResetPreview, DbResetResult, PaginatedResponse
+  DbResetPreview, DbResetResult, PaginatedResponse,
 } from "@/types/api";
+import type { Run } from "@/types/runs";
 
 // System
 export const getStatus = () => apiGet<SystemStatus>("/status");
@@ -51,11 +52,9 @@ export const runApply = (params?: Record<string, unknown>) =>
   apiPost<OperationResult>("/apply", params);
 export const runCanonicalRecompute = () =>
   apiPost<OperationResult>("/canonical/recompute");
-export const runOperatorRun = (params?: Record<string, unknown>) =>
-  apiPost<OperationResult>("/operator-run", params);
 export const runTagEnrichment = (params?: Record<string, unknown>) =>
   apiPost<OperationResult>("/tag-enrichment", params);
-
-// Admin
-export const adminDbReset = (params: { dry_run: boolean; challenge?: string }) =>
+export const runOperatorComposite = (params?: Record<string, unknown>) =>
+  apiPost<OperationResult>("/operator-run", params);
+export const runDbReset = (params: { dry_run: boolean; challenge?: string }) =>
   apiPost<DbResetPreview | DbResetResult>("/admin/db-reset", params);

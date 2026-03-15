@@ -4,7 +4,7 @@ import type { SystemStatus } from "@/types/api";
 import { cn } from "@/lib/utils";
 import { Activity, RefreshCw, Database } from "lucide-react";
 
-export function StatusBar() {
+export function StatusStrip() {
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [loading, setLoading] = useState(false);
@@ -12,8 +12,8 @@ export function StatusBar() {
   const refresh = async () => {
     setLoading(true);
     try {
-      const envelope = await getStatus();
-      setStatus(envelope.data);
+      const data = await getStatus();
+      setStatus(data);
       setLastRefresh(new Date());
     } catch {
       // silently fail - status bar is non-critical

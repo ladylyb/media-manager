@@ -1,0 +1,117 @@
+# GUI Upstream Refresh Analysis
+
+Date: 2026-03-14
+
+## Summary
+
+- Parent branch baseline: `chore/gui-sync-boundary-policy`
+- Analysis branch: `chore/gui-upstream-refresh-analysis`
+- Prior imported upstream commit: `5935054c813141827bbbef3731e536857a405291`
+- Refreshed upstream commit: `05ab0a9a45449c15b0e7a5c0c50e47bf7b462645`
+- Local subtree refresh merge commit: `a65b50c9c4bccff85f8da3e70c08ce80a659d439`
+
+This refresh updates `operator_console/gui_upstream/` only. The supported
+runtime client remains `operator_console/gui_app/`, which is API-only and is
+the source of truth for the live `/api/*` contract.
+
+Upstream changed 36 files with a large frontend refactor: layout renames, page
+renames, route consolidation, new media-focused components, new polling hooks,
+and a split of API envelope/types code. Most of the UI ideas are portable only
+after manual review because the local `gui_app` has diverged into a
+repo-specific integration layer with canonical `/api/*` mapping, operation-run
+semantics, benchmark and observability flows, and destructive admin safeguards.
+
+## High-Risk Local Ownership Areas
+
+Treat the following `gui_app` areas as canonical local code. Do not overwrite
+them wholesale from upstream:
+
+- `src/lib/api/client.ts`
+- `src/lib/api/endpoints.ts`
+- `src/types/api.ts`
+- admin, observability, benchmark, and operation-run UI flows
+
+Reasons:
+
+- local API base is `/api`, while upstream still carries `/api/v2` assumptions
+- local envelope parsing unwraps `{ data: { result: ... } }` responses
+- local endpoints map canonical request keys and repo-specific payload shapes
+- local admin flows reflect service-layer safeguards and benchmark behavior
+
+## Change Themes
+
+- Layout refresh: `AppLayout`, `AppSidebar`, and `StatusBar` were renamed and
+  reorganized into `layout/*`.
+- Navigation changes: standalone `Discover` was removed upstream, while
+  `Gallery` and `MediaDetail` were expanded.
+- Operations UI changes: upstream added a generic `OperationCard` pattern and
+  reshaped route-level page files.
+- Data-layer changes: upstream introduced `envelope.ts`, `useApi`, `usePolling`,
+  and split types into `api.ts`, `media.ts`, and `runs.ts`.
+- Tooling changes: upstream added `bun.lock` and TypeScript config updates.
+
+## File-By-File Port Recommendations
+
+Classification legend:
+
+- `ignore`
+- `visual-only candidate`
+- `manual UX adaptation candidate`
+- `do not port`
+
+| Upstream file | Classification | Recommendation |
+|---|---|---|
+| `operator_console/gui_upstream/.lovable/plan.md` | `ignore` | Lovable workspace metadata only; not part of the supported product. |
+| `operator_console/gui_upstream/README.md` | `ignore` | Upstream project README does not describe the local API-only runtime contract. |
+| `operator_console/gui_upstream/bun.lock` | `ignore` | Local frontend build currently uses the existing Node/npm workflow; do not introduce a second package-manager baseline from upstream analysis alone. |
+| `operator_console/gui_upstream/index.html` | `visual-only candidate` | Safe to mine for site metadata or small branding changes, but do not let it redefine runtime assumptions. |
+| `operator_console/gui_upstream/src/App.tsx` | `manual UX adaptation candidate` | Upstream route and layout refactor is useful as a reference, but local routing still needs to preserve current `gui_app` pages and API-backed flows. |
+| `operator_console/gui_upstream/src/components/layout/Sidebar.tsx` | `visual-only candidate` | Layout rename and nav styling are portable, but menu structure changes must be reviewed against local route coverage. |
+| `operator_console/gui_upstream/src/components/layout/StatusStrip.tsx` | `visual-only candidate` | Status-strip presentation may be reusable, but data fetching behavior should stay aligned with the local API client. |
+| `operator_console/gui_upstream/src/components/layout/TopBar.tsx` | `visual-only candidate` | Header/layout styling is a low-risk source of ideas if kept separate from route or data changes. |
+| `operator_console/gui_upstream/src/components/media/MediaCard.tsx` | `visual-only candidate` | Media card rendering is a good UI harvest candidate for the local gallery. |
+| `operator_console/gui_upstream/src/components/media/MediaGrid.tsx` | `visual-only candidate` | Grid composition is reusable if wired to local canonical-media queries. |
+| `operator_console/gui_upstream/src/components/media/MediaPreviewModal.tsx` | `visual-only candidate` | Preview/modal UX is a good candidate if adapted to local media fields and routing decisions. |
+| `operator_console/gui_upstream/src/components/ui/LoadingSkeleton.tsx` | `visual-only candidate` | Simple skeleton rename/export cleanup; safe only if it fits existing local component conventions. |
+| `operator_console/gui_upstream/src/components/ui/OperationCard.tsx` | `manual UX adaptation candidate` | The generic card pattern is interesting, but local operations already encode invalidation targets and canonical backend semantics in `OperationsPage.tsx`. |
+| `operator_console/gui_upstream/src/hooks/useApi.ts` | `do not port` | This introduces an alternate data-access abstraction and risks bypassing the repo-owned API adapter layer. |
+| `operator_console/gui_upstream/src/hooks/usePolling.ts` | `manual UX adaptation candidate` | Polling behavior may be worth borrowing selectively, but it must plug into local query keys and operation-run semantics rather than upstream defaults. |
+| `operator_console/gui_upstream/src/lib/api/client.ts` | `do not port` | Upstream still assumes `/api/v2`; local client handles canonical `/api` routing and result-envelope quirks. |
+| `operator_console/gui_upstream/src/lib/api/endpoints.ts` | `do not port` | Local endpoint adapters are repo-specific and map current backend payloads, request keys, and invalidation behavior. |
+| `operator_console/gui_upstream/src/lib/api/envelope.ts` | `manual UX adaptation candidate` | Envelope factoring is structurally interesting, but only if reimplemented around the local `/api` contract rather than copied directly. |
+| `operator_console/gui_upstream/src/pages/Admin.tsx` | `do not port` | Local admin is significantly richer and bound to service-layer-backed DB reset, observability, and benchmark flows. |
+| `operator_console/gui_upstream/src/pages/Dashboard.tsx` | `manual UX adaptation candidate` | Dashboard layout ideas may be useful, but local metrics and operation wiring are now repo-specific. |
+| `operator_console/gui_upstream/src/pages/DiscoverPage.tsx` | `manual UX adaptation candidate` | Upstream removed this page, so the main question is whether local discover functionality should stay standalone or merge into gallery later. |
+| `operator_console/gui_upstream/src/pages/Duplicates.tsx` | `manual UX adaptation candidate` | The page refactor may improve presentation, but local duplicate-group data mapping must stay intact. |
+| `operator_console/gui_upstream/src/pages/Gallery.tsx` | `manual UX adaptation candidate` | Gallery UX ideas are relevant, but local gallery already maps canonical payloads and modal detail behavior. |
+| `operator_console/gui_upstream/src/pages/GalleryPage.tsx` | `ignore` | Historical upstream file removed by the refactor; no direct port needed. |
+| `operator_console/gui_upstream/src/pages/Index.tsx` | `ignore` | Historical scaffold file removed upstream; no local value. |
+| `operator_console/gui_upstream/src/pages/Ledger.tsx` | `manual UX adaptation candidate` | Page structure may inspire cleanup, but local ledger endpoints and analytics mapping are canonical. |
+| `operator_console/gui_upstream/src/pages/MediaDetail.tsx` | `manual UX adaptation candidate` | A dedicated media-detail route could be useful later, but it is a product decision and must be built around local canonical-media models. |
+| `operator_console/gui_upstream/src/pages/Operations.tsx` | `manual UX adaptation candidate` | The upstream reshaping of operations UI is worth reviewing, but local operation execution, invalidation, and safety affordances must remain canonical. |
+| `operator_console/gui_upstream/src/pages/OperationsPage.tsx` | `ignore` | Historical upstream file removed by the refactor; only useful as context while reviewing the new operations page. |
+| `operator_console/gui_upstream/src/pages/Policy.tsx` | `manual UX adaptation candidate` | Policy-editor presentation may be portable, but local policy payloads and save semantics are backend-owned. |
+| `operator_console/gui_upstream/src/pages/Runs.tsx` | `manual UX adaptation candidate` | Polling and table UX may be useful, but local run history is tied to unified `operation_runs`. |
+| `operator_console/gui_upstream/src/types/api.ts` | `do not port` | Local API types are already aligned to current `/api/*` envelopes and payloads. |
+| `operator_console/gui_upstream/src/types/media.ts` | `manual UX adaptation candidate` | Type splitting is a code-organization idea only; any split must preserve local runtime fields and request/response mapping. |
+| `operator_console/gui_upstream/src/types/runs.ts` | `manual UX adaptation candidate` | Same as `media.ts`: structure idea only, not a copy target. |
+| `operator_console/gui_upstream/tsconfig.app.json` | `ignore` | Tooling changes do not justify divergence from the local frontend toolchain during analysis. |
+| `operator_console/gui_upstream/tsconfig.json` | `ignore` | Same as above; review only if later frontend compiler settings are intentionally revisited. |
+
+## Recommended Next Port Order
+
+If and when local UI adaptation is desired, review in this order:
+
+1. media components and gallery preview UX
+2. layout polish from `layout/*`
+3. selected page-level UX improvements for dashboard, runs, duplicates, and policy
+4. optional product decision on `MediaDetail` and discover-to-gallery consolidation
+
+Do not start with API, types, or admin pages.
+
+## Verification Notes
+
+- The subtree refresh touched `operator_console/gui_upstream/` only.
+- `gui_app` remained unchanged during this phase.
+- Existing boundary guards should remain the acceptance gate before any later
+  adaptation into `gui_app`.

@@ -1,37 +1,26 @@
-import { useEffect, useState, useCallback } from "react";
+import { useState } from "react";
 import { DataTable } from "@/components/DataTable";
 import { StatusBadge } from "@/components/StatusBadge";
 import { ErrorAlert } from "@/components/ErrorAlert";
 import { JsonViewer } from "@/components/JsonViewer";
 import { getRuns } from "@/lib/api/endpoints";
-import type { Run, PaginatedResponse } from "@/types/api";
+import { usePolling } from "@/hooks/usePolling";
+import type { Run } from "@/types/runs";
 import { X } from "lucide-react";
 
-export default function RunsPage() {
-  const [data, setData] = useState<PaginatedResponse<Run> | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+export default function Runs() {
   const [sortKey, setSortKey] = useState("timestamp");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [selectedRun, setSelectedRun] = useState<Run | null>(null);
   const [page, setPage] = useState(1);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await getRuns({ page, page_size: 25, sort: sortKey, order: sortOrder });
-      setData(res.data);
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [page, sortKey, sortOrder]);
-
-  useEffect(() => { load(); }, [load]);
+  const { data, isLoading, error } = usePolling(
+    ["runs", String(page), sortKey, sortOrder],
+    () => getRuns({ page, page_size: 25, sort: sortKey, order: sortOrder })
+  );
 
   const handleSort = (key: string) => {
-    if (sortKey === key) setSortOrder(o => o === "asc" ? "desc" : "asc");
+    if (sortKey === key) setSortOrder((o) => (o === "asc" ? "desc" : "asc"));
     else { setSortKey(key); setSortOrder("desc"); }
   };
 
@@ -54,11 +43,11 @@ export default function RunsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Runs</h1>
           <p className="text-sm text-muted-foreground mt-1">Pipeline execution history</p>
         </div>
-        {error && <ErrorAlert message={error} onDismiss={() => setError(null)} />}
+        {error && <ErrorAlert message={error.message} />}
         <DataTable
           columns={columns}
           data={data?.items ?? []}
-          loading={loading}
+          loading={isLoading}
           emptyMessage="No runs recorded yet"
           onRowClick={setSelectedRun}
           sortKey={sortKey}
@@ -67,9 +56,9 @@ export default function RunsPage() {
         />
         {data && data.total_pages > 1 && (
           <div className="flex items-center justify-center gap-2">
-            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="px-3 py-1 text-sm rounded border disabled:opacity-50">Prev</button>
+            <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} className="px-3 py-1 text-sm rounded border disabled:opacity-50">Prev</button>
             <span className="text-xs text-muted-foreground">Page {page} of {data.total_pages}</span>
-            <button onClick={() => setPage(p => Math.min(data.total_pages, p + 1))} disabled={page === data.total_pages} className="px-3 py-1 text-sm rounded border disabled:opacity-50">Next</button>
+            <button onClick={() => setPage((p) => Math.min(data.total_pages, p + 1))} disabled={page === data.total_pages} className="px-3 py-1 text-sm rounded border disabled:opacity-50">Next</button>
           </div>
         )}
       </div>
