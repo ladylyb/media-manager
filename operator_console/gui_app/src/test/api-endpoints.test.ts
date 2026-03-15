@@ -6,7 +6,13 @@ vi.mock("@/lib/api/client", () => ({
 }));
 
 import { apiGet, apiPost } from "@/lib/api/client";
-import { adminDbReset, runIngest, updatePolicy } from "@/lib/api/endpoints";
+import {
+  adminDbReset,
+  getDirectoryPickerCapability,
+  getDirectoryPickerListing,
+  runIngest,
+  updatePolicy,
+} from "@/lib/api/endpoints";
 
 describe("api endpoints", () => {
   afterEach(() => {
@@ -94,6 +100,45 @@ describe("api endpoints", () => {
       preferred_roots: ["/archive"],
       recanonicalization_enabled: false,
       version: 7,
+    });
+  });
+
+  it("loads directory picker capability through the API client only", async () => {
+    vi.mocked(apiGet).mockResolvedValue({
+      ok: true,
+      workflow_version: "v2-service-layer",
+      schema_version: "schema-1",
+      generated_at: "2026-03-14T00:00:00+00:00",
+      data: {
+        enabled: true,
+        roots: [{ label: "incoming", path: "/srv/media/incoming" }],
+      },
+      errors: [],
+    });
+
+    await getDirectoryPickerCapability();
+
+    expect(apiGet).toHaveBeenCalledWith("/directory-picker/capability");
+  });
+
+  it("loads directory picker listings through the API client only", async () => {
+    vi.mocked(apiGet).mockResolvedValue({
+      ok: true,
+      workflow_version: "v2-service-layer",
+      schema_version: "schema-1",
+      generated_at: "2026-03-14T00:00:00+00:00",
+      data: {
+        current_path: "/srv/media/incoming",
+        parent_path: "/srv/media",
+        directories: [{ name: "album-a", path: "/srv/media/incoming/album-a" }],
+      },
+      errors: [],
+    });
+
+    await getDirectoryPickerListing("/srv/media/incoming");
+
+    expect(apiGet).toHaveBeenCalledWith("/directory-picker/list", {
+      path: "/srv/media/incoming",
     });
   });
 });

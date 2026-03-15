@@ -24,6 +24,11 @@ npm run dev
 |---|---|---|
 | `VITE_API_BASE_URL` | `/api` | Base URL for the FastAPI backend |
 
+Local deployment note:
+- the Pipeline Wizard can optionally expose a `Browse` button for `folder_path`
+- this is server-host browsing, not client-machine browsing
+- enable it only in trusted/local environments with constrained roots via `MEDIA_MANAGER_DIRECTORY_PICKER_ENABLED` and `MEDIA_MANAGER_DIRECTORY_PICKER_ROOTS`
+
 ## Production Build for FastAPI
 
 ```bash
@@ -53,6 +58,7 @@ src/
 |---|---|
 | `/` | Dashboard - KPIs, performance, quick actions |
 | `/operations` | Pipeline operations with risk labels |
+| `/pipeline-wizard` | Guided pipeline workflow with review checkpoints |
 | `/runs` | Sortable/filterable run history |
 | `/ledger` | Analytics, hash queries, audit |
 | `/duplicates` | Split-pane duplicate group browser |

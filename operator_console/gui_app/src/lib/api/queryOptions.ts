@@ -26,4 +26,7 @@ export const queryOptions = {
   canonicalTags: {
     staleTime: 5 * 60_000,
   },
+  directoryPicker: {
+    staleTime: 5 * 60_000,
+  },
 } as const;

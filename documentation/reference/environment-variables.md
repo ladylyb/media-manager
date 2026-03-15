@@ -176,6 +176,24 @@ Defaults below reflect runtime code defaults, not shell defaults.
 - Default in code: `forever`
 - Example: `forever`
 
+## Operator Console UX Flags
+
+### `MEDIA_MANAGER_DIRECTORY_PICKER_ENABLED`
+- Purpose: Enable the optional server-backed directory picker used by the pipeline wizard `Browse` button.
+- Truthy values: `1`, `true`, `yes`, `on`
+- Default in code: `false`
+- Local-use note: this browses directories on the API server host, not on the operator's local workstation browser.
+- Safety note: the picker remains read-only and only exposes configured allowed roots; keep it disabled outside trusted/local deployments unless roots are tightly constrained.
+- Example: `false`
+
+### `MEDIA_MANAGER_DIRECTORY_PICKER_ROOTS`
+- Purpose: Comma-separated absolute directory roots that the optional wizard directory picker may browse.
+- Format: Comma-separated absolute directory paths.
+- Default in code: empty
+- Local-use note: these paths must exist on the same machine/container where the API server runs.
+- Safety note: only existing directories are exposed; paths outside these roots are rejected.
+- Example: `/srv/media/incoming,/srv/media/archive`
+
 ## Source of Truth
 
 - Runtime template: repository root `.env.sample`

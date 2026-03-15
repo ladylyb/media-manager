@@ -28,6 +28,7 @@ from media_manager.app.service_layer import (
     ServiceCache,
     ServiceEnvelope,
     ServiceError,
+    ServiceLayerException,
     iso_now,
     map_exception,
     schema_version,
@@ -201,6 +202,129 @@ def _parse_sample_limit(value: int) -> int:
 def _api_reload_enabled() -> bool:
     raw = os.getenv("MEDIA_MANAGER_API_RELOAD", "false")
     return raw.strip().lower() in _TRUTHY_ENV
+
+
+def _directory_picker_enabled() -> bool:
+    raw = os.getenv("MEDIA_MANAGER_DIRECTORY_PICKER_ENABLED", "false")
+    return raw.strip().lower() in _TRUTHY_ENV
+
+
+def _directory_picker_roots() -> tuple[Path, ...]:
+    raw = os.getenv("MEDIA_MANAGER_DIRECTORY_PICKER_ROOTS", "")
+    roots: list[Path] = []
+    for item in raw.split(","):
+        normalized = item.strip()
+        if not normalized:
+            continue
+        path = Path(normalized)
+        if not path.is_absolute():
+            LOGGER.warning("Skipping non-absolute directory picker root", extra={"path": normalized})
+            continue
+        try:
+            resolved = path.resolve()
+        except Exception:
+            LOGGER.warning("Skipping unresolvable directory picker root", extra={"path": normalized})
+            continue
+        if not resolved.exists() or not resolved.is_dir():
+            LOGGER.warning("Skipping non-directory picker root", extra={"path": str(resolved)})
+            continue
+        roots.append(resolved)
+    return tuple(roots)
+
+
+def _directory_picker_label(path: Path) -> str:
+    return path.name or str(path)
+
+
+def _directory_picker_root_for(path: Path, roots: tuple[Path, ...]) -> Path | None:
+    for root in sorted(roots, key=lambda item: len(item.parts), reverse=True):
+        try:
+            path.relative_to(root)
+            return root
+        except ValueError:
+            continue
+    return None
+
+
+def _directory_picker_capability_payload() -> dict[str, object]:
+    roots = _directory_picker_roots()
+    enabled = _directory_picker_enabled() and bool(roots)
+    return {
+        "enabled": enabled,
+        "roots": [{"label": _directory_picker_label(root), "path": str(root)} for root in roots],
+    }
+
+
+def _directory_picker_listing_payload(path_value: str) -> dict[str, object]:
+    if not _directory_picker_enabled():
+        raise ServiceLayerException(code="NOT_FOUND", message="Directory picker is disabled.", http_status=404)
+
+    roots = _directory_picker_roots()
+    if not roots:
+        raise ServiceLayerException(
+            code="NOT_FOUND",
+            message="Directory picker roots are not configured.",
+            http_status=404,
+        )
+
+    requested = _require_non_empty(path_value, "path")
+    candidate = Path(requested)
+    if not candidate.is_absolute():
+        raise ServiceLayerException(
+            code="VALIDATION_ERROR",
+            message="path must be an absolute directory path.",
+            http_status=400,
+        )
+
+    try:
+        resolved = candidate.resolve()
+    except Exception as exc:
+        raise ServiceLayerException(
+            code="VALIDATION_ERROR",
+            message=f"Unable to resolve directory path: {requested}",
+            http_status=400,
+        ) from exc
+
+    if not resolved.exists():
+        raise ServiceLayerException(code="NOT_FOUND", message=f"Directory not found: {resolved}", http_status=404)
+    if not resolved.is_dir():
+        raise ServiceLayerException(
+            code="VALIDATION_ERROR",
+            message=f"Path must be a directory: {resolved}",
+            http_status=400,
+        )
+
+    root = _directory_picker_root_for(resolved, roots)
+    if root is None:
+        raise ServiceLayerException(
+            code="VALIDATION_ERROR",
+            message="Requested path is outside configured directory picker roots.",
+            http_status=400,
+        )
+
+    parent_path: str | None = None
+    if resolved != root:
+        parent = resolved.parent.resolve()
+        if _directory_picker_root_for(parent, roots) == root:
+            parent_path = str(parent)
+
+    directories = []
+    for child in sorted(resolved.iterdir(), key=lambda item: item.name.lower()):
+        try:
+            child_resolved = child.resolve()
+        except Exception:
+            continue
+        if not child_resolved.is_dir():
+            continue
+        if _directory_picker_root_for(child_resolved, roots) != root:
+            continue
+        directories.append({"name": child_resolved.name, "path": str(child_resolved)})
+
+    return {
+        "current_path": str(resolved),
+        "parent_path": parent_path,
+        "directories": directories,
+    }
 
 
 def _v2_ok(*, data: dict[str, object]) -> JSONResponse:
@@ -443,6 +567,17 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         """Return latest persisted performance metrics in the canonical API envelope."""
         return _execute_read("latest-metrics", services.latest_metrics)
+
+    @app.get("/api/directory-picker/capability")
+    def directory_picker_capability() -> JSONResponse:
+        """Return whether the optional directory picker is enabled and which roots are browseable."""
+        return _execute_read("directory-picker-capability", _directory_picker_capability_payload)
+
+    @app.get("/api/directory-picker/list")
+    def directory_picker_list(path: str | None = Query(default=None)) -> JSONResponse:
+        """Return immediate child directories for a configured root or subdirectory."""
+        normalized_path = _require_non_empty(path, "path")
+        return _execute_read("directory-picker-list", lambda: _directory_picker_listing_payload(normalized_path))
 
     @app.get("/api/runs")
     def runs_history(

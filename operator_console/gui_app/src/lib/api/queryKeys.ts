@@ -20,6 +20,8 @@ export const queryKeys = {
   duplicates: ["duplicates"] as const,
   policy: ["policy"] as const,
   analytics: ["analytics"] as const,
+  directoryPickerCapability: ["directory-picker", "capability"] as const,
+  directoryPickerListing: (path: string) => ["directory-picker", "listing", { path }] as const,
   adminObservabilitySummary: ["admin", "observability", "summary"] as const,
   adminObservabilityRuns: (params?: { limit?: number; operation_type?: string; status?: string }) =>
     ["admin", "observability", "runs", params ?? {}] as const,
