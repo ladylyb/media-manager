@@ -927,6 +927,108 @@ export default function PipelineWizard() {
     };
   };
 
+  const buildPipelineCompletionSummary = () => {
+    const filesScanned = asNumber(ingestPayload.files_scanned);
+    const appliedCount = asNumber(applySummary.applied_count) ?? 0;
+    const duplicateActions = asNumber(planSummary.duplicate_actions) ?? 0;
+    const canonicalChanges = asNumber(canonicalSummary.changed_count) ?? 0;
+    const tagStatus = asString(tagResult?.status);
+    const tagProcessed = asNumber(tagResult?.number_of_items_processed) ?? 0;
+    const tagFailed = asNumber(tagResult?.failed_items) ?? 0;
+
+    const lines: string[] = [];
+    let caution = false;
+
+    if (filesScanned !== null) {
+      lines.push(`Your guided media run is complete. ${filesScanned} file${filesScanned === 1 ? "" : "s"} were scanned.`);
+    } else {
+      lines.push("Your guided media run is complete.");
+    }
+
+    if (appliedCount === 0) {
+      lines.push("No saved file actions were carried out during Apply.");
+      caution = true;
+    } else {
+      lines.push(`${appliedCount} planned action${appliedCount === 1 ? "" : "s"} were carried out during Apply.`);
+    }
+
+    if (duplicateActions === 0) {
+      lines.push("No duplicate actions were needed for this run.");
+    } else {
+      lines.push(`${duplicateActions} duplicate action${duplicateActions === 1 ? "" : "s"} were prepared in the run.`);
+    }
+
+    if (canonicalChanges === 0) {
+      lines.push("No chosen-version changes were needed.");
+    } else {
+      lines.push(`${canonicalChanges} chosen-version decision${canonicalChanges === 1 ? "" : "s"} changed.`);
+    }
+
+    if (tagStatus === "SKIPPED") {
+      lines.push("Searchable tag enrichment was skipped for now and can be run later from Operations.");
+    } else if (tagProcessed === 0 && tagFailed === 0) {
+      lines.push("Tag enrichment ran, but it did not find anything new to process.");
+      caution = true;
+    } else if (tagProcessed > 0) {
+      lines.push(`${tagProcessed} chosen media item${tagProcessed === 1 ? "" : "s"} were enriched with searchable tags.`);
+      if (tagFailed > 0) {
+        lines.push(`${tagFailed} enrichment item${tagFailed === 1 ? "" : "s"} failed and may need a closer look.`);
+        caution = true;
+      }
+    }
+
+    return { lines, caution };
+  };
+
+  const buildPipelineTimeline = () => {
+    const ingestCount = asNumber(ingestPayload.files_scanned);
+    const planMoves = asNumber(planSummary.move_actions);
+    const planDuplicates = asNumber(planSummary.duplicate_actions);
+    const applyActions = asNumber(applySummary.applied_count) ?? 0;
+    const applyMoves = asNumber(applySummary.moves_count) ?? 0;
+    const canonicalChanges = asNumber(canonicalSummary.changed_count) ?? 0;
+    const tagStatus = asString(tagResult?.status);
+    const tagProcessed = asNumber(tagResult?.number_of_items_processed) ?? 0;
+
+    return [
+      ingestCount !== null
+        ? `Ingest checked ${ingestCount} file${ingestCount === 1 ? "" : "s"} in the selected folder.`
+        : "Ingest checked the selected folder.",
+      planMoves !== null || planDuplicates !== null
+        ? `Plan prepared ${planMoves ?? 0} move action${planMoves === 1 ? "" : "s"} and ${planDuplicates ?? 0} duplicate action${planDuplicates === 1 ? "" : "s"}.`
+        : "Plan prepared the next actions for the run.",
+      applyActions === 0
+        ? "Apply did not carry out any saved file actions in this run."
+        : `Apply carried out ${applyActions} saved action${applyActions === 1 ? "" : "s"}, including ${applyMoves} file move${applyMoves === 1 ? "" : "s"}.`,
+      canonicalChanges === 0
+        ? "Canonical recompute kept the existing chosen versions."
+        : `Canonical recompute changed ${canonicalChanges} chosen-version decision${canonicalChanges === 1 ? "" : "s"}.`,
+      tagStatus === "SKIPPED"
+        ? "Tag enrichment was skipped and can be run later from Operations."
+        : tagProcessed === 0
+          ? "Tag enrichment ran but did not process any new chosen media items."
+          : `Tag enrichment added or refreshed searchable tags for ${tagProcessed} chosen media item${tagProcessed === 1 ? "" : "s"}.`,
+    ];
+  };
+
+  const buildSummaryNextSteps = () => {
+    const links: Array<{ label: string; to: string }> = [{ label: "Open Runs", to: "/runs" }];
+    const duplicateActions = asNumber(planSummary.duplicate_actions) ?? 0;
+    const duplicateGroups = duplicates.length;
+    const tagStatus = asString(tagResult?.status);
+    const tagProcessed = asNumber(tagResult?.number_of_items_processed) ?? 0;
+
+    if (duplicateActions > 0 || duplicateGroups > 0) {
+      links.push({ label: "Open Duplicates", to: "/duplicates" });
+    }
+
+    if (tagStatus !== "SKIPPED" && tagProcessed > 0) {
+      links.push({ label: "Open Discover", to: "/discover" });
+    }
+
+    return links;
+  };
+
   const renderResultConsole = (stepId: ExecutionStepId) => {
     const state = wizardState.steps[stepId];
     if (!state.result) return null;
@@ -1607,56 +1709,83 @@ export default function PipelineWizard() {
       );
     }
 
-    const guidance = STEP_GUIDANCE.summary;
-    const tagSummary = buildTagResultSummary();
+    const completionSummary = buildPipelineCompletionSummary();
+    const timelineLines = buildPipelineTimeline();
+    const nextStepLinks = buildSummaryNextSteps();
     const tagStatus = asString(tagResult?.status);
     const tagProcessed = asNumber(tagResult?.number_of_items_processed);
-    const tagFailed = asNumber(tagResult?.failed_items);
     return (
       <CheckpointStep
-        title="Pipeline Summary"
-        description={guidance.description}
+        title="Guided Run Complete"
+        description="The guided run is finished. This page gives you a quick plain-English wrap-up of what happened and what you can do next."
         onContinue={() => {
           setWizardState(INITIAL_STATE);
           navigate("/pipeline-wizard");
         }}
-        continueLabel="Start Over"
-        onRerun={() => goToStep("tag")}
-        onAbort={abortWizard}
-        guidance={<WizardGuidancePanel sections={guidance.sections} />}
+        continueLabel="Start Another Guided Run"
+        showRerun={false}
+        showAbort={false}
       >
+        <RestPointSummaryCard
+          title="Run Outcome"
+          lines={completionSummary.lines}
+          tone={completionSummary.caution ? "caution" : "default"}
+        />
         <MetricGrid
           items={summarizeMetrics([
-            { label: "Files Scanned", value: asNumber(ingestPayload.files_scanned) },
-            { label: "Duplicate Actions", value: asNumber(planSummary.duplicate_actions) },
-            { label: "Canonical Changes", value: asNumber(canonicalSummary.changed_count) },
+            { label: "Files scanned", value: asNumber(ingestPayload.files_scanned) },
+            { label: "Actions applied", value: asNumber(applySummary.applied_count) },
+            { label: "Chosen-version changes", value: asNumber(canonicalSummary.changed_count) },
             {
-              label: tagStatus === "SKIPPED" ? "Tag Enrichment" : "Tags Processed",
+              label: tagStatus === "SKIPPED" ? "Tag enrichment" : "Items enriched",
               value: tagStatus === "SKIPPED" ? "Skipped" : tagProcessed,
             },
           ])}
         />
-        <div className="grid gap-4 xl:grid-cols-2">
-          <WizardResultConsole title="Plan Snapshot" status="success" payload={planResult ?? {}} />
-          <WizardResultConsole
-            title="Tag Snapshot"
-            status="success"
-            metrics={summarizeMetrics([
-              { label: "Items processed", value: tagStatus === "SKIPPED" ? null : tagProcessed },
-              { label: "Failed items", value: tagStatus === "SKIPPED" ? null : tagFailed },
-            ])}
-            summaryLines={tagSummary.lines}
-            summaryTone={tagSummary.caution ? "caution" : "default"}
-            technicalDetailsMode="modal"
-            payload={tagResult ?? {}}
-          />
-        </div>
-        <InlineLinks
-          links={[
-            { label: "Open Runs", to: "/runs" },
-            { label: "Open Duplicates", to: "/duplicates" },
-            { label: "Open Discover", to: "/discover" },
-          ]}
+        <Card className="border-border/70 bg-muted/[0.16]">
+          <CardContent className="p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+              What Happened In This Run
+            </p>
+            <div className="mt-3 space-y-3">
+              {timelineLines.map((line, index) => (
+                <div key={`${index}-${line}`} className="flex items-start gap-3 rounded-lg border bg-background/80 p-3">
+                  <div className="mt-0.5 h-2.5 w-2.5 rounded-full bg-primary/70" />
+                  <p className="text-sm leading-6 text-foreground/90">{line}</p>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="border-success/20 bg-success/[0.05]">
+          <CardContent className="space-y-4 p-5">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-success">
+                What You Can Do Next
+              </p>
+              <h3 className="mt-2 text-lg font-semibold text-foreground">Optional follow-up views</h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                The guided run is complete. These views are optional follow-up tools if you want more detail.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              {nextStepLinks.map((link) => (
+                <Button key={link.to} variant="outline" onClick={() => navigate(link.to)}>
+                  {link.label}
+                </Button>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+        <TechnicalResponseButton
+          title="Pipeline Summary"
+          payload={{
+            ingest: ingestResult ?? {},
+            plan: planResult ?? {},
+            apply: applyResult ?? {},
+            canonical: canonicalResult ?? {},
+            tag: tagResult ?? {},
+          }}
         />
       </CheckpointStep>
     );
