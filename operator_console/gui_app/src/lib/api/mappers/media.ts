@@ -19,6 +19,7 @@ export function mapCanonicalItems(items: unknown[]): CanonicalFile[] {
       filename: String(row.filename ?? ""),
       file_type: String(row.file_type ?? "image") === "video" ? "video" : "image",
       media_url: String(row.media_url ?? ""),
+      poster_url: row.poster_url ? String(row.poster_url) : null,
       matched_tags: Array.isArray(row.matched_tags) ? row.matched_tags.map(String) : [],
       top_confidence_score:
         typeof row.top_confidence_score === "number" ? row.top_confidence_score : null,

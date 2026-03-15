@@ -194,6 +194,22 @@ Defaults below reflect runtime code defaults, not shell defaults.
 - Safety note: only existing directories are exposed; paths outside these roots are rejected.
 - Example: `/srv/media/incoming,/srv/media/archive`
 
+### `MEDIA_MANAGER_VIDEO_THUMBNAILS_ENABLED`
+- Purpose: Enable optional server-generated poster thumbnails for video items in the Gallery.
+- Truthy values: `1`, `true`, `yes`, `on`
+- Default in code: `false`
+- Local-use note: thumbnails are generated on the same machine/container that runs the API server, not in the browser.
+- Dependency note: requires `ffmpeg` to be installed on the API server host; when unavailable the gallery falls back without posters.
+- Example: `false`
+
+### `MEDIA_MANAGER_VIDEO_THUMBNAIL_CACHE_DIR`
+- Purpose: Override the local cache directory used for generated video poster thumbnails.
+- Format: Absolute or user-home-relative directory path.
+- Default in code: system temp directory under `media-manager/video-thumbnails`
+- Local-use note: cache files are stored on the API server host and are optimization-only, not durable managed media artifacts.
+- Safety note: deleting the cache only forces regeneration; it does not affect canonical media state.
+- Example: `/tmp/media-manager/video-thumbnails`
+
 ## Source of Truth
 
 - Runtime template: repository root `.env.sample`

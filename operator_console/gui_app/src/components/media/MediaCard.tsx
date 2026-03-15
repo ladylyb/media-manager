@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/StatusBadge";
 import { cn } from "@/lib/utils";
@@ -21,6 +22,12 @@ function primaryTagLabel(file: CanonicalFile): string | null {
 export function MediaCard({ file, onPreview, detailHref }: MediaCardProps) {
   const isVideo = file.file_type === "video";
   const tagLabel = primaryTagLabel(file);
+  const preferredPoster = isVideo ? file.poster_url ?? null : file.media_url;
+  const [imageSrc, setImageSrc] = useState(preferredPoster);
+
+  useEffect(() => {
+    setImageSrc(preferredPoster);
+  }, [preferredPoster]);
 
   return (
     <div
@@ -35,16 +42,24 @@ export function MediaCard({ file, onPreview, detailHref }: MediaCardProps) {
         className="block w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       >
         <div className="relative aspect-[4/5] overflow-hidden bg-gradient-to-br from-muted via-muted to-secondary/60">
-          {file.media_url ? (
+          {imageSrc ? (
             <img
-              src={file.media_url}
+              src={imageSrc}
               alt={file.filename}
               className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+              onError={() => setImageSrc(null)}
             />
           ) : (
-            <div className="flex h-full w-full items-center justify-center">
+            <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-gradient-to-br from-slate-900/10 via-transparent to-slate-950/10">
               {isVideo ? (
-                <Video className="h-10 w-10 text-muted-foreground" />
+                <>
+                  <div className="rounded-full border border-border/70 bg-background/85 p-3 shadow-sm">
+                    <Video className="h-10 w-10 text-muted-foreground" />
+                  </div>
+                  <p className="px-4 text-center text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                    Video preview unavailable
+                  </p>
+                </>
               ) : (
                 <ImageIcon className="h-10 w-10 text-muted-foreground" />
               )}

@@ -3,6 +3,7 @@ export interface CanonicalFile {
   filename: string;
   file_type: "image" | "video";
   media_url: string;
+  poster_url?: string | null;
   matched_tags: string[];
   top_confidence_score: number | null;
   sort_tag_name?: string | null;
