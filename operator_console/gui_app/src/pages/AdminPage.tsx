@@ -40,7 +40,7 @@ import type {
   ObservabilityMetricsSeries,
   ObservabilitySummary,
   Run,
-} from "@/types/api";
+} from "@/types";
 import {
   Activity,
   AlertTriangle,

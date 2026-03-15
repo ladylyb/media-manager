@@ -82,10 +82,15 @@ Implemented on branch `feat/gui-gallery-detail-consolidation`:
 - added a dedicated client-side media detail route at `/gallery/:fileId`
 - kept the existing API-only runtime model and introduced only a thin canonical-gallery detail read for deep-link support
 
-Still intentionally not implemented:
+Implemented on branch `feat/gui-api-organization-cleanup`:
 
-- type/module splitting into `media.ts` / `runs.ts`
-- envelope extraction or alternate data hooks
+- split `gui_app` types into domain modules under `src/types/` with a stable `@/types` barrel
+- extracted shared envelope and pagination helpers out of the API endpoint facade
+- moved response-mapping functions into domain mapper modules and split endpoint implementations by domain
+- preserved the stable public endpoint import surface at `@/lib/api/endpoints`
+
+Still intentionally not implemented:
+- none from the revised GUI sync plan
 
 MTM assessment:
 
@@ -99,6 +104,8 @@ MTM assessment:
   out of the local runtime layer
 - discover-to-gallery consolidation and media-detail adoption are now complete
   on top of the current API-only runtime model
+- code-organization cleanup for type splitting and envelope factoring is now
+  complete while preserving the stable runtime API surface
 - high-risk API/data/admin ownership areas remain correctly untouched
 
 ## High-Risk Local Ownership Areas
@@ -108,7 +115,7 @@ them wholesale from upstream:
 
 - `src/lib/api/client.ts`
 - `src/lib/api/endpoints.ts`
-- `src/types/api.ts`
+- `src/types/`
 - admin, observability, benchmark, and operation-run UI flows
 
 Reasons:
@@ -189,9 +196,7 @@ Completed:
 
 Recommended next:
 
-5. code-organization-only follow-up: type/module splitting and any envelope factoring, if still valuable after the UI work settles
-
-Do not start with API, types, admin pages, or alternate data hooks.
+All planned follow-up work from this revised GUI sync sequence is now complete.
 
 ## Verification Notes
 
@@ -227,4 +232,11 @@ Do not start with API, types, admin pages, or alternate data hooks.
   - `bash tools/ci/check_gui_app_api_client_contract.sh`
   - `bash tools/ci/check_supported_tooling_api_boundary.sh`
   - `pytest operator_console/tests/test_main.py -k "gallery or discover"` with a working local pytest environment
+  - `npm run build`
+- API/type organization cleanup on `feat/gui-api-organization-cleanup` should pass:
+  - `git diff --check`
+  - `bash tools/ci/check_gui_sync_boundary.sh`
+  - `bash tools/ci/check_gui_app_api_client_contract.sh`
+  - `bash tools/ci/check_supported_tooling_api_boundary.sh`
+  - `npm test`
   - `npm run build`

@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getCanonicalDetail } from "@/lib/api/endpoints";
 import { queryKeys } from "@/lib/api/queryKeys";
-import type { CanonicalFile, CanonicalFileDetail, PaginatedResponse } from "@/types/api";
+import type { CanonicalFile, CanonicalFileDetail, PaginatedResponse } from "@/types";
 import { ArrowLeft, FileImage, FileVideo, FolderOpen, Hash, ImageIcon } from "lucide-react";
 
 function getErrorMessage(err: unknown): string | null {

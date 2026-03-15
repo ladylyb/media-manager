@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { getRuns } from "@/lib/api/endpoints";
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
-import type { PaginatedResponse, Run } from "@/types/api";
+import type { PaginatedResponse, Run } from "@/types";
 import { Activity, CheckCircle2, Clock3, X, XCircle } from "lucide-react";
 
 function getErrorMessage(err: unknown): string | null {

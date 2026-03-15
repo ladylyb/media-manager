@@ -1,0 +1,95 @@
+import { apiGet } from "@/lib/api/client";
+import { withData } from "@/lib/api/envelope";
+import {
+  mapAnalyticsSummary,
+  mapCanonicalDetail,
+  mapCanonicalItems,
+  mapDuplicateGroups,
+  mapHashAuditRows,
+  mapLedgerRows,
+  mapTagItems,
+} from "@/lib/api/mappers/media";
+import { mapPagination } from "@/lib/api/pagination";
+
+export const getCanonical = async (params?: {
+  page?: number;
+  limit?: number;
+  tags?: string;
+  sort_by?: string;
+  sort_order?: string;
+}) => {
+  const envelope = await apiGet<Record<string, unknown>>(
+    "/canonical",
+    params as Record<string, string | number>,
+  );
+  const payload = (envelope.data ?? {}) as Record<string, unknown>;
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  return withData(envelope, mapPagination(payload, mapCanonicalItems(items)));
+};
+
+export const getCanonicalDetail = async (fileId: string) => {
+  const envelope = await apiGet<Record<string, unknown>>(`/gallery/${fileId}`);
+  return withData(envelope, mapCanonicalDetail((envelope.data ?? {}) as Record<string, unknown>));
+};
+
+export const getCanonicalTags = async (q?: string) => {
+  const envelope = await apiGet<{ items: string[] }>("/canonical/tags", { q, limit: 25 });
+  const names = Array.isArray(envelope.data.items) ? envelope.data.items : [];
+  return withData(envelope, mapTagItems(names));
+};
+
+export const getDuplicates = async () => {
+  const envelope = await apiGet<Record<string, unknown>>("/duplicates");
+  return withData(envelope, mapDuplicateGroups(envelope.data));
+};
+
+export const getMediaByHash = async (hashPrefix: string, params?: { page?: number; limit?: number }) => {
+  const envelope = await apiGet<Record<string, unknown>>("/media-file/by-hash", {
+    hash_prefix: hashPrefix,
+    page: params?.page ?? 1,
+    limit: params?.limit ?? 30,
+  });
+  return withData(envelope, mapLedgerRows(envelope.data).items);
+};
+
+export const getMediaHistory = async (path: string, params?: { page?: number; limit?: number }) => {
+  const envelope = await apiGet<Record<string, unknown>>("/media-file/history", {
+    path,
+    page: params?.page ?? 1,
+    limit: params?.limit ?? 30,
+  });
+  return withData(envelope, mapLedgerRows(envelope.data).items);
+};
+
+export const getMediaByStatus = async (status: string, params?: { page?: number; limit?: number }) => {
+  const envelope = await apiGet<Record<string, unknown>>("/media-file/by-status", {
+    status,
+    page: params?.page ?? 1,
+    limit: params?.limit ?? 30,
+  });
+  return withData(envelope, mapLedgerRows(envelope.data));
+};
+
+export const getReappearances = async (path: string, params?: { page?: number; limit?: number }) => {
+  const envelope = await apiGet<Record<string, unknown>>("/media-file/reappearances", {
+    path,
+    page: params?.page ?? 1,
+    limit: params?.limit ?? 30,
+  });
+  return withData(envelope, mapLedgerRows(envelope.data));
+};
+
+export const getAnalytics = async () => {
+  const envelope = await apiGet<Record<string, unknown>>("/media-file/analytics");
+  return withData(envelope, mapAnalyticsSummary(envelope.data));
+};
+
+export const getHashAudit = async (params: { sample_limit?: number; root_path?: string }) => {
+  const envelope = await apiGet<Record<string, unknown>>(
+    "/admin/hash-audit",
+    params as Record<string, string | number>,
+  );
+  return withData(envelope, mapHashAuditRows(envelope.data));
+};
+
+export const getDryRunAudit = () => apiGet<Record<string, unknown>>("/media-file/dry-run-audit");

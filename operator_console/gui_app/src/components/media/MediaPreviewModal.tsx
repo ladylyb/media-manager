@@ -6,7 +6,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { CanonicalFile } from "@/types/api";
+import type { CanonicalFile } from "@/types";
 import { cn } from "@/lib/utils";
 import { FileIcon, ImageIcon, Video } from "lucide-react";
 

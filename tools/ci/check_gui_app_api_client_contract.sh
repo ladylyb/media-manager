@@ -8,6 +8,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 
 ADAPTER_FILE="operator_console/gui_app/src/lib/api/endpoints.ts"
+ADAPTER_DIR="operator_console/gui_app/src/lib/api/endpoints"
 CLIENT_FILE="operator_console/gui_app/src/lib/api/client.ts"
 
 if [[ ! -f "$ADAPTER_FILE" ]]; then
@@ -15,18 +16,23 @@ if [[ ! -f "$ADAPTER_FILE" ]]; then
   exit 1
 fi
 
+if [[ ! -d "$ADAPTER_DIR" ]]; then
+  echo "[api-client-guard] ERROR: missing adapter directory: $ADAPTER_DIR"
+  exit 1
+fi
+
 echo "[api-client-guard] Checking disallowed request keys..."
 DISALLOWED_PATTERN='\b(root_path|challenge)\s*:'
-if rg -n "$DISALLOWED_PATTERN" "$ADAPTER_FILE" >/dev/null; then
+if rg -n "$DISALLOWED_PATTERN" "$ADAPTER_FILE" "$ADAPTER_DIR" >/dev/null; then
   echo "[api-client-guard] ERROR: found non-canonical request key(s) in adapter:"
-  rg -n "$DISALLOWED_PATTERN" "$ADAPTER_FILE"
+  rg -n "$DISALLOWED_PATTERN" "$ADAPTER_FILE" "$ADAPTER_DIR"
   echo "[api-client-guard] Use canonical keys such as folder_path and challenge_word."
   exit 1
 fi
 
 echo "[api-client-guard] Checking required canonical request keys..."
 for key in folder_path hash_prefix challenge_word; do
-  if ! rg -n "\\b${key}\\b" "$ADAPTER_FILE" >/dev/null; then
+  if ! rg -n "\\b${key}\\b" "$ADAPTER_FILE" "$ADAPTER_DIR" >/dev/null; then
     echo "[api-client-guard] ERROR: expected canonical key missing in adapter: ${key}"
     exit 1
   fi

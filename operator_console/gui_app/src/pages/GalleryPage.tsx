@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { getCanonical, getCanonicalTags } from "@/lib/api/endpoints";
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
-import type { CanonicalFile, PaginatedResponse, Tag } from "@/types/api";
+import type { CanonicalFile, PaginatedResponse, Tag } from "@/types";
 import { ArrowUpDown, ChevronLeft, ChevronRight, Images, Loader2, Search, X } from "lucide-react";
 
 function getErrorMessage(err: unknown): string | null {

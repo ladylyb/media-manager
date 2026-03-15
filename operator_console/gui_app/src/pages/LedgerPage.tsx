@@ -14,7 +14,7 @@ import {
 } from "@/lib/api/endpoints";
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
-import type { AnalyticsSummary, MediaFileRecord, HashAuditResult } from "@/types/api";
+import type { AnalyticsSummary, MediaFileRecord, HashAuditResult } from "@/types";
 import { BarChart3, FileSearch, Search } from "lucide-react";
 
 type QueryMode = "hash" | "history" | "status" | "reappearances";

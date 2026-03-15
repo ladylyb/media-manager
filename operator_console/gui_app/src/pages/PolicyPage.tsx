@@ -14,7 +14,7 @@ import {
 } from "@/lib/api/endpoints";
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
-import type { Policy } from "@/types/api";
+import type { Policy } from "@/types";
 import { FolderTree, GitCompareArrows, Loader2, Plus, Save, ShieldCheck, X } from "lucide-react";
 import { CardSkeleton } from "@/components/Skeletons";
 

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Activity, RefreshCw } from "lucide-react";
 
 import { getStatus } from "@/lib/api/endpoints";
-import type { SystemStatus } from "@/types/api";
+import type { SystemStatus } from "@/types";
 import { cn } from "@/lib/utils";
 
 const STATUS_POLL_INTERVAL_MS = 120_000;
