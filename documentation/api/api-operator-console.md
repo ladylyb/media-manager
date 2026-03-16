@@ -144,8 +144,12 @@ Execution contract:
 
 ## Binary And HTML Routes
 
+- `GET /admin/diagnostics`
+  - Renders the admin diagnostics workspace for activity, file history, and integrity checks.
+- `GET /runs`
+  - Legacy compatibility route that now redirects into the `Activity` tab in Admin Diagnostics.
 - `GET /ledger`
-  - Renders the MediaFile ledger explorer page.
+  - Legacy compatibility route that now redirects into the `File History` tab in Admin Diagnostics.
 - `GET /operations`
   - Renders explicit operation controls for the API-backed workflows.
 
@@ -165,7 +169,7 @@ Execution contract:
 ## Unified Run History
 
 `GET /api/runs` is now backed by the unified `operation_runs` log and is the
-default operator-facing history feed.
+canonical history feed powering the `Activity` tab in Admin Diagnostics.
 
 Supported filters:
 - `limit` (1..200)
@@ -186,7 +190,11 @@ Each row includes:
 `GET /api/internal-runs` remains available for planner/apply lifecycle
 records from the original `runs` table.
 
-## Ledger Endpoints
+## File History And Integrity Endpoints
+
+These endpoints power the `File History` and `Integrity Check` tabs inside
+Admin Diagnostics. The underlying persistence model still uses ledger-oriented
+terminology even though the GUI now presents this work in plainer language.
 
 Canonical ledger endpoints return paginated envelopes:
 
@@ -263,7 +271,7 @@ Response:
 
 ### `GET /api/media-file/analytics`
 
-Returns all-time, read-only Phase 13 ledger analytics for the `/ledger` page.
+Returns all-time, read-only Phase 13 ledger analytics for the admin diagnostics file-history and integrity-check views.
 
 Response:
 

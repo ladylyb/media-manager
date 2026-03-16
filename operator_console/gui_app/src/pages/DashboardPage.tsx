@@ -318,12 +318,12 @@ export default function DashboardPage() {
                   <span className="text-2xl font-semibold">{home.attention_summary.duplicate_groups}</span>
                 </Link>
                 <Link
-                  to="/runs"
+                  to="/admin/diagnostics?tab=activity"
                   className="flex items-center justify-between rounded-2xl border border-border/70 bg-background/80 p-4 transition-colors hover:border-primary/35 hover:bg-primary/5"
                 >
                   <div>
                     <p className="text-sm font-semibold">Failed runs</p>
-                    <p className="mt-1 text-sm text-muted-foreground">Check runs that need follow-up.</p>
+                    <p className="mt-1 text-sm text-muted-foreground">Open Admin Diagnostics to review jobs that need follow-up.</p>
                   </div>
                   <span className="text-2xl font-semibold">{home.attention_summary.failed_runs}</span>
                 </Link>
@@ -342,7 +342,8 @@ export default function DashboardPage() {
                   </p>
                   <p className="mt-2 text-sm leading-6 text-foreground/90">
                     Start in Organize Media for guided ingest and review, then use Duplicates and
-                    Gallery as follow-up tools when you want more detail.
+                    Gallery as follow-up tools when you want more detail. Use Admin Diagnostics if
+                    a job needs troubleshooting.
                   </p>
                 </div>
               </CardContent>

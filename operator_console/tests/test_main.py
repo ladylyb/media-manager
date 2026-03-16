@@ -1309,7 +1309,7 @@ def test_latest_metrics_endpoint_returns_json() -> None:
 
 
 def test_runs_page_serves_spa_shell() -> None:
-    """GET /runs should serve the operator console SPA shell."""
+    """GET /runs should serve the SPA shell for the legacy compatibility route."""
     client = TestClient(app)
 
     response = client.get("/runs")
@@ -1330,6 +1330,16 @@ def test_gallery_page_serves_spa_shell() -> None:
     assert "/static-v2/assets/" in response.text
 
 
+def test_admin_diagnostics_page_serves_spa_shell() -> None:
+    client = TestClient(app)
+
+    response = client.get("/admin/diagnostics")
+
+    assert response.status_code == 200
+    assert '<div id="root"></div>' in response.text
+    assert "/static-v2/assets/" in response.text
+
+
 def test_discover_page_serves_spa_shell() -> None:
     client = TestClient(app)
 
@@ -1341,6 +1351,7 @@ def test_discover_page_serves_spa_shell() -> None:
 
 
 def test_ledger_page_serves_spa_shell() -> None:
+    """GET /ledger should serve the SPA shell for the legacy compatibility route."""
     client = TestClient(app)
 
     response = client.get("/ledger")

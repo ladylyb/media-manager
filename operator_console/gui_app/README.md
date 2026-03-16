@@ -40,7 +40,7 @@ Build output is written directly to:
 
 Serve via FastAPI route:
 - `/`
-- and the canonical operator-console routes such as `/operations`, `/runs`, `/gallery`, and `/admin`
+- and the canonical operator-console routes such as `/operations`, `/admin/diagnostics`, `/gallery`, and `/admin`
 
 ## Architecture
 
@@ -59,8 +59,7 @@ src/
 | `/` | Dashboard - media-first home, review queues, and guided workflow entry |
 | `/operations` | Pipeline operations with risk labels |
 | `/pipeline-wizard` | Guided pipeline workflow with review checkpoints |
-| `/runs` | Sortable/filterable run history |
-| `/ledger` | Analytics, hash queries, audit |
+| `/admin/diagnostics` | Admin-facing activity, file history, and integrity checks |
 | `/duplicates` | Split-pane duplicate group browser |
 | `/gallery` | Responsive media grid with tag filters, sort controls, and detail modal |
 | `/gallery/:fileId` | Full-page canonical media detail |

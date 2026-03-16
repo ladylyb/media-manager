@@ -509,6 +509,11 @@ def create_app() -> FastAPI:
         """Render Operator Console admin page."""
         return _render_console_v2_shell()
 
+    @app.get("/admin/diagnostics", response_class=HTMLResponse)
+    def admin_diagnostics_page() -> Response:
+        """Render Operator Console admin diagnostics page."""
+        return _render_console_v2_shell()
+
     @app.get("/operations", response_class=HTMLResponse)
     def operations_page() -> Response:
         """Render explicit operation controls for the supported API workflows."""
@@ -526,7 +531,7 @@ def create_app() -> FastAPI:
 
     @app.get("/ledger", response_class=HTMLResponse)
     def ledger_page() -> Response:
-        """Render read-only media_file ledger explorer page."""
+        """Render legacy ledger entry route for the Operator Console SPA shell."""
         return _render_console_v2_shell()
 
     @app.get("/discover", response_class=HTMLResponse)

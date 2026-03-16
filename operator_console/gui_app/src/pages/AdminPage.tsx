@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import {
   Bar,
   BarChart,
@@ -44,6 +45,7 @@ import type {
 import {
   Activity,
   AlertTriangle,
+  ArrowRight,
   BarChart3,
   Eye,
   Gauge,
@@ -550,8 +552,27 @@ export default function AdminPage() {
     <div className="p-6 space-y-6 max-w-7xl">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Admin</h1>
-        <p className="text-sm text-muted-foreground mt-1">Controlled destructive operations, observability, and benchmark workflows over the API.</p>
+        <p className="text-sm text-muted-foreground mt-1">Controlled destructive operations, observability, benchmark workflows, and diagnostics over the API.</p>
       </div>
+
+      <Card className="border-border/70 shadow-sm">
+        <CardHeader className="pb-3">
+          <CardDescription>Support and troubleshooting</CardDescription>
+          <CardTitle className="text-xl">Admin Diagnostics</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-center justify-between gap-3">
+          <p className="max-w-2xl text-sm text-muted-foreground">
+            Open the calmer diagnostics workspace for recent job activity, file history lookups,
+            and read-only integrity checks.
+          </p>
+          <Button asChild>
+            <Link to="/admin/diagnostics?tab=activity">
+              Open Diagnostics
+              <ArrowRight className="ml-2 h-4 w-4" />
+            </Link>
+          </Button>
+        </CardContent>
+      </Card>
 
       <Tabs defaultValue="observability" className="space-y-4">
         <TabsList className="grid w-full grid-cols-3 max-w-2xl">
