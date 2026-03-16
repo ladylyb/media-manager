@@ -38,6 +38,10 @@ Legacy CLI-only and removed from the supported interface:
 The remaining perf helpers are internal legacy tooling only and are not part of
 the supported application interface.
 
+GUI routing note:
+- product-facing configuration now lives inside the integrated Admin workspace
+- `/policy` remains only as a compatibility redirect to Admin `Library Rules`
+
 Supported first-party clients:
 
 - `operator_console/gui_app/` is the supported GUI integration layer and calls the REST API only.

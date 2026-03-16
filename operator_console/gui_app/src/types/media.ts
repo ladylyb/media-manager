@@ -31,9 +31,11 @@ export interface DuplicateGroup {
 }
 
 export interface DuplicateFile {
+  file_instance_id: string;
   path: string;
-  size_bytes: number;
-  created_at: string;
+  media_type: string;
+  is_image: boolean;
+  thumbnail_url?: string | null;
   is_canonical: boolean;
 }
 

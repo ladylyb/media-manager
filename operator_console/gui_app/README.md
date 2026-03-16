@@ -59,12 +59,12 @@ src/
 | `/` | Dashboard - media-first home, review queues, and guided workflow entry |
 | `/operations` | Pipeline operations with risk labels |
 | `/pipeline-wizard` | Guided pipeline workflow with review checkpoints |
-| `/admin/diagnostics` | Admin-facing activity, file history, and integrity checks |
-| `/duplicates` | Split-pane duplicate group browser |
+| `/admin/diagnostics` | Legacy compatibility route into Admin tabs for activity, file history, and integrity checks |
+| `/duplicates` | Review-first duplicate comparison workspace |
 | `/gallery` | Responsive media grid with tag filters, sort controls, and detail modal |
 | `/gallery/:fileId` | Full-page canonical media detail |
-| `/policy` | Policy configuration editor |
-| `/admin` | Destructive operations with challenge confirmation |
+| `/policy` | Legacy compatibility route that redirects to Admin Library Rules |
+| `/admin` | Integrated admin workspace for activity, library rules, file history, integrity checks, health, benchmarks, and reset |
 
 ## Sync Strategy
 

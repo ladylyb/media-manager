@@ -51,6 +51,11 @@ Available canonical endpoints:
 - `POST /api/admin/benchmarks/runs/{operation_run_id}/cancel`
 - `POST /api/admin/db-reset`
 
+Product routing note:
+- `/admin` is the primary admin workspace in the GUI.
+- `/policy` is retained as a compatibility route and redirects to the Admin `Library Rules` tab.
+- `/runs` and `/ledger` are retained as compatibility routes and redirect into Admin tabs.
+
 Error mapping:
 - `400` validation/domain/state errors (`ok=false`, populated `errors[]`)
 - `500` runtime failures
