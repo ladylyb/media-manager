@@ -150,11 +150,11 @@ Execution contract:
 ## Binary And HTML Routes
 
 - `GET /admin/diagnostics`
-  - Renders the admin diagnostics workspace for activity, file history, and integrity checks.
+  - Legacy compatibility route that redirects into the integrated Admin workspace.
 - `GET /runs`
-  - Legacy compatibility route that now redirects into the `Activity` tab in Admin Diagnostics.
+  - Legacy compatibility route that now redirects into the `Activity` tab in Admin.
 - `GET /ledger`
-  - Legacy compatibility route that now redirects into the `File History` tab in Admin Diagnostics.
+  - Legacy compatibility route that now redirects into the `File History` tab in Admin.
 - `GET /operations`
   - Renders explicit operation controls for the API-backed workflows.
 
@@ -174,7 +174,7 @@ Execution contract:
 ## Unified Run History
 
 `GET /api/runs` is now backed by the unified `operation_runs` log and is the
-canonical history feed powering the `Activity` tab in Admin Diagnostics.
+canonical history feed powering the `Activity` tab in Admin.
 
 Supported filters:
 - `limit` (1..200)
@@ -198,7 +198,7 @@ records from the original `runs` table.
 ## File History And Integrity Endpoints
 
 These endpoints power the `File History` and `Integrity Check` tabs inside
-Admin Diagnostics. The underlying persistence model still uses ledger-oriented
+Admin. The underlying persistence model still uses ledger-oriented
 terminology even though the GUI now presents this work in plainer language.
 
 Canonical ledger endpoints return paginated envelopes:
