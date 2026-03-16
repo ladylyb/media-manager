@@ -238,8 +238,12 @@ export default function OperationsPage() {
     setSelectedPlanRunId(recentPlanRuns[0].operation_run_id);
   }, [recentPlanRuns, selectedPlanRunId, showManualRunId]);
 
-  const activeApplyRunId = showManualRunId ? manualRunId.trim() : selectedPlanRunId.trim();
   const selectedPlan = recentPlanRuns.find((run) => run.operation_run_id === selectedPlanRunId) ?? null;
+  // PLAN history entries are useful for selection and audit context, but apply must target the
+  // durable planner run id linked to that history row rather than the operation-run id itself.
+  const selectedLinkedRunId = selectedPlan?.linked_run_id?.trim() ?? "";
+  const activeApplyRunId = showManualRunId ? manualRunId.trim() : selectedLinkedRunId;
+  const applySelectionReady = showManualRunId ? Boolean(activeApplyRunId) : Boolean(selectedLinkedRunId);
 
   const startSections = executionStepGuidance.ingest.sections.map((section) =>
     section.title === "Before you run"
@@ -324,7 +328,9 @@ export default function OperationsPage() {
     if (!activeApplyRunId) {
       setApplyState({
         loading: false,
-        error: "Choose a saved plan or enter a run ID before applying saved work.",
+        error: showManualRunId
+          ? "Enter a durable run ID before applying saved work."
+          : "This saved plan cannot be applied yet because it is missing its durable run reference.",
         result: null,
       });
       setConfirmingAction(null);
@@ -514,7 +520,7 @@ export default function OperationsPage() {
               <p className="text-xs text-muted-foreground">
                 {recentPlanRuns.length > 0
                   ? "The most recent completed plan is selected by default."
-                  : "No completed plan runs were loaded. Use manual run ID entry if you already know the saved run you need."}
+                  : "No completed plan runs were loaded. Use manual run ID entry only when you already know the durable saved run you need."}
               </p>
             </div>
 
@@ -541,7 +547,7 @@ export default function OperationsPage() {
                     className="font-mono"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Use this only when you already know the exact saved plan run you want to apply.
+                    Use this only when you already know the exact durable run ID you want to apply.
                   </p>
                 </div>
               ) : null}
@@ -552,13 +558,32 @@ export default function OperationsPage() {
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
                   Selected Plan
                 </p>
-                <p className="mt-2 break-all font-mono text-xs text-foreground">
-                  {selectedPlan.operation_run_id}
-                </p>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Completed {new Date(selectedPlan.completed_at ?? selectedPlan.started_at).toLocaleString()}
-                </p>
+                <div className="mt-2 space-y-3 text-sm">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                      Plan History Entry
+                    </p>
+                    <p className="mt-1 break-all font-mono text-xs text-foreground">
+                      {selectedPlan.operation_run_id}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                      Durable Run ID
+                    </p>
+                    <p className="mt-1 break-all font-mono text-xs text-foreground">
+                      {selectedPlan.linked_run_id ?? "Not available for this saved plan."}
+                    </p>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    Completed {new Date(selectedPlan.completed_at ?? selectedPlan.started_at).toLocaleString()}
+                  </p>
+                </div>
               </div>
+            ) : null}
+
+            {!showManualRunId && selectedPlan && !selectedPlan.linked_run_id ? (
+              <ErrorAlert message="This saved plan cannot be applied from Library Actions because the completed PLAN entry does not include a durable run ID." />
             ) : null}
 
             <div className="flex flex-wrap gap-3">
@@ -566,7 +591,7 @@ export default function OperationsPage() {
                 type="button"
                 variant="destructive"
                 onClick={() => setConfirmingAction("apply")}
-                disabled={applyState.loading}
+                disabled={applyState.loading || !applySelectionReady}
               >
                 {applyState.loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Apply Saved Work

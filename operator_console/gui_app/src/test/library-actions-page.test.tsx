@@ -54,12 +54,13 @@ describe("Library Actions page", () => {
       data: {
         items: [
           {
-            operation_run_id: "plan-run-1",
+            operation_run_id: "plan-operation-1",
             operation_type: "PLAN",
             status: "COMPLETED",
             started_at: "2026-03-15T10:00:00Z",
             completed_at: "2026-03-15T10:01:00Z",
             duration_ms: 500,
+            linked_run_id: "durable-run-1",
           },
         ],
       },
@@ -70,7 +71,7 @@ describe("Library Actions page", () => {
         operation: "APPLY",
         success: true,
         summary: "Applied saved work.",
-        details: { run_id: "plan-run-1" },
+        details: { run_id: "durable-run-1" },
         duration_ms: 42,
       },
     });
@@ -179,7 +180,7 @@ describe("Library Actions page", () => {
     );
   });
 
-  it("applies saved work from the most recent loaded plan by default", async () => {
+  it("applies saved work using linked_run_id rather than the plan operation history id", async () => {
     renderPage();
 
     await screen.findByText("Continue a Saved Plan");
@@ -194,9 +195,45 @@ describe("Library Actions page", () => {
 
     await waitFor(() =>
       expect(mocks.runApply).toHaveBeenCalledWith({
-        run_id: "plan-run-1",
+        run_id: "durable-run-1",
         collision_mode: "rename",
       }),
     );
+  });
+
+  it("blocks apply when a selected saved plan is missing linked_run_id", async () => {
+    mocks.getRuns.mockResolvedValueOnce({
+      data: {
+        items: [
+          {
+            operation_run_id: "plan-operation-without-link",
+            operation_type: "PLAN",
+            status: "COMPLETED",
+            started_at: "2026-03-15T10:00:00Z",
+            completed_at: "2026-03-15T10:01:00Z",
+            duration_ms: 500,
+            linked_run_id: null,
+          },
+        ],
+      },
+    });
+
+    renderPage();
+
+    await screen.findByText("Continue a Saved Plan");
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Continue a Saved Plan/,
+      }),
+    );
+
+    expect(await screen.findByText("Not available for this saved plan.")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "This saved plan cannot be applied from Library Actions because the completed PLAN entry does not include a durable run ID.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Apply Saved Work" })).toBeDisabled();
+    expect(mocks.runApply).not.toHaveBeenCalled();
   });
 });
