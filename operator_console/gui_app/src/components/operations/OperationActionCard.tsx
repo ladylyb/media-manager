@@ -31,8 +31,7 @@ export interface OperationActionConfig {
     | "plan"
     | "apply"
     | "canonicalRecompute"
-    | "tagEnrichment"
-    | "operatorRun";
+    | "tagEnrichment";
   section: "guided" | "high-impact";
   badgeLabel: string;
   inputs?: OperationInputConfig[];

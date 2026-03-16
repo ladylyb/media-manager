@@ -40,6 +40,30 @@ describe("api endpoints", () => {
     });
   });
 
+  it("maps fallback operation names and duration for tag enrichment responses", async () => {
+    vi.mocked(apiPost).mockResolvedValue({
+      ok: true,
+      workflow_version: "v2-service-layer",
+      schema_version: "schema-1",
+      generated_at: "2026-03-16T00:00:00+00:00",
+      data: {
+        status: "COMPLETED",
+        duration_ms: 926,
+        operation_run_id: "op-run-1",
+        number_of_items_processed: 72,
+      },
+      errors: [],
+    });
+
+    const { data } = await import("@/lib/api/endpoints").then((mod) =>
+      mod.runTagEnrichment({ all: true, batch_size: 100, source: "system" }),
+    );
+
+    expect(data.operation).toBe("TAG_ENRICHMENT");
+    expect(data.summary).toBe("Tag Enrichment completed.");
+    expect(data.duration_ms).toBe(926);
+  });
+
   it("uses challenge_word for admin reset requests", async () => {
     vi.mocked(apiPost).mockResolvedValue({
       ok: true,

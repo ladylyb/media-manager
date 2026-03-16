@@ -1,6 +1,6 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   ChevronDown,
   ChevronUp,
@@ -52,6 +52,7 @@ import {
 } from "@/lib/api/endpoints";
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
+import { executionStepGuidance, type StepGuidanceSection } from "@/lib/workflow/executionStepGuidance";
 import { cn } from "@/lib/utils";
 import type {
   CanonicalFile,
@@ -91,11 +92,6 @@ interface WizardState {
     canonical: StepState<{ policy_name: string; dry_run: boolean; preferred_roots_csv: string }>;
     tag: StepState<{ all: boolean; canonical_id: string; batch_size: number; source: string }>;
   };
-}
-
-interface StepGuidanceSection {
-  title: string;
-  content: string;
 }
 
 const STEP_ORDER: StepId[] = [
@@ -195,32 +191,7 @@ const STEP_GUIDANCE: Record<
     sections: StepGuidanceSection[];
   }
 > = {
-  ingest: {
-    description:
-      "Register the target folder in the system so the rest of the pipeline can reason about the files it contains.",
-    sections: [
-      {
-        title: "What this step does",
-        content:
-          "Ingest scans the folder you choose and records what files are present. Earlier workflows may have felt like they started later, but this wizard makes ingest explicit because the system needs a current inventory before it can plan anything safely.",
-      },
-      {
-        title: "Before you run",
-        content:
-          "Pick the folder you want the system to inspect. In the wizard, ingest assumes you are moving through the real guided workflow, so advanced validation-only modes are left to the Operations page.",
-      },
-      {
-        title: "What success looks like",
-        content:
-          "You will see a plain-English summary of whether the folder introduced brand-new material, refreshed already known files, or surfaced duplicate matches the system already understands.",
-      },
-      {
-        title: "Risk level",
-        content:
-          "This step updates the system record of what files exist in the selected folder. It does not move, rename, or reorganize files yet.",
-      },
-    ],
-  },
+  ingest: executionStepGuidance.ingest,
   "review-ingest": {
     description:
       "Confirm that discovery results look correct before asking the system to generate a plan.",
@@ -247,32 +218,7 @@ const STEP_GUIDANCE: Record<
       },
     ],
   },
-  plan: {
-    description:
-      "Prepare the system's proposed decisions for the files you just ingested, without moving or renaming anything yet.",
-    sections: [
-      {
-        title: "What this step does",
-        content:
-          "Plan looks at the folder you already ingested and works out what the system would do next, such as duplicate handling and file organization decisions.",
-      },
-      {
-        title: "Before you run",
-        content:
-          "This step automatically uses the same folder from Ingest. In the wizard, there is nothing extra to configure here: just confirm you are ready for the system to prepare its proposed next actions.",
-      },
-      {
-        title: "What success looks like",
-        content:
-          "You receive a saved plan with a run ID and a plain-English summary. The wizard carries that run ID forward automatically into Apply, which is the first stage that actually executes the work.",
-      },
-      {
-        title: "Risk level",
-        content:
-          "This step saves planning state in the system so later stages know what to do, but it does not yet move files or change canonical selections.",
-      },
-    ],
-  },
+  plan: executionStepGuidance.plan,
   "review-duplicates": {
     description:
       "Use this quick safety check to confirm the planned duplicate picture looks broadly sane before Apply.",
@@ -299,32 +245,7 @@ const STEP_GUIDANCE: Record<
       },
     ],
   },
-  apply: {
-    description:
-      "Make the saved plan real so the changes prepared in Plan are actually carried out.",
-    sections: [
-      {
-        title: "What this step does",
-        content:
-          "Apply is the first point where the wizard stops preparing and starts making real changes. The system uses the saved plan from the previous step to carry out the work that planning prepared.",
-      },
-      {
-        title: "Before you run",
-        content:
-          "Confirm you are ready for the wizard to apply the saved plan it just created. In the guided flow, the wizard automatically uses the same plan reference from the previous step.",
-      },
-      {
-        title: "What success looks like",
-        content:
-          "You receive a plain-English summary of how many planned actions were carried out, how many moves happened, and whether any errors were reported. After this step, the pipeline can safely recalculate canonical selections against the new state.",
-      },
-      {
-        title: "Risk level",
-        content:
-          "This step makes real file and ledger changes. It is the first stage where the guided flow stops being preparatory and starts carrying out the saved plan.",
-      },
-    ],
-  },
+  apply: executionStepGuidance.apply,
   "review-apply": {
     description:
       "Confirm that the planned work was actually applied before recalculating canonical selections.",
@@ -351,32 +272,7 @@ const STEP_GUIDANCE: Record<
       },
     ],
   },
-  canonical: {
-    description:
-      "Choose which file becomes the main version after Apply so later steps know which version to keep referring to.",
-    sections: [
-      {
-        title: "What this step does",
-        content:
-          "This step chooses which file the system will treat as the main version going forward. Later views and enrichment use that chosen version instead of treating all duplicates equally.",
-      },
-      {
-        title: "Before you run",
-        content:
-          "The wizard uses its default guided choice here, so there is nothing extra to configure. Just confirm you are ready for the system to choose the main version for the files you just applied.",
-      },
-      {
-        title: "What success looks like",
-        content:
-          "You receive a plain-English summary of how many chosen-version decisions changed, how many updates were applied, and whether any failed.",
-      },
-      {
-        title: "Risk level",
-        content:
-          "This step changes which file the system treats as the chosen version. It does not move files, but it does change which version later steps and views will prefer.",
-      },
-    ],
-  },
+  canonical: executionStepGuidance.canonical,
   "review-canonical": {
     description:
       "Confirm canonical results before the wizard moves into metadata enrichment.",
@@ -403,27 +299,7 @@ const STEP_GUIDANCE: Record<
       },
     ],
   },
-  tag: {
-    description:
-      "Optionally add searchable tags and metadata to the chosen media items now that the main organization work is complete.",
-    sections: [
-      {
-        title: "What enrichment does",
-        content:
-          "Tag Enrichment adds or refreshes metadata for the chosen media items. This can make later browsing, search, and discovery easier without changing the organization decisions you already made.",
-      },
-      {
-        title: "Why you might run it now",
-        content:
-          "Running it now gives you a more complete library right away. If you would rather finish the guided workflow first, you can skip this step and run enrichment later from Operations.",
-      },
-      {
-        title: "If you skip it",
-        content:
-          "Skipping enrichment does not undo your ingest, planning, apply, or chosen-version work. It only means extra tags and metadata will not be refreshed in this wizard run.",
-      },
-    ],
-  },
+  tag: executionStepGuidance.tag,
   summary: {
     description:
       "Review the complete guided run and confirm how the pipeline moved from discovery through enrichment.",
@@ -535,6 +411,7 @@ function deriveProgressStatus(state: WizardState, stepId: StepId): WizardProgres
 
 export default function PipelineWizard() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [wizardState, setWizardState] = useState<WizardState>(INITIAL_STATE);
   const [confirmingStep, setConfirmingStep] = useState<ExecutionStepId | null>(null);
@@ -542,6 +419,7 @@ export default function PipelineWizard() {
   const [confirmAbortOpen, setConfirmAbortOpen] = useState(false);
   const [ingestFolderValidationError, setIngestFolderValidationError] = useState<string | null>(null);
   const ingestFolderInputRef = useRef<HTMLInputElement | null>(null);
+  const requestedFolderPath = searchParams.get("folder_path")?.trim() ?? "";
 
   const currentStepId = wizardState.currentStepId;
   const currentMeta = STEP_META[currentStepId];
@@ -583,6 +461,47 @@ export default function PipelineWizard() {
       setWizardState((current) => ({ ...current, currentStepId: stepId }));
     }
   };
+
+  useEffect(() => {
+    if (!requestedFolderPath) return;
+
+    setWizardState((current) => {
+      const ingestFolder = current.steps.ingest.input.folder_path.trim();
+      const planFolder = current.steps.plan.input.folder_path.trim();
+      const hasProgress =
+        current.steps.ingest.status !== "idle" ||
+        current.steps.plan.status !== "idle" ||
+        current.steps.apply.status !== "idle" ||
+        current.steps.canonical.status !== "idle" ||
+        current.steps.tag.status !== "idle";
+
+      if (hasProgress || (ingestFolder === requestedFolderPath && planFolder === requestedFolderPath)) {
+        return current;
+      }
+
+      return {
+        ...current,
+        steps: {
+          ...current.steps,
+          ingest: {
+            ...current.steps.ingest,
+            input: {
+              ...current.steps.ingest.input,
+              folder_path: requestedFolderPath,
+            },
+          },
+          plan: {
+            ...current.steps.plan,
+            input: {
+              ...current.steps.plan.input,
+              folder_path: requestedFolderPath,
+            },
+          },
+        },
+      };
+    });
+    setIngestFolderValidationError(null);
+  }, [requestedFolderPath]);
 
   const goToNextStep = () => {
     const next = nextStepId(wizardState.currentStepId);

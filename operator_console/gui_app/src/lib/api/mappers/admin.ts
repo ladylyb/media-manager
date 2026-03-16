@@ -1,22 +1,41 @@
 import type { OperationResult } from "@/types";
 
-export function mapOperationResult(payload: Record<string, unknown>): OperationResult {
-  const operation = String(payload.operation ?? "UNKNOWN");
+interface MapOperationResultOptions {
+  fallbackOperation?: string;
+}
+
+function humanizeOperationLabel(operation: string): string {
+  return operation
+    .toLowerCase()
+    .split("_")
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
+export function mapOperationResult(
+  payload: Record<string, unknown>,
+  options?: MapOperationResultOptions,
+): OperationResult {
+  const operation = String(payload.operation ?? options?.fallbackOperation ?? "UNKNOWN");
   const mode = String(payload.mode ?? "EXECUTION");
   const details = payload as Record<string, unknown>;
-  let summary = `${operation} completed.`;
+  const status = String(payload.status ?? "COMPLETED");
+  const operationLabel = humanizeOperationLabel(operation);
+  let summary = `${operationLabel} completed.`;
   if (mode === "VALIDATION_ONLY") {
-    summary = `${operation} validation completed (no writes).`;
+    summary = `${operationLabel} validation completed (no writes).`;
   } else if (mode === "DRY_RUN") {
-    summary = `${operation} dry-run completed.`;
+    summary = `${operationLabel} dry-run completed.`;
   } else if (mode === "APPLY") {
-    summary = `${operation} apply completed.`;
+    summary = `${operationLabel} apply completed.`;
+  } else if (status === "FAILED") {
+    summary = `${operationLabel} failed.`;
   }
   return {
     operation,
-    success: true,
+    success: status !== "FAILED",
     summary,
     details,
-    duration_ms: 0,
+    duration_ms: typeof payload.duration_ms === "number" ? payload.duration_ms : 0,
   };
 }
