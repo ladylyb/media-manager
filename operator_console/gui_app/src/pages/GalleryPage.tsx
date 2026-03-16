@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { ErrorAlert } from "@/components/ErrorAlert";
+import { TopSurfaceHeader } from "@/components/layout/TopSurfaceHeader";
 import { MediaGrid } from "@/components/media/MediaGrid";
 import { MediaPreviewModal } from "@/components/media/MediaPreviewModal";
 import { Button } from "@/components/ui/button";
@@ -76,8 +77,6 @@ export default function GalleryPage() {
 
   const data = (galleryQuery.data as PaginatedResponse<CanonicalFile> | undefined) ?? null;
   const items = data?.items ?? [];
-  const videoCount = items.filter((file) => file.file_type === "video").length;
-  const imageCount = items.length - videoCount;
   const allTags = (tagsQuery.data as Tag[] | undefined) ?? [];
 
   useEffect(() => {
@@ -99,29 +98,25 @@ export default function GalleryPage() {
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-6 p-6">
-      <div className="overflow-hidden rounded-[28px] border border-border/70 bg-[linear-gradient(135deg,hsl(var(--card))_0%,hsl(var(--card))_35%,hsl(var(--secondary)/0.65)_100%)] shadow-sm">
-        <div className="grid gap-6 px-6 py-8 lg:grid-cols-[minmax(0,1.4fr)_20rem] lg:px-8">
-          <div className="space-y-4">
-            <div className="inline-flex items-center gap-2 rounded-full border border-border/80 bg-background/80 px-3 py-1 text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">
-              <Images className="h-3.5 w-3.5" />
-              Canonical media
-            </div>
-            <div className="space-y-2">
-              <h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">Library</h1>
-              <p className="max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
-                Browse the current canonical media set with tag filters, sort controls, preview, and
-                a dedicated detail route while staying on the existing API-backed query flow.
-              </p>
-            </div>
+      <TopSurfaceHeader
+        badge="Library"
+        title="Browse your media without leaving the flow."
+        description="Use filters, sorting, preview, and the detail view to quickly find the photo or video you need. This page should feel more like a calm library shelf than a dashboard."
+        icon={Images}
+        density="compact"
+        className="rounded-[28px]"
+      >
+        <div className="flex flex-wrap gap-3">
+          <div className="rounded-2xl border border-border/70 bg-background/85 px-4 py-3 text-sm text-muted-foreground shadow-sm">
+            {selectedTags.length
+              ? `${selectedTags.length} tag filter${selectedTags.length === 1 ? "" : "s"} applied`
+              : "No filters applied yet"}
           </div>
-
-          <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
-            <MetricTile label="Visible items" value={String(items.length)} />
-            <MetricTile label="Images" value={String(imageCount)} />
-            <MetricTile label="Videos" value={String(videoCount)} />
+          <div className="rounded-2xl border border-border/70 bg-background/85 px-4 py-3 text-sm text-muted-foreground shadow-sm">
+            Sorted by {sortBy.replace("_", " ")} in {sortOrder === "asc" ? "ascending" : "descending"} order
           </div>
         </div>
-      </div>
+      </TopSurfaceHeader>
 
       {galleryQuery.error ? (
         <ErrorAlert
@@ -266,15 +261,6 @@ export default function GalleryPage() {
       )}
 
       <MediaPreviewModal file={selectedFile} onClose={() => setSelectedFile(null)} />
-    </div>
-  );
-}
-
-function MetricTile({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl border border-border/70 bg-background/80 p-4 shadow-sm backdrop-blur">
-      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">{label}</p>
-      <p className="mt-2 text-2xl font-semibold text-foreground">{value}</p>
     </div>
   );
 }

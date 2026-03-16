@@ -168,7 +168,7 @@ class ReadServices:
                 "regression_status": str(latest_metrics.get("last_regression_status", "UNKNOWN") or "UNKNOWN"),
             },
             "guided_entry": {
-                "label": "Open Organize Media",
+                "label": "Open Organize",
                 "route": "/pipeline-wizard",
                 "helper": "Guided ingest, planning, apply, and review",
             },
