@@ -45,11 +45,11 @@ function DiscoverRedirect() {
 }
 
 function RunsRedirect() {
-  return <Navigate replace to="/admin/diagnostics?tab=activity" />;
+  return <Navigate replace to="/admin?tab=activity" />;
 }
 
 function LedgerRedirect() {
-  return <Navigate replace to="/admin/diagnostics?tab=file-history" />;
+  return <Navigate replace to="/admin?tab=file-history" />;
 }
 
 const App = () => (

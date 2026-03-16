@@ -952,7 +952,7 @@ export default function PipelineWizard() {
   };
 
   const buildSummaryNextSteps = () => {
-    const links: Array<{ label: string; to: string }> = [{ label: "Open Activity", to: "/admin/diagnostics?tab=activity" }];
+    const links: Array<{ label: string; to: string }> = [{ label: "Open Activity", to: "/admin?tab=activity" }];
     const duplicateActions = asNumber(planSummary.duplicate_actions) ?? 0;
     const duplicateGroups = duplicates.length;
     const tagStatus = asString(tagResult?.status);

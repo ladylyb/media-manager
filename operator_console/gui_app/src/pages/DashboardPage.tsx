@@ -318,7 +318,7 @@ export default function DashboardPage() {
                   <span className="text-2xl font-semibold">{home.attention_summary.duplicate_groups}</span>
                 </Link>
                 <Link
-                  to="/admin/diagnostics?tab=activity"
+                  to="/admin?tab=activity"
                   className="flex items-center justify-between rounded-2xl border border-border/70 bg-background/80 p-4 transition-colors hover:border-primary/35 hover:bg-primary/5"
                 >
                   <div>

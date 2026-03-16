@@ -396,7 +396,7 @@ export default function OperationsPage() {
             </Link>
           </Button>
           <Button asChild variant="outline" size="sm">
-            <Link to="/admin/diagnostics?tab=activity">Review Activity</Link>
+            <Link to="/admin?tab=activity">Review Activity</Link>
           </Button>
         </div>
       </TopSurfaceHeader>
@@ -588,7 +588,7 @@ export default function OperationsPage() {
                 Apply Saved Work
               </Button>
               <Button asChild type="button" variant="outline">
-                <Link to="/admin/diagnostics?tab=activity">Review Your Latest Job</Link>
+                <Link to="/admin?tab=activity">Review Your Latest Job</Link>
               </Button>
             </div>
           </div>
