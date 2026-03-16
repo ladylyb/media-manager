@@ -1,4 +1,4 @@
-import { Cog, Copy, Image, LayoutDashboard, Route, type LucideIcon, Settings } from "lucide-react";
+import { Cog, Copy, Image, House, Route, type LucideIcon, Settings } from "lucide-react";
 import { useLocation } from "react-router-dom";
 
 import { NavLink } from "@/components/NavLink";
@@ -17,14 +17,14 @@ import {
 import { cn } from "@/lib/utils";
 
 const mainNav = [
-  { title: "Dashboard", url: "/", icon: LayoutDashboard },
-  { title: "Library Actions", url: "/operations", icon: Cog },
-  { title: "Organize Media", url: "/pipeline-wizard", icon: Route },
+  { title: "Home", url: "/", icon: House },
+  { title: "Import", url: "/operations", icon: Cog },
+  { title: "Organize", url: "/pipeline-wizard", icon: Route },
 ];
 
 const mediaNav = [
-  { title: "Gallery", url: "/gallery", icon: Image },
-  { title: "Duplicates", url: "/duplicates", icon: Copy },
+  { title: "Library", url: "/gallery", icon: Image },
+  { title: "Duplicate Review", url: "/duplicates", icon: Copy },
 ];
 
 const systemNav = [
