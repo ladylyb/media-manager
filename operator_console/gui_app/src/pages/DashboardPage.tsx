@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { ErrorAlert } from "@/components/ErrorAlert";
+import { TopSurfaceHeader } from "@/components/layout/TopSurfaceHeader";
 import { MediaPreviewModal } from "@/components/media/MediaPreviewModal";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
@@ -133,7 +134,7 @@ function QuickLinkCard({
 
 function HeroSkeleton() {
   return (
-    <div className="overflow-hidden rounded-[30px] border border-border/70 bg-card p-6 shadow-sm">
+    <div className="overflow-hidden rounded-[30px] border border-border/70 bg-[radial-gradient(circle_at_top_left,hsl(var(--primary)/0.18),transparent_36%),linear-gradient(135deg,hsl(var(--card))_0%,hsl(var(--secondary)/0.22)_100%)] p-6 shadow-sm">
       <div className="space-y-4">
         <Skeleton className="h-4 w-32" />
         <Skeleton className="h-10 w-72" />
@@ -189,49 +190,40 @@ export default function DashboardPage() {
       {home ? (
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_22rem]">
           <div className="space-y-6">
-            <section className="overflow-hidden rounded-[30px] border border-border/70 bg-[linear-gradient(135deg,hsl(var(--card))_0%,hsl(var(--card))_48%,hsl(var(--secondary)/0.55)_100%)] shadow-sm">
-              <div className="space-y-5 px-6 py-6 lg:px-8">
-                <div className="inline-flex items-center gap-2 rounded-full border border-border/80 bg-background/85 px-3 py-1 text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">
-                  <Sparkles className="h-3.5 w-3.5" />
-                  Library Overview
-                </div>
-                <div className="space-y-2">
-                  <h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
-                    Media Manager
-                  </h1>
-                  <p className="max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
-                    Browse recent media, review what needs attention, and jump into the guided
-                    workflow when you&apos;re ready.
+            <TopSurfaceHeader
+              badge="Library Overview"
+              title="Media Manager"
+              description="Browse recent media, review what needs attention, and jump into the guided workflow when you're ready."
+              icon={Sparkles}
+              className="rounded-[30px]"
+            >
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-2xl border border-border/70 bg-background/85 p-4 shadow-sm">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                    Total assets
                   </p>
+                  <p className="mt-2 text-2xl font-semibold">{home.library_summary.total_assets}</p>
                 </div>
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  <div className="rounded-2xl border border-border/70 bg-background/85 p-4 shadow-sm">
-                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                      Total assets
-                    </p>
-                    <p className="mt-2 text-2xl font-semibold">{home.library_summary.total_assets}</p>
-                  </div>
-                  <div className="rounded-2xl border border-border/70 bg-background/85 p-4 shadow-sm">
-                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                      Images
-                    </p>
-                    <p className="mt-2 text-2xl font-semibold">{home.library_summary.images}</p>
-                  </div>
-                  <div className="rounded-2xl border border-border/70 bg-background/85 p-4 shadow-sm">
-                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                      Videos
-                    </p>
-                    <p className="mt-2 text-2xl font-semibold">{home.library_summary.videos}</p>
-                  </div>
-                  <div className="rounded-2xl border border-border/70 bg-background/85 p-4 shadow-sm">
-                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                      Duplicate groups
-                    </p>
-                    <p className="mt-2 text-2xl font-semibold">{home.library_summary.duplicate_groups}</p>
-                  </div>
+                <div className="rounded-2xl border border-border/70 bg-background/85 p-4 shadow-sm">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                    Images
+                  </p>
+                  <p className="mt-2 text-2xl font-semibold">{home.library_summary.images}</p>
+                </div>
+                <div className="rounded-2xl border border-border/70 bg-background/85 p-4 shadow-sm">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                    Videos
+                  </p>
+                  <p className="mt-2 text-2xl font-semibold">{home.library_summary.videos}</p>
+                </div>
+                <div className="rounded-2xl border border-border/70 bg-background/85 p-4 shadow-sm">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                    Duplicate groups
+                  </p>
+                  <p className="mt-2 text-2xl font-semibold">{home.library_summary.duplicate_groups}</p>
                 </div>
               </div>
-            </section>
+            </TopSurfaceHeader>
 
             <section className="space-y-4">
               <SectionHeader

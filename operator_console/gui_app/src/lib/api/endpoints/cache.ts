@@ -3,7 +3,6 @@ import { allReadQueryRoots, queryKeys } from "@/lib/api/queryKeys";
 
 export type OperationInvalidationTarget =
   | "ingest"
-  | "operatorRun"
   | "plan"
   | "apply"
   | "canonicalRecompute"
