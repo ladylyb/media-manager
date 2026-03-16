@@ -313,7 +313,7 @@ const STEP_GUIDANCE: Record<
       {
         title: "Before you continue",
         content:
-          "Use this page to confirm the overall pipeline result and decide whether you need to inspect supporting console views such as Runs, Duplicates, or Discover.",
+          "Use this page to confirm the overall pipeline result and decide whether you need to inspect supporting console views such as Admin Diagnostics, Duplicates, or Discover.",
       },
       {
         title: "What success looks like",
@@ -952,7 +952,7 @@ export default function PipelineWizard() {
   };
 
   const buildSummaryNextSteps = () => {
-    const links: Array<{ label: string; to: string }> = [{ label: "Open Runs", to: "/runs" }];
+    const links: Array<{ label: string; to: string }> = [{ label: "Open Activity", to: "/admin?tab=activity" }];
     const duplicateActions = asNumber(planSummary.duplicate_actions) ?? 0;
     const duplicateGroups = duplicates.length;
     const tagStatus = asString(tagResult?.status);

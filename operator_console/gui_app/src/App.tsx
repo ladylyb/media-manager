@@ -7,11 +7,10 @@ import { AppLayout } from "@/components/AppLayout";
 import DashboardPage from "@/pages/DashboardPage";
 import OperationsPage from "@/pages/OperationsPage";
 import PipelineWizard from "@/pages/PipelineWizard";
-import RunsPage from "@/pages/RunsPage";
-import LedgerPage from "@/pages/LedgerPage";
 import DuplicatesPage from "@/pages/DuplicatesPage";
 import PolicyPage from "@/pages/PolicyPage";
 import AdminPage from "@/pages/AdminPage";
+import DiagnosticsPage from "@/pages/DiagnosticsPage";
 import GalleryPage from "@/pages/GalleryPage";
 import MediaDetailPage from "@/pages/MediaDetailPage";
 import NotFound from "./pages/NotFound";
@@ -32,8 +31,7 @@ const appRoutes = [
   { path: "/", element: <DashboardPage /> },
   { path: "/operations", element: <OperationsPage /> },
   { path: "/pipeline-wizard", element: <PipelineWizard /> },
-  { path: "/runs", element: <RunsPage /> },
-  { path: "/ledger", element: <LedgerPage /> },
+  { path: "/admin/diagnostics", element: <DiagnosticsPage /> },
   { path: "/duplicates", element: <DuplicatesPage /> },
   { path: "/policy", element: <PolicyPage /> },
   { path: "/admin", element: <AdminPage /> },
@@ -44,6 +42,14 @@ const appRoutes = [
 function DiscoverRedirect() {
   const location = useLocation();
   return <Navigate replace to={`/gallery${location.search}`} />;
+}
+
+function RunsRedirect() {
+  return <Navigate replace to="/admin?tab=activity" />;
+}
+
+function LedgerRedirect() {
+  return <Navigate replace to="/admin?tab=file-history" />;
 }
 
 const App = () => (
@@ -57,6 +63,8 @@ const App = () => (
             {appRoutes.map((route) => (
               <Route key={route.path} path={route.path} element={route.element} />
             ))}
+            <Route path="/runs" element={<RunsRedirect />} />
+            <Route path="/ledger" element={<LedgerRedirect />} />
             <Route path="/discover" element={<DiscoverRedirect />} />
             <Route path="*" element={<NotFound />} />
           </Routes>

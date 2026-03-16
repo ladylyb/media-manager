@@ -41,6 +41,7 @@ the supported application interface.
 Supported first-party clients:
 
 - `operator_console/gui_app/` is the supported GUI integration layer and calls the REST API only.
+- the operator console now groups activity, file-history lookup, and integrity review under the Admin Diagnostics surface rather than separate Runs and Ledger navigation items.
 - `tools/e2e_workflow_sanity.sh` is the supported API-client workflow smoke harness.
 
 Unsupported runtime client surfaces:

@@ -46,7 +46,7 @@ See [API Documentation](documentation/api/index.md) for the module-oriented refe
 
 ### Operator Console
 
-The operator console is served by FastAPI and includes a React v2 shell for dashboard, runs, policy, ledger, duplicates, and admin flows. It is an HTTP client of the `/api/*` service surface, intended for operational visibility and controlled execution rather than replacing the system safety model.
+The operator console is served by FastAPI and includes a React v2 shell for the dashboard, Organize Media, Library Actions, Diagnostics, duplicates, policy, gallery, and admin flows. It is an HTTP client of the `/api/*` service surface, intended for operational visibility and controlled execution rather than replacing the system safety model.
 
 Relevant docs:
 
@@ -180,6 +180,7 @@ The operator console and API are for monitoring, policy control, run triggering,
 
 Operator-facing entry points:
 
+- `/admin/diagnostics`
 - `/api/status`
 - `/api/runs`
 - `/api/policy`

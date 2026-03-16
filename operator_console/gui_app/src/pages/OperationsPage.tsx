@@ -396,7 +396,7 @@ export default function OperationsPage() {
             </Link>
           </Button>
           <Button asChild variant="outline" size="sm">
-            <Link to="/runs">Review Progress</Link>
+            <Link to="/admin?tab=activity">Review Activity</Link>
           </Button>
         </div>
       </TopSurfaceHeader>
@@ -588,7 +588,7 @@ export default function OperationsPage() {
                 Apply Saved Work
               </Button>
               <Button asChild type="button" variant="outline">
-                <Link to="/runs">Review Your Latest Run</Link>
+                <Link to="/admin?tab=activity">Review Your Latest Job</Link>
               </Button>
             </div>
           </div>
@@ -728,7 +728,7 @@ export default function OperationsPage() {
           description="Run background enrichment after the library structure looks right, so browsing and search have richer metadata to work with."
           summary="Best as optional downstream work, once the main organize decisions already feel settled."
           badge="Optional enrichment"
-          impactLabel="Runs follow-up work"
+          impactLabel="Activity follow-up work"
           impactTone="follow-up"
         >
           <WizardGuidancePanel

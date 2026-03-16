@@ -1,15 +1,4 @@
-import {
-  BookOpen,
-  Cog,
-  Copy,
-  Image,
-  LayoutDashboard,
-  Route,
-  type LucideIcon,
-  PlayCircle,
-  Settings,
-  Shield,
-} from "lucide-react";
+import { Cog, Copy, Image, LayoutDashboard, Route, type LucideIcon, Settings, Shield } from "lucide-react";
 import { useLocation } from "react-router-dom";
 
 import { NavLink } from "@/components/NavLink";
@@ -31,8 +20,6 @@ const mainNav = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
   { title: "Library Actions", url: "/operations", icon: Cog },
   { title: "Organize Media", url: "/pipeline-wizard", icon: Route },
-  { title: "Runs", url: "/runs", icon: PlayCircle },
-  { title: "Ledger", url: "/ledger", icon: BookOpen },
 ];
 
 const mediaNav = [
