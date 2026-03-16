@@ -93,13 +93,13 @@ export function MediaCard({ file, onPreview, detailHref }: MediaCardProps) {
             <span className="text-xs text-muted-foreground">+{file.matched_tags.length - 1} tags</span>
           ) : null}
         </div>
-        <div className="flex gap-2 pt-1">
-          <Button type="button" variant="outline" size="sm" className="flex-1" onClick={onPreview}>
+        <div className="grid gap-2 pt-1 sm:grid-cols-2">
+          <Button type="button" variant="outline" size="sm" className="w-full min-w-0" onClick={onPreview}>
             Quick preview
           </Button>
           {detailHref ? (
-            <Button asChild type="button" size="sm" className="flex-1">
-              <Link to={detailHref}>Open detail</Link>
+            <Button asChild type="button" size="sm" className="w-full min-w-0">
+              <Link to={detailHref}>View details</Link>
             </Button>
           ) : null}
         </div>
