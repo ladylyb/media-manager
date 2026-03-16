@@ -2,10 +2,30 @@ import { apiGet, apiPost } from "@/lib/api/client";
 import type { Policy, PolicyUpdate } from "@/types";
 
 function mapPolicy(payload: Record<string, unknown>): Policy {
-  const canonicalPriority = (payload.canonical_priority ?? {}) as Record<string, unknown>;
-  const tieBreakerRules = (payload.tie_breaker_rules ?? {}) as Record<string, unknown>;
-  const recanonicalization = (payload.recanonicalization ?? {}) as Record<string, unknown>;
-  const metadata = (payload.metadata ?? {}) as Record<string, unknown>;
+  const canonicalPriority = (
+    payload.canonical_priority ?? {
+      selected_policy: payload.selected_policy,
+      preferred_roots: payload.preferred_roots,
+    }
+  ) as Record<string, unknown>;
+  const tieBreakerRules = (
+    payload.tie_breaker_rules ?? {
+      effective_order: [],
+      policy_name: payload.selected_policy,
+      policy_version: "v1",
+    }
+  ) as Record<string, unknown>;
+  const recanonicalization = (
+    payload.recanonicalization ?? {
+      enabled: payload.recanonicalization_enabled,
+    }
+  ) as Record<string, unknown>;
+  const metadata = (
+    payload.metadata ?? {
+      updated_at: null,
+      version: payload.version,
+    }
+  ) as Record<string, unknown>;
 
   return {
     canonical_priority: {
