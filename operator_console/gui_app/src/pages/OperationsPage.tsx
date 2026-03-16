@@ -19,6 +19,7 @@ import { DirectoryPickerDialog } from "@/components/wizard/DirectoryPickerDialog
 import { WizardGuidancePanel } from "@/components/wizard/WizardGuidancePanel";
 import { ErrorAlert } from "@/components/ErrorAlert";
 import { JsonViewer } from "@/components/JsonViewer";
+import { TopSurfaceHeader } from "@/components/layout/TopSurfaceHeader";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -380,35 +381,25 @@ export default function OperationsPage() {
   };
 
   return (
-    <div className="max-w-6xl space-y-6 p-6">
-      <section className="overflow-hidden rounded-[32px] border border-border/70 bg-[radial-gradient(circle_at_top_left,hsl(var(--primary)/0.18),transparent_35%),linear-gradient(135deg,hsl(var(--card))_0%,hsl(var(--secondary)/0.22)_100%)] p-6 lg:p-8">
-        <div className="space-y-4">
-          <div className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-background/70 px-3 py-1 text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">
-            <Sparkles className="h-3.5 w-3.5" />
-            Library Actions
-          </div>
-          <div className="space-y-3">
-            <h1 className="max-w-3xl text-3xl font-semibold tracking-tight text-foreground">
-              Continue the pipeline with more room to think and review.
-            </h1>
-            <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-              Each action below opens into its own full-width workspace so you can review guidance,
-              inputs, and results without squeezing the important parts into side-by-side cards.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            <Button asChild size="sm">
-              <Link to="/pipeline-wizard">
-                Open Organize Media
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </Link>
-            </Button>
-            <Button asChild variant="outline" size="sm">
-              <Link to="/runs">Review Progress</Link>
-            </Button>
-          </div>
+    <div className="mx-auto max-w-7xl space-y-6 p-6">
+      <TopSurfaceHeader
+        badge="Library Actions"
+        title="Continue the pipeline with more room to think and review."
+        description="Each action below opens into its own full-width workspace so you can review guidance, inputs, and results without squeezing the important parts into side-by-side cards."
+        icon={Sparkles}
+      >
+        <div className="flex flex-wrap gap-3">
+          <Button asChild size="sm">
+            <Link to="/pipeline-wizard">
+              Open Organize Media
+              <ArrowRight className="ml-2 h-4 w-4" />
+            </Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link to="/runs">Review Progress</Link>
+          </Button>
         </div>
-      </section>
+      </TopSurfaceHeader>
 
       <div className="space-y-4">
         <ActionPanel

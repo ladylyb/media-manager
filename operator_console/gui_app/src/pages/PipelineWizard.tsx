@@ -20,6 +20,7 @@ import {
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ErrorAlert } from "@/components/ErrorAlert";
 import { JsonViewer } from "@/components/JsonViewer";
+import { TopSurfaceHeader } from "@/components/layout/TopSurfaceHeader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -1803,37 +1804,34 @@ export default function PipelineWizard() {
 
   return (
     <div className="space-y-6">
-      <div className="border-b bg-card/70 px-6 py-4">
-        <div className="mx-auto max-w-7xl space-y-1">
-          <p className="text-xs font-semibold uppercase tracking-[0.3em] text-muted-foreground">Operator Console</p>
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <h1 className="text-3xl font-semibold tracking-tight">Organize Media</h1>
-            <p className="max-w-3xl text-sm text-muted-foreground">
-              Guided ingest, planning, apply, chosen-version review, and enrichment with short checkpoints between stages.
-            </p>
-          </div>
-        </div>
-      </div>
-
       <WizardLayout
         header={
-          <WizardProgressHeader
-            currentIndex={currentStepIndex}
-            totalSteps={STEP_ORDER.length}
-            currentTitle={currentMeta.title}
-            currentKind={currentMeta.kind}
-            previousTitle={previousStepTitle}
-            nextTitle={nextStepTitle}
-            items={progressItems}
-            secondaryAction={
-              currentStepId === "summary" ? null : (
-                <Button type="button" variant="ghost" onClick={() => setConfirmAbortOpen(true)}>
-                  <XCircle className="mr-2 h-4 w-4" />
-                  Abort Wizard
-                </Button>
-              )
-            }
-          />
+          <div className="space-y-4">
+            <TopSurfaceHeader
+              badge="Guided Workflow"
+              title="Organize Media"
+              description="Guided ingest, planning, apply, chosen-version review, and enrichment with short checkpoints between stages."
+              icon={Sparkles}
+              density="compact"
+            />
+            <WizardProgressHeader
+              currentIndex={currentStepIndex}
+              totalSteps={STEP_ORDER.length}
+              currentTitle={currentMeta.title}
+              currentKind={currentMeta.kind}
+              previousTitle={previousStepTitle}
+              nextTitle={nextStepTitle}
+              items={progressItems}
+              secondaryAction={
+                currentStepId === "summary" ? null : (
+                  <Button type="button" variant="ghost" onClick={() => setConfirmAbortOpen(true)}>
+                    <XCircle className="mr-2 h-4 w-4" />
+                    Abort Wizard
+                  </Button>
+                )
+              }
+            />
+          </div>
         }
       >
         {renderCurrentStep()}
