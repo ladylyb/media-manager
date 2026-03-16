@@ -7,6 +7,7 @@ import {
   AlertTriangle,
   BarChart3,
   CheckCircle2,
+  ChevronDown,
   Clock3,
   Eye,
   FileSearch,
@@ -18,12 +19,16 @@ import {
   Loader2,
   Play,
   RefreshCw,
+  Save,
   Search,
   ShieldCheck,
   Sparkles,
   Trash2,
+  Wand2,
   Workflow,
   XCircle,
+  Plus,
+  X,
 } from "lucide-react";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -54,11 +59,14 @@ import {
   getMediaByHash,
   getMediaByStatus,
   getMediaHistory,
+  getPolicy,
   getReappearances,
   getRuns,
   invalidateAllReadsAfterDbReset,
+  invalidateReadsAfterPolicyUpdate,
   queueDiscoveryBenchmark,
   queueMetadataBenchmark,
+  updatePolicy,
 } from "@/lib/api/endpoints";
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
@@ -73,12 +81,15 @@ import type {
   ObservabilityMetricsSeries,
   ObservabilitySummary,
   PaginatedResponse,
+  Policy,
+  PolicyUpdate,
   Run,
 } from "@/types";
 
 type AdminTab =
   | "overview"
   | "activity"
+  | "library-rules"
   | "file-history"
   | "integrity-check"
   | "system-health"
@@ -89,6 +100,7 @@ type FileHistoryTask = "history" | "hash" | "status" | "reappearances";
 const VALID_ADMIN_TABS: AdminTab[] = [
   "overview",
   "activity",
+  "library-rules",
   "file-history",
   "integrity-check",
   "system-health",
@@ -215,6 +227,90 @@ function GuidanceCard({
   );
 }
 
+const policyOptions = [
+  {
+    value: "FIRST_SEEN",
+    title: "Keep the first file the library saw",
+    description:
+      "Best when you want predictable, stable results and do not need to favor any particular folder.",
+    helper: "Good default for most libraries.",
+  },
+  {
+    value: "PREFER_ROOT",
+    title: "Prefer files from specific folders",
+    description:
+      "Best when you want the app to keep copies from trusted folders, such as your main archive or curated library.",
+    helper: "Use this when folder location matters.",
+  },
+  {
+    value: "SHORTEST_PATH",
+    title: "Prefer the shortest folder path",
+    description:
+      "Advanced option for libraries where cleaner, shorter paths usually represent the better kept copy.",
+    helper: "Use only if that rule matches your library structure.",
+  },
+];
+
+function explainPolicyRule(rule: string): string {
+  switch (rule) {
+    case "preferred_root_match DESC":
+      return "Prefer files inside your chosen folders first.";
+    case "first_seen_at ASC":
+      return "If there is still a tie, keep the file seen earliest by the library.";
+    case "file_instance_id ASC":
+      return "If there is still a tie, use a stable internal order so the result stays deterministic.";
+    default:
+      return rule
+        .replaceAll("_", " ")
+        .replace(/\basc\b/i, "ascending")
+        .replace(/\bdesc\b/i, "descending");
+    }
+}
+
+function formatPolicyUpdatedAt(value: string | null) {
+  if (!value) return "Not recorded";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
+function PolicyChoiceCard({
+  value,
+  selected,
+  title,
+  description,
+  helper,
+  onSelect,
+}: {
+  value: string;
+  selected: boolean;
+  title: string;
+  description: string;
+  helper: string;
+  onSelect: (value: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(value)}
+      className={`w-full rounded-[28px] border p-5 text-left transition-all ${
+        selected
+          ? "border-primary/35 bg-primary/10 shadow-sm"
+          : "border-border/70 bg-background/80 hover:border-primary/20 hover:bg-muted/35"
+      }`}
+    >
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-base font-semibold text-foreground">{title}</p>
+          {selected ? <StatusBadge label="Current choice" severity="success" /> : null}
+        </div>
+        <p className="text-sm leading-6 text-muted-foreground">{description}</p>
+        <p className="text-sm font-medium text-foreground">{helper}</p>
+      </div>
+    </button>
+  );
+}
+
 function WorkspaceCard({
   title,
   description,
@@ -328,6 +424,12 @@ function OverviewTab({
           description="Look up file history by path, fingerprint, or state without needing to understand the underlying ledger model."
         />
         <WorkspaceCard
+          href="/admin?tab=library-rules"
+          icon={<Wand2 className="h-5 w-5" />}
+          title="Adjust Library Rules"
+          description="Choose how the app decides which file should remain the main version when similar files are found."
+        />
+        <WorkspaceCard
           href="/admin?tab=system-health"
           icon={<Gauge className="h-5 w-5" />}
           title="Check System Health"
@@ -360,7 +462,7 @@ function OverviewTab({
           <CardDescription>Recommended flow</CardDescription>
           <CardTitle className="text-xl">Use the simplest tool that answers your question</CardTitle>
         </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-3">
+        <CardContent className="grid gap-3 md:grid-cols-4">
           <button
             type="button"
             onClick={() => setTab("activity")}
@@ -379,10 +481,18 @@ function OverviewTab({
           </button>
           <button
             type="button"
+            onClick={() => setTab("library-rules")}
+            className="rounded-2xl border bg-muted/15 p-4 text-left transition-colors hover:bg-primary/5"
+          >
+            <p className="text-sm font-semibold">3. Library Rules</p>
+            <p className="mt-2 text-sm text-muted-foreground">Use this when the wrong copy is being kept as the main version.</p>
+          </button>
+          <button
+            type="button"
             onClick={() => setTab("system-health")}
             className="rounded-2xl border bg-muted/15 p-4 text-left transition-colors hover:bg-primary/5"
           >
-            <p className="text-sm font-semibold">3. Advanced Tools</p>
+            <p className="text-sm font-semibold">4. Advanced Tools</p>
             <p className="mt-2 text-sm text-muted-foreground">Only move into health, benchmarks, or reset when the simpler review tools are not enough.</p>
           </button>
         </CardContent>
@@ -643,6 +753,338 @@ function ActivityTab() {
           </CardContent>
         </Card>
       </div>
+    </div>
+  );
+}
+
+function LibraryRulesTab() {
+  const queryClient = useQueryClient();
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+  const [draft, setDraft] = useState<PolicyUpdate | null>(null);
+  const [newRoot, setNewRoot] = useState("");
+
+  const policyQuery = useQuery({
+    queryKey: queryKeys.policy,
+    queryFn: async () => (await getPolicy()).data,
+    staleTime: queryOptions.policy.staleTime,
+  });
+
+  const policy = (policyQuery.data as Policy | undefined) ?? null;
+
+  useEffect(() => {
+    if (!policy) return;
+    setDraft({
+      selected_policy: policy.canonical_priority.selected_policy,
+      preferred_roots: policy.canonical_priority.preferred_roots,
+      recanonicalization_enabled: policy.recanonicalization.enabled,
+      version: policy.metadata.version,
+    });
+  }, [policy]);
+
+  const handleSave = async () => {
+    if (!draft) return;
+    setSaving(true);
+    setError(null);
+    setSuccess(false);
+    try {
+      const res = await updatePolicy(draft);
+      setDraft({
+        selected_policy: res.data.canonical_priority.selected_policy,
+        preferred_roots: res.data.canonical_priority.preferred_roots,
+        recanonicalization_enabled: res.data.recanonicalization.enabled,
+        version: res.data.metadata.version,
+      });
+      await invalidateReadsAfterPolicyUpdate(queryClient);
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 3000);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err) || "Failed to update library rules");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const addRoot = () => {
+    const trimmed = newRoot.trim();
+    if (!trimmed || !draft || draft.preferred_roots.includes(trimmed)) return;
+    setDraft((prev) =>
+      prev
+        ? {
+            ...prev,
+            preferred_roots: [...prev.preferred_roots, trimmed],
+          }
+        : prev,
+    );
+    setNewRoot("");
+  };
+
+  const removeRoot = (root: string) => {
+    setDraft((prev) =>
+      prev
+        ? {
+            ...prev,
+            preferred_roots: prev.preferred_roots.filter((item) => item !== root),
+          }
+        : prev,
+    );
+  };
+
+  const combinedError = error || getErrorMessage(policyQuery.error);
+  const hasChanges =
+    draft !== null &&
+    policy !== null &&
+    JSON.stringify(draft) !==
+      JSON.stringify({
+        selected_policy: policy.canonical_priority.selected_policy,
+        preferred_roots: policy.canonical_priority.preferred_roots,
+        recanonicalization_enabled: policy.recanonicalization.enabled,
+        version: policy.metadata.version,
+      });
+
+  const decisionPreview = useMemo(
+    () => policy?.tie_breaker_rules.effective_order.map(explainPolicyRule) ?? [],
+    [policy],
+  );
+
+  if (policyQuery.isLoading && !policy) {
+    return <div className="text-sm text-muted-foreground">Loading library rules…</div>;
+  }
+
+  if (!draft || !policy) {
+    return <div className="space-y-6">{combinedError ? <ErrorAlert message={combinedError} onDismiss={() => setError(null)} /> : null}</div>;
+  }
+
+  const prefersRoots = draft.selected_policy === "PREFER_ROOT";
+
+  return (
+    <div className="space-y-6">
+      <GuidanceCard
+        title="Library Rules"
+        description="Choose how the app decides which file should stay as the main version when similar files are found."
+        whenToUse="Use this when duplicate groups look correct, but the chosen main file is not what you expected."
+        example="Should the archive copy win? Should the first file seen stay primary? Should these changes follow through automatically?"
+      />
+
+      {combinedError ? <ErrorAlert message={combinedError} onDismiss={() => setError(null)} /> : null}
+      {success ? <ErrorAlert message="Library rules saved successfully" severity="info" /> : null}
+
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <MetricCard
+          title="Current rule"
+          value={policyOptions.find((option) => option.value === draft.selected_policy)?.title ?? draft.selected_policy}
+          subtitle="How the main version is chosen"
+          icon={<ShieldCheck className="h-4 w-4" />}
+        />
+        <MetricCard
+          title="Preferred folders"
+          value={draft.preferred_roots.length}
+          subtitle={prefersRoots ? "Used in the current rule" : "Saved for when folder preference is enabled"}
+          icon={<FolderTree className="h-4 w-4" />}
+        />
+        <MetricCard
+          title="Auto follow-through"
+          value={draft.recanonicalization_enabled ? "On" : "Off"}
+          subtitle="Whether rule changes can propagate automatically"
+          icon={<Sparkles className="h-4 w-4" />}
+        />
+        <MetricCard
+          title="Change state"
+          value={hasChanges ? "Unsaved edits" : "In sync"}
+          subtitle={`Rules version ${policy.metadata.version}`}
+          icon={<GitCompareArrows className="h-4 w-4" />}
+        />
+      </div>
+
+      <Card className="rounded-[28px] border-border/70 shadow-sm">
+        <CardHeader className="pb-3">
+          <CardDescription>Main rule</CardDescription>
+          <CardTitle className="text-xl">How should the app choose the main version?</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          {policyOptions.map((option) => (
+            <PolicyChoiceCard
+              key={option.value}
+              value={option.value}
+              selected={draft.selected_policy === option.value}
+              title={option.title}
+              description={option.description}
+              helper={option.helper}
+              onSelect={(value) => setDraft((prev) => (prev ? { ...prev, selected_policy: value } : prev))}
+            />
+          ))}
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+        <Card className="rounded-[28px] border-border/70 shadow-sm">
+          <CardHeader className="pb-3">
+            <CardDescription>Folders to prefer</CardDescription>
+            <CardTitle className="text-xl">Which folders should win when the same file appears twice?</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm leading-6 text-muted-foreground">
+              If you choose <span className="font-medium text-foreground">Prefer files from specific folders</span>,
+              the app will favor copies from the folders listed here before using other tie-breakers.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {draft.preferred_roots.map((root) => (
+                <span
+                  key={root}
+                  className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-background px-3 py-2 text-sm"
+                >
+                  <span className="font-mono text-xs">{root}</span>
+                  <button type="button" onClick={() => removeRoot(root)} aria-label={`Remove ${root}`}>
+                    <X className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />
+                  </button>
+                </span>
+              ))}
+              {!draft.preferred_roots.length ? (
+                <div className="rounded-2xl border border-dashed border-border/70 bg-muted/25 px-4 py-3 text-sm text-muted-foreground">
+                  No preferred folders yet. Add a folder such as <span className="font-mono">/media/archive</span>.
+                </div>
+              ) : null}
+            </div>
+            <div className="flex gap-2">
+              <Input
+                value={newRoot}
+                onChange={(event) => setNewRoot(event.target.value)}
+                onKeyDown={(event) => event.key === "Enter" && addRoot()}
+                placeholder="/media/archive"
+                className="font-mono"
+              />
+              <Button type="button" variant="outline" onClick={addRoot}>
+                <Plus className="mr-2 h-4 w-4" />
+                Add folder
+              </Button>
+            </div>
+            <div className="rounded-2xl border border-border/70 bg-background/80 p-4">
+              <p className="text-sm font-semibold text-foreground">
+                {prefersRoots ? "This rule is active now" : "This rule is saved, but not active"}
+              </p>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                {prefersRoots
+                  ? "The app will currently prefer files from these folders whenever duplicate copies are compared."
+                  : "These folders will be used if you switch the main rule to prefer files from specific folders."}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <div className="space-y-4">
+          <Card className="rounded-[28px] border-border/70 shadow-sm">
+            <CardHeader className="pb-3">
+              <CardDescription>Apply changes automatically</CardDescription>
+              <CardTitle className="text-xl">Should the library follow through after you save?</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between gap-4 rounded-[24px] border border-border/70 bg-background/80 p-4">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">Automatic follow-through</p>
+                  <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                    When turned on, the library can update main-file choices after you change these rules.
+                  </p>
+                </div>
+                <Switch
+                  checked={draft.recanonicalization_enabled}
+                  onCheckedChange={(checked) =>
+                    setDraft((prev) => (prev ? { ...prev, recanonicalization_enabled: checked } : prev))
+                  }
+                />
+              </div>
+              <div className="rounded-2xl border border-border/70 bg-background/80 p-4">
+                <p className="text-sm font-semibold text-foreground">
+                  {draft.recanonicalization_enabled ? "Automatic mode is on" : "Review-first mode is on"}
+                </p>
+                <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                  {draft.recanonicalization_enabled
+                    ? "Use this when you trust the rule change and want the library to keep itself aligned."
+                    : "Use this when you want to change the rule now but review downstream impact before main-file choices are updated."}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="rounded-[28px] border-border/70 shadow-sm">
+            <CardHeader className="pb-3">
+              <CardDescription>How decisions are made right now</CardDescription>
+              <CardTitle className="text-xl">Current decision order</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {decisionPreview.map((item) => (
+                <div key={item} className="flex items-start gap-3 rounded-2xl border border-border/70 bg-background/80 p-4">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                  <p className="text-sm leading-6 text-foreground">{item}</p>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+
+      <Collapsible className="rounded-[28px] border border-border/70 bg-card/95 shadow-sm">
+        <CollapsibleTrigger asChild>
+          <button type="button" className="flex w-full items-center justify-between gap-3 px-6 py-5 text-left">
+            <div>
+              <p className="text-sm font-semibold text-foreground">Technical details</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Raw policy identifiers, deterministic order, version, and update metadata.
+              </p>
+            </div>
+            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          </button>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="space-y-4 border-t px-6 py-5">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="rounded-2xl border border-border/70 bg-background/80 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Policy name</p>
+              <p className="mt-2 font-mono text-sm text-foreground">{policy.tie_breaker_rules.policy_name}</p>
+            </div>
+            <div className="rounded-2xl border border-border/70 bg-background/80 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Policy version</p>
+              <p className="mt-2 font-mono text-sm text-foreground">{policy.tie_breaker_rules.policy_version}</p>
+            </div>
+            <div className="rounded-2xl border border-border/70 bg-background/80 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Rules version</p>
+              <p className="mt-2 font-mono text-sm text-foreground">{policy.metadata.version}</p>
+            </div>
+            <div className="rounded-2xl border border-border/70 bg-background/80 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Updated at</p>
+              <p className="mt-2 text-sm text-foreground">{formatPolicyUpdatedAt(policy.metadata.updated_at)}</p>
+            </div>
+          </div>
+          <div className="rounded-2xl border border-border/70 bg-background/80 p-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Deterministic decision order</p>
+            <div className="mt-3 space-y-2">
+              {policy.tie_breaker_rules.effective_order.map((rule) => (
+                <div key={rule} className="rounded-xl border border-border/70 bg-muted/20 px-3 py-2 font-mono text-xs text-foreground">
+                  {rule}
+                </div>
+              ))}
+            </div>
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
+
+      <Card className="rounded-[28px] border-border/70 shadow-sm">
+        <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-foreground">
+              {hasChanges ? "You have unsaved changes" : "No changes waiting to be saved"}
+            </p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {hasChanges
+                ? "Review your rule choice, preferred folders, and follow-through setting before saving."
+                : "Your saved library rules are in sync with the current screen."}
+            </p>
+          </div>
+          <Button onClick={handleSave} disabled={saving || !hasChanges} size="lg" className="sm:min-w-56">
+            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+            {saving ? "Saving rules" : hasChanges ? "Save library rules" : "No changes to save"}
+          </Button>
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -1635,6 +2077,15 @@ export default function AdminPage() {
           </button>
           <button
             type="button"
+            onClick={() => updateTab("library-rules")}
+            className="rounded-2xl border border-border/70 bg-background/85 p-4 text-left shadow-sm transition-colors hover:bg-primary/5"
+          >
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Set behavior</p>
+            <p className="mt-2 text-base font-semibold">Library Rules</p>
+            <p className="mt-1 text-sm text-muted-foreground">Choose which copy should stay primary.</p>
+          </button>
+          <button
+            type="button"
             onClick={() => updateTab("system-health")}
             className="rounded-2xl border border-border/70 bg-background/85 p-4 text-left shadow-sm transition-colors hover:bg-primary/5"
           >
@@ -1658,6 +2109,7 @@ export default function AdminPage() {
         <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 rounded-2xl p-1">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="activity">Activity</TabsTrigger>
+          <TabsTrigger value="library-rules">Library Rules</TabsTrigger>
           <TabsTrigger value="file-history">File History</TabsTrigger>
           <TabsTrigger value="integrity-check">Integrity Check</TabsTrigger>
           <TabsTrigger value="system-health">System Health</TabsTrigger>
@@ -1667,6 +2119,7 @@ export default function AdminPage() {
 
         <TabsContent value="overview"><OverviewTab setTab={updateTab} /></TabsContent>
         <TabsContent value="activity"><ActivityTab /></TabsContent>
+        <TabsContent value="library-rules"><LibraryRulesTab /></TabsContent>
         <TabsContent value="file-history"><FileHistoryTab /></TabsContent>
         <TabsContent value="integrity-check"><IntegrityCheckTab /></TabsContent>
         <TabsContent value="system-health"><SystemHealthTab /></TabsContent>

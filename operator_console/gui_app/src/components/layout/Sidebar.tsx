@@ -1,4 +1,4 @@
-import { Cog, Copy, Image, LayoutDashboard, Route, type LucideIcon, Settings, Shield } from "lucide-react";
+import { Cog, Copy, Image, LayoutDashboard, Route, type LucideIcon, Settings } from "lucide-react";
 import { useLocation } from "react-router-dom";
 
 import { NavLink } from "@/components/NavLink";
@@ -28,7 +28,6 @@ const mediaNav = [
 ];
 
 const systemNav = [
-  { title: "Policy", url: "/policy", icon: Shield },
   { title: "Admin", url: "/admin", icon: Settings },
 ];
 
