@@ -48,14 +48,16 @@ export function mapDuplicateGroups(payload: Record<string, unknown>): DuplicateG
     const row = group as Record<string, unknown>;
     const files = Array.isArray(row.files) ? row.files : [];
     const canonical = (row.canonical_file ?? {}) as Record<string, unknown>;
+    const canonicalPath = String(canonical.absolute_path ?? "");
     const mappedFiles: DuplicateFile[] = files.map((file) => {
       const item = file as Record<string, unknown>;
       const absolutePath = String(item.absolute_path ?? "");
-      const canonicalPath = String(canonical.absolute_path ?? "");
       return {
+        file_instance_id: String(item.file_instance_id ?? ""),
         path: absolutePath,
-        size_bytes: Number(item.size_bytes ?? 0),
-        created_at: String(item.created_at ?? ""),
+        media_type: String(item.media_type ?? "OTHER"),
+        is_image: Boolean(item.is_image),
+        thumbnail_url: item.thumbnail_url ? String(item.thumbnail_url) : null,
         is_canonical: absolutePath === canonicalPath,
       };
     });
