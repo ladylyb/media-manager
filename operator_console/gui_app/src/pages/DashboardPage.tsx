@@ -277,7 +277,7 @@ export default function DashboardPage() {
               <CardContent className="space-y-3">
                 <Button asChild className="w-full justify-between">
                   <Link to={home.guided_entry?.route ?? "/pipeline-wizard"}>
-                    {home.guided_entry?.label ?? "Open Organize Media"}
+                    {home.guided_entry?.label ?? "Open Organize"}
                     <ArrowRight className="h-4 w-4" />
                   </Link>
                 </Button>
@@ -286,7 +286,7 @@ export default function DashboardPage() {
                 </p>
                 <div className="grid gap-3 pt-2">
                   <QuickLinkCard
-                    title="Review Duplicates"
+                    title="Duplicate Review"
                     description="Inspect duplicate groups and confirm which items need review."
                     href="/duplicates"
                     icon={<Copy className="h-4 w-4" />}
@@ -341,8 +341,8 @@ export default function DashboardPage() {
                     Recommended workflow
                   </p>
                   <p className="mt-2 text-sm leading-6 text-foreground/90">
-                    Start in Organize Media for guided ingest and review, then use Duplicates and
-                    Gallery as follow-up tools when you want more detail. Use Admin Diagnostics if
+                    Start in Organize for guided ingest and review, then use Duplicate Review and
+                    Library as follow-up tools when you want more detail. Use Admin if
                     a job needs troubleshooting.
                   </p>
                 </div>

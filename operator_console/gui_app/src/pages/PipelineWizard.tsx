@@ -176,7 +176,7 @@ const STEP_META: Record<
   ingest: { title: "Ingest", kind: "execution", icon: Upload },
   "review-ingest": { title: "Review Ingest", kind: "checkpoint", icon: ScanSearch },
   plan: { title: "Plan", kind: "execution", icon: GitBranchPlus },
-  "review-duplicates": { title: "Review Duplicates", kind: "checkpoint", icon: Copy },
+  "review-duplicates": { title: "Duplicate Review", kind: "checkpoint", icon: Copy },
   apply: { title: "Apply", kind: "execution", icon: CheckSquare },
   "review-apply": { title: "Review Apply", kind: "checkpoint", icon: ListChecks },
   canonical: { title: "Canonical Recompute", kind: "execution", icon: RefreshCw },
@@ -313,7 +313,7 @@ const STEP_GUIDANCE: Record<
       {
         title: "Before you continue",
         content:
-          "Use this page to confirm the overall pipeline result and decide whether you need to inspect supporting console views such as Admin Diagnostics, Duplicates, or Discover.",
+          "Use this page to confirm the overall pipeline result and decide whether you need to inspect supporting console views such as Admin, Duplicate Review, or Discover.",
       },
       {
         title: "What success looks like",
@@ -959,7 +959,7 @@ export default function PipelineWizard() {
     const tagProcessed = asNumber(tagResult?.number_of_items_processed) ?? 0;
 
     if (duplicateActions > 0 || duplicateGroups > 0) {
-      links.push({ label: "Open Duplicates", to: "/duplicates" });
+      links.push({ label: "Open Duplicate Review", to: "/duplicates" });
     }
 
     if (tagStatus !== "SKIPPED" && tagProcessed > 0) {
@@ -1310,7 +1310,7 @@ export default function PipelineWizard() {
           runLabel={state.status === "completed" ? "Run Again" : "Create Plan"}
           runVariant={state.status === "completed" ? "outline" : "default"}
           preferContinue={state.status === "completed"}
-          continueLabel="Continue to Review Duplicates"
+          continueLabel="Continue to Duplicate Review"
           continueDisabled={state.status !== "completed"}
           guidance={<WizardGuidancePanel sections={guidance.sections} />}
           result={renderResultConsole("plan")}
@@ -1809,7 +1809,7 @@ export default function PipelineWizard() {
           <div className="space-y-4">
             <TopSurfaceHeader
               badge="Guided Workflow"
-              title="Organize Media"
+              title="Organize"
               description="Guided ingest, planning, apply, chosen-version review, and enrichment with short checkpoints between stages."
               icon={Sparkles}
               density="compact"

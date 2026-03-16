@@ -67,7 +67,7 @@ describe("Pipeline Wizard page", () => {
     renderPage();
 
     expect(await screen.findByText("Guided Workflow")).toBeInTheDocument();
-    expect(screen.getByText("Organize Media")).toBeInTheDocument();
+    expect(screen.getByText("Organize")).toBeInTheDocument();
     expect(
       screen.getByText(
         "Guided ingest, planning, apply, chosen-version review, and enrichment with short checkpoints between stages.",

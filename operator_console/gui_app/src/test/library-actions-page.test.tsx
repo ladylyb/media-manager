@@ -45,7 +45,7 @@ function renderPage() {
   );
 }
 
-describe("Library Actions page", () => {
+describe("Import page", () => {
   beforeEach(() => {
     mocks.getDirectoryPickerCapability.mockResolvedValue({
       data: { enabled: true, roots: [{ label: "Incoming", path: "/media/incoming" }] },
@@ -81,10 +81,10 @@ describe("Library Actions page", () => {
     vi.clearAllMocks();
   });
 
-  it("renders the redesigned Library Actions sections", async () => {
+  it("renders the redesigned Import sections", async () => {
     renderPage();
 
-    expect(await screen.findByText("Library Actions")).toBeInTheDocument();
+    expect(await screen.findByText("Import")).toBeInTheDocument();
     expect(screen.getByText("Start from Folder")).toBeInTheDocument();
     expect(screen.getByText("Continue a Saved Plan")).toBeInTheDocument();
     expect(screen.getByText("Recheck a Folder")).toBeInTheDocument();
@@ -92,7 +92,7 @@ describe("Library Actions page", () => {
     expect(screen.getByText("Add Searchable Details")).toBeInTheDocument();
     expect(screen.queryByText("Legacy Composite Run")).not.toBeInTheDocument();
     expect(screen.queryByText("Mutating")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open Organize Media" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open Organize" })).toBeInTheDocument();
   });
 
   it("shows wizard-aligned guidance headings and keeps only one panel open", async () => {
@@ -230,7 +230,7 @@ describe("Library Actions page", () => {
     expect(await screen.findByText("Not available for this saved plan.")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "This saved plan cannot be applied from Library Actions because the completed PLAN entry does not include a durable run ID.",
+        "This saved plan cannot be applied from Import because the completed PLAN entry does not include a durable run ID.",
       ),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Apply Saved Work" })).toBeDisabled();

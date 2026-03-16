@@ -56,12 +56,12 @@ src/
 
 | Route | Description |
 |---|---|
-| `/` | Dashboard - media-first home, review queues, and guided workflow entry |
-| `/operations` | Pipeline operations with risk labels |
-| `/pipeline-wizard` | Guided pipeline workflow with review checkpoints |
+| `/` | Home - media-first start screen, review queues, and guided workflow entry |
+| `/operations` | Import workspace with risk labels and calmer follow-up actions |
+| `/pipeline-wizard` | Organize workflow with guided review checkpoints |
 | `/admin/diagnostics` | Legacy compatibility route into Admin tabs for activity, file history, and integrity checks |
-| `/duplicates` | Review-first duplicate comparison workspace |
-| `/gallery` | Responsive media grid with tag filters, sort controls, and detail modal |
+| `/duplicates` | Duplicate Review workspace for side-by-side comparison |
+| `/gallery` | Library browsing surface with filters, sort controls, and detail modal |
 | `/gallery/:fileId` | Full-page canonical media detail |
 | `/policy` | Legacy compatibility route that redirects to Admin Library Rules |
 | `/admin` | Integrated admin workspace for activity, library rules, file history, integrity checks, health, benchmarks, and reset |

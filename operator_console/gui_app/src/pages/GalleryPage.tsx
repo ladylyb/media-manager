@@ -107,9 +107,7 @@ export default function GalleryPage() {
               Canonical media
             </div>
             <div className="space-y-2">
-              <h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
-                Gallery
-              </h1>
+              <h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">Library</h1>
               <p className="max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
                 Browse the current canonical media set with tag filters, sort controls, preview, and
                 a dedicated detail route while staying on the existing API-backed query flow.
@@ -230,7 +228,7 @@ export default function GalleryPage() {
       {data && data.total_pages > 1 && (
         <div className="flex flex-col gap-3 rounded-2xl border bg-card/80 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-sm font-medium text-foreground">Gallery page {page}</p>
+            <p className="text-sm font-medium text-foreground">Library page {page}</p>
             <p className="text-sm text-muted-foreground">
               Showing {items.length} items on this page out of {data.total_pages} total pages.
             </p>

@@ -63,7 +63,7 @@ describe("Dashboard page", () => {
           regression_status: "UNKNOWN",
         },
         guided_entry: {
-          label: "Open Organize Media",
+          label: "Open Organize",
           route: "/pipeline-wizard",
           helper: "Guided ingest, planning, apply, and review",
         },
@@ -83,7 +83,7 @@ describe("Dashboard page", () => {
     expect(
       screen.getByText("Browse recent media, review what needs attention, and jump into the guided workflow when you're ready."),
     ).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open Organize Media" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open Organize" })).toBeInTheDocument();
     expect(screen.getByText("Quick Links")).toBeInTheDocument();
   });
 });

@@ -251,7 +251,7 @@ export default function OperationsPage() {
       ? {
           ...section,
           content:
-            "Choose the folder you want the system to inspect, then move into Organize Media with that same starting point already in place. The folder picker here exists so you do not have to retype paths before starting the guided flow.",
+            "Choose the folder you want the system to inspect, then move into Organize with that same starting point already in place. The folder picker here exists so you do not have to retype paths before starting the guided flow.",
         }
       : section,
   );
@@ -269,7 +269,7 @@ export default function OperationsPage() {
       ? {
           ...section,
           content:
-            "Run this after the main organize work already looks settled. In Library Actions, this panel gives you room to preview the follow-up decision picture before moving on.",
+            "Run this after the main organize work already looks settled. In Import, this panel gives you room to preview the follow-up decision picture before moving on.",
         }
       : section,
   );
@@ -383,7 +383,7 @@ export default function OperationsPage() {
   return (
     <div className="mx-auto max-w-7xl space-y-6 p-6">
       <TopSurfaceHeader
-        badge="Library Actions"
+        badge="Import"
         title="Continue the pipeline with more room to think and review."
         description="Each action below opens into its own full-width workspace so you can review guidance, inputs, and results without squeezing the important parts into side-by-side cards."
         icon={Sparkles}
@@ -391,7 +391,7 @@ export default function OperationsPage() {
         <div className="flex flex-wrap gap-3">
           <Button asChild size="sm">
             <Link to="/pipeline-wizard">
-              Open Organize Media
+              Open Organize
               <ArrowRight className="ml-2 h-4 w-4" />
             </Link>
           </Button>
@@ -407,7 +407,7 @@ export default function OperationsPage() {
           openPanel={openPanel}
           onToggle={togglePanel}
           title="Start from Folder"
-          description="Choose a folder once, then move into Organize Media with that same starting point already in place."
+          description="Choose a folder once, then move into Organize with that same starting point already in place."
           summary="Best when you are beginning a new organizing pass and want the wizard to carry the sequence."
           badge="Recommended first step"
           impactLabel="Checks before changing anything"
@@ -451,7 +451,7 @@ export default function OperationsPage() {
                   )
                 }
               >
-                Open Organize Media
+                Open Organize
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
             </div>
@@ -574,7 +574,7 @@ export default function OperationsPage() {
             ) : null}
 
             {!showManualRunId && selectedPlan && !selectedPlan.linked_run_id ? (
-              <ErrorAlert message="This saved plan cannot be applied from Library Actions because the completed PLAN entry does not include a durable run ID." />
+              <ErrorAlert message="This saved plan cannot be applied from Import because the completed PLAN entry does not include a durable run ID." />
             ) : null}
 
             <div className="flex flex-wrap gap-3">
@@ -711,7 +711,7 @@ export default function OperationsPage() {
               Preview Refresh
             </Button>
             <Button asChild type="button" variant="outline">
-              <Link to="/duplicates">Review Duplicates</Link>
+              <Link to="/duplicates">Open Duplicate Review</Link>
             </Button>
           </div>
           <ResultPanel
@@ -752,7 +752,7 @@ export default function OperationsPage() {
               Add Searchable Details
             </Button>
             <Button asChild type="button" variant="outline">
-              <Link to="/gallery">Open Gallery</Link>
+              <Link to="/gallery">Open Library</Link>
             </Button>
           </div>
           <ResultPanel
