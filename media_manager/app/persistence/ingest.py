@@ -21,8 +21,10 @@ from media_manager.app.persistence.models import (
     FileContent,
     FileInstance,
     FileInstanceStatus,
+    MediaMetadata,
     MediaFile,
     MediaFileStatus,
+    MetadataCode,
 )
 
 logger = get_logger(__name__)
@@ -515,7 +517,7 @@ def _sync_ingest_batch(
 
     new_content_rows: list[FileContent] = []
     new_instance_rows: list[FileInstance] = []
-    metadata_targets: list[tuple[_ScannedFileCandidate, uuid.UUID]] = []
+    content_candidates: dict[uuid.UUID, list[_ScannedFileCandidate]] = {}
 
     new_contents = 0
     new_instances = 0
@@ -529,10 +531,10 @@ def _sync_ingest_batch(
             content = FileContent(content_id=uuid.uuid4(), sha256_hash=candidate.digest)
             content_by_hash[candidate.digest] = content
             new_content_rows.append(content)
-            metadata_targets.append((candidate, content.content_id))
             new_contents += 1
         else:
             duplicates += 1
+        content_candidates.setdefault(content.content_id, []).append(candidate)
 
         instance = instance_by_path.get(candidate.absolute_path)
         if instance is None:
@@ -562,24 +564,49 @@ def _sync_ingest_batch(
         session.add_all(new_ledger_rows)
 
     metadata_extracted = 0
-    if metadata_targets:
+    if content_candidates:
         _log_ingest_stage(
             "metadata",
             status="running",
             summary="Ingest metadata extraction started",
-            files_count=len(metadata_targets),
+            files_count=len(content_candidates),
         )
+        existing_sources = {
+            content_id: source
+            for content_id, source in session.execute(
+                select(MediaMetadata.content_id, MediaMetadata.decode_value)
+                .select_from(MediaMetadata)
+                .join(MetadataCode, MediaMetadata.code_id == MetadataCode.id)
+                .where(
+                    MediaMetadata.content_id.in_(tuple(content_candidates.keys())),
+                    MetadataCode.code_type == "TAKEN_DT_SOURCE",
+                )
+            ).all()
+        }
         metadata_by_content: dict[uuid.UUID, list[metadata_extractor.MetadataItem]] = {}
-        for candidate, content_id in metadata_targets:
-            rows = metadata_extractor.extract_file_metadata(candidate.path, candidate.digest)
-            metadata_by_content[content_id] = rows
-            metadata_extracted += len(rows)
-        metadata_extractor.upsert_metadata_bulk(session, metadata_by_content)
+        for content_id, candidates in content_candidates.items():
+            best_rows: list[metadata_extractor.MetadataItem] | None = None
+            best_rank = metadata_extractor.taken_dt_source_rank(existing_sources.get(content_id))
+            for candidate in candidates:
+                rows = metadata_extractor.extract_file_metadata(candidate.path, candidate.digest)
+                row_map = {row.code_type: row.decode_value for row in rows}
+                rank = metadata_extractor.taken_dt_source_rank(row_map.get("TAKEN_DT_SOURCE"))
+                if best_rows is None or rank < best_rank:
+                    best_rows = rows
+                    best_rank = rank
+            if best_rows is not None and (
+                content_id not in existing_sources
+                or best_rank < metadata_extractor.taken_dt_source_rank(existing_sources.get(content_id))
+            ):
+                metadata_by_content[content_id] = best_rows
+                metadata_extracted += len(best_rows)
+        if metadata_by_content:
+            metadata_extractor.upsert_metadata_bulk(session, metadata_by_content)
         _log_ingest_stage(
             "metadata",
             status="completed",
             summary="Ingest metadata extraction completed",
-            files_count=len(metadata_targets),
+            files_count=len(content_candidates),
         )
 
     return _IngestSyncResult(

@@ -6,7 +6,12 @@ import pytest
 from sqlalchemy import select
 
 from media_manager.app.canonical.context import CanonicalContext
-from media_manager.app.canonical.policies import CanonicalPolicy, FirstSeenPolicy, ShortestPathPolicy
+from media_manager.app.canonical.policies import (
+    CanonicalPolicy,
+    ExifFilenameFallbackPolicy,
+    FirstSeenPolicy,
+    ShortestPathPolicy,
+)
 from media_manager.app.core.errors import CanonicalPolicyException
 from media_manager.app.persistence.canonicalization import (
     RecomputeMode,
@@ -103,6 +108,47 @@ def test_recompute_dry_run_is_deterministic(tmp_path: Path, session_factory) -> 
     assert one.scanned_count == two.scanned_count
     assert one.changed_count == two.changed_count
     assert one.failed_count == two.failed_count
+
+
+def test_recompute_exif_filename_fallback_prefers_filename_candidate_over_filesystem_only(
+    tmp_path: Path, session_factory
+) -> None:
+    ingest = IngestService(session_factory)
+    first = _write_file(tmp_path / "copy.jpg", b"same")
+    second = _write_file(tmp_path / "IMG_20240214_235959.jpg", b"same")
+    ingest.ingest_paths([first, second])
+
+    with session_factory.begin() as session:
+        content_id = session.scalar(select(FileContent.content_id))
+        assert content_id is not None
+        instances = session.scalars(
+            select(FileInstance).where(FileInstance.content_id == content_id).order_by(FileInstance.absolute_path.asc())
+        ).all()
+        by_name = {Path(instance.absolute_path).name: instance for instance in instances}
+        append_assignment(
+            session,
+            content_id=content_id,
+            canonical_instance_id=by_name["copy.jpg"].file_instance_id,
+            policy_name=FirstSeenPolicy.name,
+            policy_version=FirstSeenPolicy.version,
+        )
+
+    summary = recompute_canonical_assignments(
+        session_factory,
+        policy=ExifFilenameFallbackPolicy(),
+        context=CanonicalContext(),
+        mode=RecomputeMode.APPLY,
+    )
+
+    assert summary.changed_count == 1
+    with session_factory() as session:
+        content_id = session.scalar(select(FileContent.content_id))
+        assert content_id is not None
+        active = get_active_assignment(session, content_id)
+        assert active is not None
+        selected = session.get(FileInstance, active.canonical_instance_id)
+        assert selected is not None
+        assert Path(selected.absolute_path).name == "IMG_20240214_235959.jpg"
 
 
 class _FailingPolicy:

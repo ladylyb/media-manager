@@ -109,3 +109,35 @@ class ShortestPathPolicy:
             ),
         )
 
+
+class ExifFilenameFallbackPolicy:
+    name = "EXIF_FILENAME_FALLBACK"
+    version = "v1"
+
+    def select(
+        self,
+        content_id: str,
+        instances: list[FileInstance],
+        context: CanonicalContext,
+    ) -> FileInstance:
+        del content_id
+        if not instances:
+            raise CanonicalPolicyException("Cannot select canonical instance from an empty candidate list.")
+
+        def evidence_rank(instance: FileInstance) -> int:
+            if context.taken_dt_source == "metadata":
+                return 0
+            if _uuid_key(instance.file_instance_id) in context.filename_evidence_instance_ids:
+                return 1
+            return 2
+
+        return min(
+            instances,
+            key=lambda instance: (
+                evidence_rank(instance),
+                0 if _is_under_roots(instance.absolute_path, context.preferred_roots) else 1,
+                instance.first_seen_at,
+                _uuid_key(instance.file_instance_id),
+            ),
+        )
+

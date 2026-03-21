@@ -75,7 +75,7 @@ Defaults below reflect runtime code defaults, not shell defaults.
 
 ### `MEDIA_CANONICAL_POLICY`
 - Purpose: Default canonical policy before persisted operator settings exist.
-- Allowed values: `FIRST_SEEN`, `PREFER_ROOT`, `SHORTEST_PATH`
+- Allowed values: `FIRST_SEEN`, `PREFER_ROOT`, `EXIF_FILENAME_FALLBACK`, `SHORTEST_PATH`
 - Default in code: `FIRST_SEEN`
 - Example: `FIRST_SEEN`
 

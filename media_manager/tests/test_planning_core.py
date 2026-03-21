@@ -108,9 +108,9 @@ def test_canonical_path_resolution_and_duplicates(tmp_path: Path) -> None:
         / "Videos"
         / "2024"
         / "02"
-        / "VID_20240203_010203_LL_General_DUP2.mp4"
+        / "VID_20240203_010203_LL_General_DUP_2.mp4"
     )
-    assert duplicate_filename("IMG_20240203_010203_LL_General.jpg", 3) == "IMG_20240203_010203_LL_General_DUP3.jpg"
+    assert duplicate_filename("IMG_20240203_010203_LL_General.jpg", 3) == "IMG_20240203_010203_LL_General_DUP_3.jpg"
 
 
 def test_mime_detection_classifies_photo_video(tmp_path: Path) -> None:

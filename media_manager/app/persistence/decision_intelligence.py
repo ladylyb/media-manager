@@ -66,6 +66,13 @@ def _policy_rules(policy_name: str, policy_version: str) -> tuple[str, ...]:
         return ("pick_min_first_seen", "tie_break_file_instance_id")
     if normalized == "PREFER_ROOT":
         return ("prefer_paths_under_preferred_roots", "fallback_first_seen", "tie_break_file_instance_id")
+    if normalized == "EXIF_FILENAME_FALLBACK":
+        return (
+            "prefer_embedded_metadata_evidence",
+            "prefer_filename_date_evidence",
+            "prefer_paths_under_preferred_roots",
+            "tie_break_first_seen_then_file_instance_id",
+        )
     if normalized == "SHORTEST_PATH":
         return ("pick_shortest_path", "tie_break_path_then_first_seen_then_file_instance_id")
     return ("policy_name_unrecognized", f"policy={policy_name}", f"version={policy_version}")
@@ -73,7 +80,7 @@ def _policy_rules(policy_name: str, policy_version: str) -> tuple[str, ...]:
 
 def _tie_breaker(policy_name: str) -> str:
     normalized = policy_name.strip().upper()
-    if normalized in {"FIRST_SEEN", "PREFER_ROOT"}:
+    if normalized in {"FIRST_SEEN", "PREFER_ROOT", "EXIF_FILENAME_FALLBACK"}:
         return "first_seen_at_then_file_instance_id"
     if normalized == "SHORTEST_PATH":
         return "absolute_path_then_first_seen_at_then_file_instance_id"

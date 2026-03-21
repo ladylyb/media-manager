@@ -8,9 +8,8 @@ from pathlib import Path
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from media_manager.app.canonical.context import CanonicalContext
 from media_manager.app.canonical.factory import build_canonical_policy, resolve_default_policy_name
-from media_manager.app.persistence.canonicalization import append_assignment, get_active_assignment
+from media_manager.app.persistence.canonicalization import append_assignment, build_selection_context, get_active_assignment
 from media_manager.app.persistence.models import FileInstance, MediaFile, MediaFileStatus
 
 
@@ -28,7 +27,11 @@ def ensure_canonical_assignment(session: Session, content_id: uuid.UUID) -> uuid
         return None
 
     policy = build_canonical_policy(resolve_default_policy_name())
-    selected = policy.select(str(content_id), instances, CanonicalContext())
+    selected = policy.select(
+        str(content_id),
+        instances,
+        build_selection_context(session, content_id=content_id, instances=instances),
+    )
     row = append_assignment(
         session,
         content_id=content_id,
