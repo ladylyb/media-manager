@@ -12,6 +12,8 @@ import {
   Eye,
   FileSearch,
   Fingerprint,
+  FolderTree,
+  GitCompareArrows,
   FolderClock,
   Gauge,
   History,
@@ -45,6 +47,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   adminDbReset,

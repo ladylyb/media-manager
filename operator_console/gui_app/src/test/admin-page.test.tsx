@@ -71,6 +71,24 @@ function renderPage() {
   );
 }
 
+function renderLibraryRulesPage() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+
+  return render(
+    <MemoryRouter initialEntries={["/admin?tab=library-rules"]}>
+      <QueryClientProvider client={queryClient}>
+        <AdminPage />
+      </QueryClientProvider>
+    </MemoryRouter>,
+  );
+}
+
 describe("Admin page", () => {
   beforeEach(() => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue({
@@ -94,6 +112,26 @@ describe("Admin page", () => {
         ],
       },
     });
+    mocks.getPolicy.mockResolvedValue({
+      data: {
+        canonical_priority: {
+          selected_policy: "FIRST_SEEN",
+          preferred_roots: [],
+        },
+        recanonicalization: {
+          enabled: false,
+        },
+        metadata: {
+          version: 3,
+          updated_at: "2026-03-20T10:00:00Z",
+        },
+        tie_breaker_rules: {
+          policy_name: "default",
+          policy_version: 1,
+          effective_order: ["first_seen_at ASC", "file_instance_id ASC"],
+        },
+      },
+    });
   });
 
   afterEach(() => {
@@ -106,5 +144,14 @@ describe("Admin page", () => {
     expect(await screen.findByRole("tab", { name: "Activity" })).toBeInTheDocument();
     expect(screen.getByText("What happened in this job")).toBeInTheDocument();
     expect(await screen.findByText("[ WAITING FOR LOGS ]")).toBeInTheDocument();
+  });
+
+  it("renders the library rules tab without crashing", async () => {
+    renderLibraryRulesPage();
+
+    expect(await screen.findByRole("tab", { name: "Library Rules" })).toBeInTheDocument();
+    expect(await screen.findByText("How should the app choose the main version?")).toBeInTheDocument();
+    expect(screen.getByText("Preferred folders")).toBeInTheDocument();
+    expect(screen.getByText("Change state")).toBeInTheDocument();
   });
 });
