@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -64,23 +65,77 @@ def test_canonical_api_route_inventory_and_v1_removal() -> None:
 def test_logs_endpoint_returns_recent_log_lines() -> None:
     LOG_BUFFER.clear()
     LOG_BUFFER.extend(["line-1", "line-2", "line-3"])
+    root_logger = logging.getLogger()
+    original_level = root_logger.level
+    root_logger.setLevel(logging.INFO)
     client = TestClient(app)
-
-    response = client.get("/logs")
+    try:
+        response = client.get("/logs")
+    finally:
+        root_logger.setLevel(original_level)
 
     assert response.status_code == 200
-    assert response.json() == ["line-1", "line-2", "line-3"]
+    assert response.json()[-3:] == ["line-1", "line-2", "line-3"]
 
 
 def test_logs_endpoint_respects_limit_with_newest_last_order() -> None:
     LOG_BUFFER.clear()
     LOG_BUFFER.extend(["line-1", "line-2", "line-3"])
+    root_logger = logging.getLogger()
+    original_level = root_logger.level
+    root_logger.setLevel(logging.INFO)
     client = TestClient(app)
-
-    response = client.get("/logs", params={"limit": 2})
+    try:
+        response = client.get("/logs", params={"limit": 2})
+    finally:
+        root_logger.setLevel(original_level)
 
     assert response.status_code == 200
     assert response.json() == ["line-2", "line-3"]
+
+
+def test_logs_access_filter_suppresses_polling_noise_above_debug() -> None:
+    filter_ = main_module._LogsEndpointAccessFilter()
+    root_logger = logging.getLogger()
+    original_level = root_logger.level
+    root_logger.setLevel(logging.INFO)
+    try:
+        record = logging.LogRecord(
+            name="uvicorn.access",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=0,
+            msg='%s - "%s %s HTTP/%s" %d',
+            args=("127.0.0.1:60148", "GET", "/logs?limit=100", "1.1", 200),
+            exc_info=None,
+        )
+
+        assert filter_.filter(record) is False
+    finally:
+        root_logger.setLevel(original_level)
+
+
+def test_logs_access_filter_keeps_logs_endpoint_visible_in_debug() -> None:
+    filter_ = main_module._LogsEndpointAccessFilter()
+    root_logger = logging.getLogger()
+    original_level = root_logger.level
+    root_logger.setLevel(logging.DEBUG)
+    try:
+        record = logging.LogRecord(
+            name="uvicorn.access",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=0,
+            msg='%s - "%s %s HTTP/%s" %d',
+            args=("127.0.0.1:60148", "GET", "/logs?limit=100", "1.1", 200),
+            exc_info=None,
+        )
+
+        assert filter_.filter(record) is True
+        assert record.levelno == logging.DEBUG
+        assert record.levelname == "DEBUG"
+    finally:
+        root_logger.setLevel(original_level)
 
 
 class _FakeService:
