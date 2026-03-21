@@ -27,6 +27,7 @@ from media_manager.app.persistence.discovery_query import (
     DiscoveryQueryParams,
     DiscoveryQueryService,
 )
+from media_manager.app.persistence.duplicate_reviews import compute_duplicate_group_signature
 from media_manager.app.persistence.media_file_queries import (
     get_history_by_path,
     get_reappearances_after_deleted,
@@ -37,6 +38,7 @@ from media_manager.app.persistence.models import (
     ApplyAuditRun,
     CanonicalAssignment,
     CanonicalRecomputeRun,
+    DuplicateGroupReview,
     FileInstance,
     FileInstanceStatus,
     MediaFile,
@@ -178,6 +180,7 @@ class DuplicateFileItem:
     duplicate_index: int | None
     media_type: str
     is_image: bool
+    media_url: str | None
     thumbnail_url: str | None
 
     def to_dict(self) -> dict[str, str | bool | int | None]:
@@ -189,6 +192,7 @@ class DuplicateFileItem:
             "duplicate_index": self.duplicate_index,
             "media_type": self.media_type,
             "is_image": self.is_image,
+            "media_url": self.media_url,
             "thumbnail_url": self.thumbnail_url,
         }
 
@@ -200,6 +204,11 @@ class DuplicateGroupItem:
     group_id: str
     files: tuple[DuplicateFileItem, ...]
     canonical_file: DuplicateFileItem | None
+    review_status: str | None = None
+    reviewed_at: str | None = None
+    reviewed_canonical_instance_id: str | None = None
+    is_stale: bool = False
+    stale_reason: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Return a JSON-serializable mapping."""
@@ -213,6 +222,11 @@ class DuplicateGroupItem:
             "group_id": self.group_id,
             "files": [item.to_dict() for item in self.files],
             "canonical_file": canonical,
+            "review_status": self.review_status,
+            "reviewed_at": self.reviewed_at,
+            "reviewed_canonical_instance_id": self.reviewed_canonical_instance_id,
+            "is_stale": self.is_stale,
+            "stale_reason": self.stale_reason,
         }
 
 
@@ -588,6 +602,12 @@ class OperatorConsoleReadService:
             latest_canonical_by_content = self._latest_canonical_instance_by_content_id(
                 session, duplicate_content_ids
             )
+            persisted_reviews = {
+                row.content_id: row
+                for row in session.scalars(
+                    select(DuplicateGroupReview).where(DuplicateGroupReview.content_id.in_(duplicate_content_ids))
+                ).all()
+            }
 
             instance_rows = session.execute(
                 select(
@@ -609,6 +629,7 @@ class OperatorConsoleReadService:
 
         grouped: dict[UUID, list[DuplicateFileItem]] = {}
         by_group_by_instance: dict[UUID, dict[str, DuplicateFileItem]] = {}
+        instance_ids_by_group: dict[UUID, list[UUID]] = {}
         for content_id, file_instance_id, absolute_path in instance_rows:
             instance_id_str = str(file_instance_id)
             media_type = infer_media_type_from_extension(Path(absolute_path)) or "OTHER"
@@ -627,10 +648,12 @@ class OperatorConsoleReadService:
                 duplicate_index=duplicate_index,
                 media_type=media_type,
                 is_image=is_image,
+                media_url=f"/media/{instance_id_str}" if is_image else None,
                 thumbnail_url=f"/api/thumbnail/{instance_id_str}" if is_image else None,
             )
             existing_group.append(file_item)
             by_group_by_instance.setdefault(content_id, {})[instance_id_str] = file_item
+            instance_ids_by_group.setdefault(content_id, []).append(file_instance_id)
 
         output: list[DuplicateGroupItem] = []
         for content_id in sorted(grouped.keys(), key=str):
@@ -639,11 +662,41 @@ class OperatorConsoleReadService:
             canonical_instance_id = latest_canonical_by_content.get(content_id)
             if canonical_instance_id is not None:
                 canonical_file = by_group_by_instance.get(content_id, {}).get(str(canonical_instance_id))
+            review_row = persisted_reviews.get(content_id)
+            current_signature = compute_duplicate_group_signature(
+                content_id=content_id,
+                canonical_instance_id=canonical_instance_id,
+                file_instance_ids=instance_ids_by_group.get(content_id, []),
+            )
+            review_status: str | None = None
+            reviewed_at: str | None = None
+            reviewed_canonical_instance_id: str | None = None
+            is_stale = False
+            stale_reason: str | None = None
+            if review_row is not None:
+                review_status = review_row.review_status
+                reviewed_at = review_row.reviewed_at.isoformat()
+                reviewed_canonical_instance_id = (
+                    str(review_row.reviewed_canonical_instance_id)
+                    if review_row.reviewed_canonical_instance_id is not None
+                    else None
+                )
+                if review_row.group_signature != current_signature:
+                    is_stale = True
+                    if review_row.reviewed_canonical_instance_id != canonical_instance_id:
+                        stale_reason = "canonical_changed"
+                    else:
+                        stale_reason = "group_membership_changed"
             output.append(
                 DuplicateGroupItem(
                     group_id=str(content_id),
                     files=files,
                     canonical_file=canonical_file,
+                    review_status=review_status,
+                    reviewed_at=reviewed_at,
+                    reviewed_canonical_instance_id=reviewed_canonical_instance_id,
+                    is_stale=is_stale,
+                    stale_reason=stale_reason,
                 )
             )
         return output

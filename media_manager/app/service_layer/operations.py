@@ -11,6 +11,7 @@ from media_manager.app.canonical.context import CanonicalContext
 from media_manager.app.canonical.factory import build_canonical_policy
 from media_manager.app.persistence.apply import ApplyService
 from media_manager.app.persistence.canonicalization import RecomputeMode, recompute_canonical_assignments
+from media_manager.app.persistence.duplicate_reviews import DuplicateReviewService
 from media_manager.app.persistence.ingest import IngestService
 from media_manager.app.persistence.operation_runs import OperationRunService
 from media_manager.app.persistence.planner import PlanningService
@@ -380,6 +381,35 @@ class OperationServices:
             )
         ).to_dict()
         self.cache.invalidate("status", "policy_snapshot")
+        return result
+
+    def duplicate_review_set(
+        self,
+        *,
+        content_id: str,
+        review_status: str,
+        reviewed_canonical_instance_id: str,
+        reviewed_by: str | None = None,
+    ) -> dict[str, object]:
+        try:
+            parsed_content_id = UUID(content_id)
+        except ValueError as exc:
+            raise ValueError(f"content_id must be a valid UUID: {content_id}") from exc
+        try:
+            parsed_canonical_instance_id = UUID(reviewed_canonical_instance_id)
+        except ValueError as exc:
+            raise ValueError(
+                "reviewed_canonical_instance_id must be a valid UUID: "
+                f"{reviewed_canonical_instance_id}"
+            ) from exc
+
+        result = DuplicateReviewService(self.session_factory).upsert_review(
+            content_id=parsed_content_id,
+            review_status=review_status,
+            reviewed_canonical_instance_id=parsed_canonical_instance_id,
+            reviewed_by=reviewed_by,
+        )
+        self.cache.invalidate("duplicates")
         return result
 
     def tag_enrichment(self, *, run_all: bool, canonical_id: str | None, batch_size: int, source: str) -> dict[str, object]:

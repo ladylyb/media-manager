@@ -501,6 +501,43 @@ Index(
 )
 
 
+class DuplicateGroupReview(Base):
+    __tablename__ = "duplicate_group_reviews"
+
+    content_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("file_contents.content_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    review_status: Mapped[str] = mapped_column(Text, nullable=False)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    reviewed_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_canonical_instance_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("file_instances.file_instance_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    group_signature: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    content: Mapped[FileContent] = relationship(foreign_keys=[content_id])
+    reviewed_canonical_instance: Mapped[FileInstance | None] = relationship(
+        "FileInstance",
+        foreign_keys=[reviewed_canonical_instance_id],
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "review_status IN ('looks_right', 'needs_review', 'not_sure')",
+            name="ck_duplicate_group_reviews_status",
+        ),
+    )
+
+
+Index("idx_duplicate_group_reviews_reviewed_at", DuplicateGroupReview.reviewed_at.desc())
+
+
 class CanonicalRecomputeRun(Base):
     __tablename__ = "canonical_recompute_runs"
 

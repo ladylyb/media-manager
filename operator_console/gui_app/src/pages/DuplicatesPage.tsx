@@ -1,32 +1,36 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ChevronDown, Copy } from "lucide-react";
+
 import { ErrorAlert } from "@/components/ErrorAlert";
 import { EmptyState } from "@/components/EmptyState";
-import { TopSurfaceHeader } from "@/components/layout/TopSurfaceHeader";
-import { MetricCard } from "@/components/MetricCard";
 import { StatusBadge } from "@/components/StatusBadge";
+import { DuplicateFocusCard } from "@/components/duplicates/DuplicateFocusCard";
+import { DuplicateMediaPreview } from "@/components/duplicates/DuplicateMediaPreview";
+import { DuplicateReviewActionBar } from "@/components/duplicates/DuplicateReviewActionBar";
+import { DuplicateReviewProgress } from "@/components/duplicates/DuplicateReviewProgress";
+import { TopSurfaceHeader } from "@/components/layout/TopSurfaceHeader";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { getDuplicates } from "@/lib/api/endpoints";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
+import { getDuplicates, setDuplicateReview } from "@/lib/api/endpoints";
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
 import { cn } from "@/lib/utils";
-import type { DuplicateGroup } from "@/types";
-import {
-  AlertCircle,
-  CheckCircle2,
-  ChevronDown,
-  Copy,
-  FileIcon,
-  FolderTree,
-  HelpCircle,
-  ImageIcon,
-  Layers3,
-  Sparkles,
-  Video,
-} from "lucide-react";
-import { Skeleton } from "@/components/ui/skeleton";
+import type { DuplicateFile, DuplicateGroup } from "@/types";
+
+type ReviewMark = "looks_right" | "needs_review" | "not_sure";
+type ReviewFilter = "all" | "unreviewed" | ReviewMark;
+
+const reviewOptions: Array<{ value: ReviewFilter; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "unreviewed", label: "Still to review" },
+  { value: "looks_right", label: "Looks right" },
+  { value: "needs_review", label: "Needs review" },
+  { value: "not_sure", label: "Not sure" },
+];
 
 function getErrorMessage(err: unknown): string | null {
   if (!err) return null;
@@ -34,199 +38,124 @@ function getErrorMessage(err: unknown): string | null {
   return String(err);
 }
 
-type ReviewMark = "looks-right" | "needs-review" | "unsure";
-type ReviewFilter = "all" | "unreviewed" | ReviewMark;
-
-const reviewOptions: Array<{ value: ReviewFilter; label: string }> = [
-  { value: "all", label: "All groups" },
-  { value: "unreviewed", label: "Still to review" },
-  { value: "looks-right", label: "Looks right" },
-  { value: "needs-review", label: "Needs review" },
-  { value: "unsure", label: "Not sure" },
-];
-
 function basename(path: string): string {
   const segments = path.split(/[\\/]/).filter(Boolean);
   return segments.at(-1) ?? path;
 }
 
-function truncateMiddle(value: string, maxLength = 72): string {
-  if (value.length <= maxLength) return value;
-  const keep = Math.floor((maxLength - 3) / 2);
-  return `${value.slice(0, keep)}...${value.slice(-keep)}`;
-}
-
-function getReviewBadge(mark?: ReviewMark) {
+function getReviewPresentation(mark?: ReviewMark, isStale = false) {
+  if (isStale) {
+    return { label: "Stale review", severity: "caution" as const };
+  }
   switch (mark) {
-    case "looks-right":
-      return { label: "Looks right", severity: "success" as const, icon: CheckCircle2 };
-    case "needs-review":
-      return { label: "Needs review", severity: "destructive" as const, icon: AlertCircle };
-    case "unsure":
-      return { label: "Not sure", severity: "caution" as const, icon: HelpCircle };
+    case "looks_right":
+      return { label: "Looks right", severity: "success" as const };
+    case "needs_review":
+      return { label: "Needs review", severity: "destructive" as const };
+    case "not_sure":
+      return { label: "Not sure", severity: "caution" as const };
     default:
-      return null;
+      return { label: "Still to review", severity: "caution" as const };
   }
 }
 
-function ReviewActionButton({
-  label,
-  icon: Icon,
-  active,
-  onClick,
-}: {
-  label: string;
-  icon: typeof CheckCircle2;
-  active: boolean;
-  onClick: () => void;
-}) {
+function currentReviewMark(group: DuplicateGroup): ReviewMark | undefined {
+  if (group.is_stale) return undefined;
+  return group.review_status ?? undefined;
+}
+
+function reviewMarksByGroup(groups: DuplicateGroup[]): Record<string, ReviewMark> {
+  return groups.reduce<Record<string, ReviewMark>>((acc, group) => {
+    const mark = currentReviewMark(group);
+    if (mark) acc[group.group_id] = mark;
+    return acc;
+  }, {});
+}
+
+function isEditableTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
   return (
-    <Button
-      type="button"
-      variant={active ? "default" : "outline"}
-      size="sm"
-      onClick={onClick}
-      className="justify-start rounded-full px-4"
-    >
-      <Icon className="h-4 w-4" />
-      {label}
-    </Button>
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement ||
+    target.isContentEditable
   );
 }
 
-function DuplicatePreview({
-  src,
-  alt,
-  isImage,
-  mediaType,
-  className,
+function findNextGroupIdAfterReview({
+  currentId,
+  groups,
+  nextMarks,
 }: {
-  src?: string | null;
-  alt: string;
-  isImage: boolean;
-  mediaType: string;
-  className?: string;
+  currentId: string;
+  groups: DuplicateGroup[];
+  nextMarks: Record<string, ReviewMark>;
 }) {
-  const [imageSrc, setImageSrc] = useState(src ?? null);
+  const currentIndex = groups.findIndex((group) => group.group_id === currentId);
+  if (currentIndex === -1) return null;
 
-  useEffect(() => {
-    setImageSrc(src ?? null);
-  }, [src]);
-
-  return (
-    <div
-      className={cn(
-        "relative overflow-hidden rounded-[24px] border border-border/70 bg-[linear-gradient(135deg,hsl(var(--muted))_0%,hsl(var(--secondary)/0.4)_100%)]",
-        className,
-      )}
-    >
-      {imageSrc ? (
-        <img
-          src={imageSrc}
-          alt={alt}
-          className="h-full w-full object-cover"
-          onError={() => setImageSrc(null)}
-        />
-      ) : (
-        <div className="flex h-full min-h-40 items-center justify-center">
-          {isImage ? (
-            <ImageIcon className="h-10 w-10 text-muted-foreground" />
-          ) : mediaType.toLowerCase() === "video" ? (
-            <Video className="h-10 w-10 text-muted-foreground" />
-          ) : (
-            <FileIcon className="h-10 w-10 text-muted-foreground" />
-          )}
-        </div>
-      )}
-      <div className="absolute left-3 top-3">
-        <StatusBadge
-          label={isImage ? "Image" : mediaType.toLowerCase() === "video" ? "Video" : "File"}
-          severity="neutral"
-          className="border-white/30 bg-background/85 text-foreground"
-        />
-      </div>
-    </div>
-  );
-}
-
-function QueuePreviewStrip({ group }: { group: DuplicateGroup }) {
-  const previewFiles = group.duplicates.filter((file) => file.thumbnail_url).slice(0, 3);
-
-  if (!previewFiles.length) {
-    return (
-      <div className="flex h-12 w-20 items-center justify-center rounded-2xl border border-dashed border-border/80 bg-muted/30">
-        <Copy className="h-4 w-4 text-muted-foreground" />
-      </div>
-    );
+  for (let index = currentIndex + 1; index < groups.length; index += 1) {
+    const candidate = groups[index];
+    if (!nextMarks[candidate.group_id]) return candidate.group_id;
   }
-
-  return (
-    <div className="flex items-center">
-      {previewFiles.map((file, index) => (
-        <div
-          key={file.file_instance_id || `${file.path}-${index}`}
-          className={cn(
-            "h-12 w-12 overflow-hidden rounded-2xl border border-background bg-muted shadow-sm",
-            index > 0 && "-ml-3",
-          )}
-        >
-          <img src={file.thumbnail_url ?? ""} alt={basename(file.path)} className="h-full w-full object-cover" />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function DuplicateFileCard({
-  title,
-  subtitle,
-  badge,
-  file,
-  emphasis = "default",
-}: {
-  title: string;
-  subtitle: string;
-  badge: string;
-  file: DuplicateGroup["duplicates"][number];
-  emphasis?: "default" | "success";
-}) {
-  return (
-    <Card
-      className={cn(
-        "overflow-hidden rounded-[28px] border-border/70 bg-background/90 shadow-sm",
-        emphasis === "success" && "border-success/35 bg-success/5",
-      )}
-    >
-      <CardContent className="space-y-4 p-4">
-        <DuplicatePreview
-          src={file.thumbnail_url}
-          alt={basename(file.path)}
-          isImage={file.is_image}
-          mediaType={file.media_type}
-          className="aspect-[4/3]"
-        />
-        <div className="space-y-2">
-          <StatusBadge label={badge} severity={emphasis === "success" ? "success" : "info"} />
-          <div>
-            <p className="text-base font-semibold text-foreground">{title}</p>
-            <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
-          </div>
-          <p className="break-all text-sm text-muted-foreground">{file.path}</p>
-        </div>
-      </CardContent>
-    </Card>
-  );
+  for (let index = 0; index < currentIndex; index += 1) {
+    const candidate = groups[index];
+    if (!nextMarks[candidate.group_id]) return candidate.group_id;
+  }
+  for (let index = currentIndex + 1; index < groups.length; index += 1) {
+    return groups[index].group_id;
+  }
+  for (let index = 0; index < currentIndex; index += 1) {
+    return groups[index].group_id;
+  }
+  return currentId;
 }
 
 export default function DuplicatesPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedDuplicateId, setSelectedDuplicateId] = useState<string | null>(null);
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("unreviewed");
-  const [reviewMarks, setReviewMarks] = useState<Record<string, ReviewMark>>({});
+  const queryClient = useQueryClient();
 
   const duplicatesQuery = useQuery({
     queryKey: queryKeys.duplicates,
     queryFn: async () => (await getDuplicates()).data,
     staleTime: queryOptions.duplicates.staleTime,
+  });
+
+  const reviewMutation = useMutation({
+    mutationFn: (payload: {
+      content_id: string;
+      review_status: ReviewMark;
+      reviewed_canonical_instance_id: string;
+    }) => setDuplicateReview(payload),
+    onMutate: async (payload) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.duplicates });
+      const previous = queryClient.getQueryData<DuplicateGroup[]>(queryKeys.duplicates);
+      queryClient.setQueryData<DuplicateGroup[]>(queryKeys.duplicates, (current = []) =>
+        current.map((group) =>
+          group.group_id === payload.content_id
+            ? {
+                ...group,
+                review_status: payload.review_status,
+                reviewed_at: new Date().toISOString(),
+                reviewed_canonical_instance_id: payload.reviewed_canonical_instance_id,
+                is_stale: false,
+                stale_reason: null,
+              }
+            : group,
+        ),
+      );
+      return { previous };
+    },
+    onError: (_error, _payload, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(queryKeys.duplicates, context.previous);
+      }
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.duplicates });
+    },
   });
 
   const groups = (duplicatesQuery.data as DuplicateGroup[] | undefined) ?? [];
@@ -243,15 +172,16 @@ export default function DuplicatesPage() {
       }),
     [groups],
   );
+
   const filteredGroups = useMemo(
     () =>
       sortedGroups.filter((group) => {
         if (reviewFilter === "all") return true;
-        const mark = reviewMarks[group.group_id];
+        const mark = currentReviewMark(group);
         if (reviewFilter === "unreviewed") return !mark;
         return mark === reviewFilter;
       }),
-    [reviewFilter, reviewMarks, sortedGroups],
+    [reviewFilter, sortedGroups],
   );
 
   useEffect(() => {
@@ -265,73 +195,115 @@ export default function DuplicatesPage() {
   }, [filteredGroups, selectedId]);
 
   const selected = filteredGroups.find((group) => group.group_id === selectedId) ?? null;
-  const totalFiles = groups.reduce((sum, group) => sum + group.duplicates.length, 0);
-  const duplicateFiles = groups.reduce(
-    (sum, group) => sum + group.duplicates.filter((file) => !file.is_canonical).length,
-    0,
-  );
-  const imageGroups = groups.filter((group) => group.duplicates.some((file) => file.is_image)).length;
-  const markedNeedsReview = Object.values(reviewMarks).filter((mark) => mark === "needs-review").length;
+  const selectedIndex = selected ? filteredGroups.findIndex((group) => group.group_id === selected.group_id) : -1;
+  const selectedOverallIndex = selected ? sortedGroups.findIndex((group) => group.group_id === selected.group_id) : -1;
+  const reviewedCount = sortedGroups.filter((group) => currentReviewMark(group)).length;
   const selectedCanonical = selected?.duplicates.find((file) => file.is_canonical) ?? null;
-  const selectedDuplicates = selected?.duplicates.filter((file) => !file.is_canonical) ?? [];
-  const selectedReviewBadge = selected ? getReviewBadge(reviewMarks[selected.group_id]) : null;
+  const selectedDuplicates = useMemo(
+    () => selected?.duplicates.filter((file) => !file.is_canonical) ?? [],
+    [selected],
+  );
 
-  function setReviewMark(groupId: string, nextMark: ReviewMark) {
-    setReviewMarks((current) => {
-      if (current[groupId] === nextMark) {
-        const { [groupId]: _removed, ...rest } = current;
-        return rest;
-      }
-      return { ...current, [groupId]: nextMark };
-    });
+  useEffect(() => {
+    if (!selectedDuplicates.length) {
+      setSelectedDuplicateId(null);
+      return;
+    }
+    if (!selectedDuplicateId || !selectedDuplicates.some((file) => file.file_instance_id === selectedDuplicateId)) {
+      setSelectedDuplicateId(selectedDuplicates[0].file_instance_id);
+    }
+  }, [selectedDuplicateId, selectedDuplicates]);
+
+  const selectedDuplicate =
+    selectedDuplicates.find((file) => file.file_instance_id === selectedDuplicateId) ?? selectedDuplicates[0] ?? null;
+  const selectedReview = selected ? getReviewPresentation(currentReviewMark(selected), Boolean(selected.is_stale)) : null;
+
+  function moveSelection(direction: -1 | 1) {
+    if (!filteredGroups.length || selectedIndex < 0) return;
+    const nextIndex = selectedIndex + direction;
+    if (nextIndex < 0 || nextIndex >= filteredGroups.length) return;
+    setSelectedId(filteredGroups[nextIndex].group_id);
   }
 
+  function applyReviewMark(mark: ReviewMark) {
+    if (!selected || !selectedCanonical) return;
+
+    const nextMarks = {
+      ...reviewMarksByGroup(sortedGroups),
+      [selected.group_id]: mark,
+    };
+    const nextSelectedId = findNextGroupIdAfterReview({
+      currentId: selected.group_id,
+      groups: sortedGroups,
+      nextMarks,
+    });
+
+    reviewMutation.mutate({
+      content_id: selected.group_id,
+      review_status: mark,
+      reviewed_canonical_instance_id: selectedCanonical.file_instance_id,
+    });
+
+    if (nextSelectedId && nextSelectedId !== selected.group_id) {
+      setSelectedId(nextSelectedId);
+    }
+  }
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (isEditableTarget(event.target)) return;
+      if (!selected) return;
+
+      switch (event.key) {
+        case "ArrowLeft":
+          event.preventDefault();
+          moveSelection(-1);
+          break;
+        case "ArrowRight":
+          event.preventDefault();
+          moveSelection(1);
+          break;
+        case "1":
+          event.preventDefault();
+          applyReviewMark("looks_right");
+          break;
+        case "2":
+          event.preventDefault();
+          applyReviewMark("needs_review");
+          break;
+        case "3":
+          event.preventDefault();
+          applyReviewMark("not_sure");
+          break;
+        default:
+          break;
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selected, selectedIndex, filteredGroups, sortedGroups]);
+
   return (
-    <div className="mx-auto flex max-w-7xl flex-col gap-6 p-6">
+    <div className="mx-auto flex max-w-7xl flex-col gap-5 p-6">
       <TopSurfaceHeader
         badge="Duplicate Review"
-        title="Review possible duplicates clearly before deciding what needs attention."
-        description="Use this page to compare matching files side by side. The system marks one file as the current main version, and you can quickly note whether each group looks correct or needs a closer review."
+        title="Review duplicate groups."
+        description="Focus on the images first, then mark the group and continue."
         icon={Copy}
-      >
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_18rem]">
-          <div className="rounded-[28px] border border-border/70 bg-background/85 p-5 shadow-sm">
-            <p className="text-sm font-semibold text-foreground">When to use this</p>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              Start here when you want to answer simple questions: &ldquo;Are these really the same file?&rdquo;,
-              &ldquo;Which copy is the main one?&rdquo;, and &ldquo;Which groups need another look?&rdquo;
-            </p>
-          </div>
-          <div className="rounded-[28px] border border-border/70 bg-background/85 p-5 shadow-sm">
-            <p className="text-sm font-semibold text-foreground">What “main version” means</p>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              The app picks one file as the main version for the group. Everything else shown beside it is a
-              possible duplicate of that file.
-            </p>
-          </div>
-        </div>
-      </TopSurfaceHeader>
+      />
+
       {duplicatesQuery.error && (
         <ErrorAlert message={getErrorMessage(duplicatesQuery.error) || "Failed to load duplicate groups"} />
       )}
-
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard title="Groups To Review" value={groups.length} subtitle="Possible duplicate sets" icon={<Layers3 className="h-4 w-4" />} loading={duplicatesQuery.isLoading} />
-        <MetricCard title="Files To Compare" value={totalFiles} subtitle="Main files plus matching copies" icon={<FolderTree className="h-4 w-4" />} loading={duplicatesQuery.isLoading} />
-        <MetricCard title="Extra Copies" value={duplicateFiles} subtitle="Files that are not the main version" icon={<Copy className="h-4 w-4" />} loading={duplicatesQuery.isLoading} />
-        <MetricCard title="Need Another Look" value={markedNeedsReview} subtitle={`${imageGroups} groups include image previews`} icon={<Sparkles className="h-4 w-4" />} loading={duplicatesQuery.isLoading} />
-      </div>
+      {reviewMutation.error && (
+        <ErrorAlert message={getErrorMessage(reviewMutation.error) || "Failed to save duplicate review"} />
+      )}
 
       {duplicatesQuery.isLoading ? (
-        <div className="grid gap-4 xl:grid-cols-[22rem_minmax(0,1fr)]">
-          <div className="space-y-2">
-            {Array.from({ length: 8 }).map((_, i) => (
-              <Skeleton key={i} className="h-14 w-full rounded-lg" />
-            ))}
-          </div>
-          <div>
-            <Skeleton className="h-[44rem] rounded-[28px]" />
-          </div>
+        <div className="space-y-4">
+          <Skeleton className="h-28 rounded-[24px]" />
+          <Skeleton className="h-[42rem] rounded-[28px]" />
         </div>
       ) : !groups.length ? (
         <EmptyState
@@ -340,17 +312,52 @@ export default function DuplicatesPage() {
           description="Once the library finds matching files, they will appear here for side-by-side review."
         />
       ) : (
-        <div className="grid gap-4 xl:grid-cols-[22rem_minmax(0,1fr)]">
-          <Card className="overflow-hidden rounded-[30px] border-border/70 bg-card/95 shadow-sm">
-            <CardHeader className="space-y-4 pb-4">
-              <div>
-                <CardDescription>Review Queue</CardDescription>
-                <CardTitle className="text-2xl">Possible duplicate groups</CardTitle>
+        <>
+          <Card className="rounded-[24px] border-border/70 bg-card/95 shadow-sm">
+            <CardContent className="space-y-4 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {selectedReview ? <StatusBadge label={selectedReview.label} severity={selectedReview.severity} /> : null}
+                    {selected ? (
+                      <>
+                        <StatusBadge label={`${selected.duplicates.length} files in group`} severity="neutral" />
+                        <StatusBadge
+                          label={
+                            selectedDuplicates.length === 1
+                              ? "1 matching copy"
+                              : `${selectedDuplicates.length} matching copies`
+                          }
+                          severity="info"
+                        />
+                      </>
+                    ) : null}
+                  </div>
+                  <p className="mt-3 truncate text-xl font-semibold tracking-tight text-foreground">
+                    {selected ? basename(selected.canonical_path) : "Select a duplicate group"}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button type="button" variant="outline" onClick={() => moveSelection(-1)} disabled={selectedIndex <= 0}>
+                    Prev
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => moveSelection(1)}
+                    disabled={selectedIndex < 0 || selectedIndex >= filteredGroups.length - 1}
+                  >
+                    Next
+                  </Button>
+                </div>
               </div>
-              <p className="text-sm leading-6 text-muted-foreground">
-                Pick a group to compare the main version with the matching copies. Start with groups that still
-                need review.
-              </p>
+
+              <DuplicateReviewProgress
+                currentIndex={selectedOverallIndex < 0 ? 0 : selectedOverallIndex}
+                total={sortedGroups.length}
+                reviewedCount={reviewedCount}
+              />
+
               <div className="flex flex-wrap gap-2">
                 {reviewOptions.map((option) => (
                   <Button
@@ -365,183 +372,89 @@ export default function DuplicatesPage() {
                   </Button>
                 ))}
               </div>
-            </CardHeader>
-            <CardContent className="space-y-3 overflow-auto scrollbar-thin px-3 pb-4 pt-0">
-              {filteredGroups.map((group) => {
-                const reviewBadge = getReviewBadge(reviewMarks[group.group_id]);
-                const groupDuplicates = group.duplicates.filter((file) => !file.is_canonical).length;
-                return (
-                  <button
-                    key={group.group_id}
-                    type="button"
-                    onClick={() => setSelectedId(group.group_id)}
-                    className={cn(
-                      "w-full rounded-[24px] border p-3 text-left transition-all",
-                      selectedId === group.group_id
-                        ? "border-primary/35 bg-primary/10 shadow-sm"
-                        : "border-border/70 bg-background/80 hover:border-primary/20 hover:bg-muted/40",
-                    )}
-                  >
-                    <div className="flex items-start gap-3">
-                      <QueuePreviewStrip group={group} />
-                      <div className="min-w-0 flex-1 space-y-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="truncate text-sm font-semibold text-foreground">
-                            {basename(group.canonical_path)}
-                          </p>
-                          <StatusBadge label={`${group.duplicates.length} files`} severity="neutral" />
-                          {reviewBadge ? (
-                            <StatusBadge label={reviewBadge.label} severity={reviewBadge.severity} />
-                          ) : (
-                            <StatusBadge label="Still to review" severity="caution" />
-                          )}
-                        </div>
-                        <p className="text-sm text-muted-foreground">
-                          {groupDuplicates === 1
-                            ? "1 matching copy beside the main version"
-                            : `${groupDuplicates} matching copies beside the main version`}
-                        </p>
-                        <p className="truncate text-xs text-muted-foreground">
-                          {truncateMiddle(group.canonical_path)}
-                        </p>
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
-              {!filteredGroups.length ? (
-                <EmptyState
-                  title="No groups match this filter"
-                  description="Change the filter to keep reviewing the remaining duplicate groups."
-                />
-              ) : null}
             </CardContent>
           </Card>
 
-          <Card className="overflow-hidden rounded-[30px] border-border/70 bg-card/95 shadow-sm">
-            <CardHeader className="space-y-4 pb-4">
-              <div>
-                <CardDescription>Compare Files</CardDescription>
-                <CardTitle className="text-2xl">
-                  {selected ? basename(selected.canonical_path) : "Select a duplicate group"}
-                </CardTitle>
-              </div>
-              {selected ? (
-                <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_18rem]">
-                  <div className="rounded-[24px] border border-border/70 bg-background/80 p-4">
-                    <p className="text-sm font-semibold text-foreground">What you are looking at</p>
-                    <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                      The card marked <span className="font-medium text-foreground">Main version</span> is the
-                      file the system currently keeps as the primary copy. Compare it with the matching files
-                      below and note whether this grouping looks correct.
-                    </p>
-                  </div>
-                  <div className="rounded-[24px] border border-border/70 bg-background/80 p-4">
-                    <p className="text-sm font-semibold text-foreground">Quick note</p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <ReviewActionButton
-                        label="Looks right"
-                        icon={CheckCircle2}
-                        active={reviewMarks[selected.group_id] === "looks-right"}
-                        onClick={() => setReviewMark(selected.group_id, "looks-right")}
-                      />
-                      <ReviewActionButton
-                        label="Needs review"
-                        icon={AlertCircle}
-                        active={reviewMarks[selected.group_id] === "needs-review"}
-                        onClick={() => setReviewMark(selected.group_id, "needs-review")}
-                      />
-                      <ReviewActionButton
-                        label="Not sure"
-                        icon={HelpCircle}
-                        active={reviewMarks[selected.group_id] === "unsure"}
-                        onClick={() => setReviewMark(selected.group_id, "unsure")}
-                      />
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-            </CardHeader>
-            <CardContent>
+          <Card className="rounded-[30px] border-border/70 bg-card/95 shadow-sm">
+            <CardContent className="space-y-6 p-4 sm:p-5">
               {selected && selectedCanonical ? (
-                <div className="space-y-6">
-                  <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
-                    <DuplicateFileCard
-                      title={basename(selectedCanonical.path)}
-                      subtitle="This is the file currently treated as the main version for this group."
-                      badge="Main version"
-                      file={selectedCanonical}
+                <>
+                  <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+                    <DuplicateFocusCard
+                      badge="Main"
+                      description="Use this as the anchor for the review."
                       emphasis="success"
+                      file={selectedCanonical}
+                      previewClassName="h-[24rem] sm:h-[32rem] lg:h-[40rem]"
+                      previewFit="contain"
                     />
-                    <Card className="rounded-[28px] border-border/70 bg-background/85 shadow-sm">
-                      <CardContent className="space-y-4 p-5">
-                        <div>
-                          <p className="text-sm font-semibold text-foreground">At a glance</p>
-                          <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                            This group contains {selected.duplicates.length} files in total, including{" "}
-                            {selectedDuplicates.length === 1
-                              ? "1 matching copy"
-                              : `${selectedDuplicates.length} matching copies`}
-                            . Use the previews first. Open technical details only if you need the exact paths or
-                            group ID.
-                          </p>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <StatusBadge label={`${selected.duplicates.length} files in group`} severity="neutral" />
-                          <StatusBadge
-                            label={
-                              selectedDuplicates.length === 1
-                                ? "1 extra copy"
-                                : `${selectedDuplicates.length} extra copies`
-                            }
-                            severity="info"
-                          />
-                          {selectedReviewBadge ? (
-                            <StatusBadge
-                              label={selectedReviewBadge.label}
-                              severity={selectedReviewBadge.severity}
-                            />
-                          ) : (
-                            <StatusBadge label="Still to review" severity="caution" />
-                          )}
-                        </div>
-                        <div className="rounded-2xl border border-dashed border-border/70 bg-muted/25 p-4">
-                          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-                            Main version path
-                          </p>
-                          <p className="mt-2 break-all text-sm text-foreground">{selectedCanonical.path}</p>
-                        </div>
-                      </CardContent>
-                    </Card>
+
+                    {selectedDuplicate ? (
+                      <DuplicateFocusCard
+                        badge="Selected copy"
+                        description="Compare this copy against the main version."
+                        emphasis="info"
+                        file={selectedDuplicate}
+                        previewClassName="h-[24rem] sm:h-[32rem] lg:h-[40rem]"
+                        previewFit="contain"
+                      />
+                    ) : (
+                      <Card className="rounded-[24px] border-border/70 bg-background/85 shadow-sm">
+                        <CardContent className="flex h-full min-h-[14rem] items-center justify-center p-6 text-center">
+                          <div className="space-y-2">
+                            <StatusBadge label="No extra copies" severity="neutral" />
+                            <p className="text-sm text-muted-foreground">Nothing else to compare in this group.</p>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )}
                   </div>
 
-                  <section className="space-y-4">
-                    <div>
-                      <h2 className="text-lg font-semibold tracking-tight text-foreground">Matching files</h2>
-                      <p className="mt-1 text-sm text-muted-foreground">
-                        Compare these files with the main version above. Focus on the previews first; the full
-                        path is here when you need to identify a specific file.
-                      </p>
-                    </div>
-                    {selectedDuplicates.length ? (
-                      <div className="grid gap-4 lg:grid-cols-2">
-                        {selectedDuplicates.map((file) => (
-                          <DuplicateFileCard
-                            key={file.file_instance_id || file.path}
-                            title={basename(file.path)}
-                            subtitle="Possible duplicate of the main version."
-                            badge="Matching file"
-                            file={file}
-                          />
-                        ))}
+                  {selectedDuplicates.length ? (
+                    <section className="space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                          {selectedDuplicates.length} duplicate{selectedDuplicates.length === 1 ? "" : "s"}
+                        </h2>
                       </div>
-                    ) : (
-                      <EmptyState
-                        title="No extra copies in this group"
-                        description="This group only contains the current main version."
-                      />
-                    )}
-                  </section>
+                      <ScrollArea className="w-full whitespace-nowrap">
+                        <div className="flex gap-3 pb-2">
+                          {selectedDuplicates.map((file, index) => {
+                            const active = selectedDuplicate?.file_instance_id === file.file_instance_id;
+                            return (
+                              <button
+                                key={file.file_instance_id || file.path}
+                                type="button"
+                                onClick={() => setSelectedDuplicateId(file.file_instance_id)}
+                                className={cn(
+                                  "w-36 shrink-0 rounded-[18px] border p-2.5 text-left transition-all",
+                                  active
+                                    ? "border-primary bg-primary/5 shadow-sm ring-1 ring-primary/20"
+                                    : "border-border/70 bg-background/80 hover:border-primary/20 hover:bg-muted/30",
+                                )}
+                              >
+                                <div className="mb-2 flex items-center justify-between gap-2">
+                                  <span className="text-[11px] font-medium text-muted-foreground">{index + 1}</span>
+                                  {active ? <StatusBadge label="Selected" severity="info" /> : null}
+                                </div>
+                                <DuplicateMediaPreview
+                                  src={file.thumbnail_url}
+                                  alt={basename(file.path)}
+                                  isImage={file.is_image}
+                                  mediaType={file.media_type}
+                                  className="h-24 rounded-[16px]"
+                                  fit="contain"
+                                />
+                                <p className="mt-2 truncate text-xs font-medium text-foreground">
+                                  {basename(file.path)}
+                                </p>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </ScrollArea>
+                    </section>
+                  ) : null}
 
                   <Collapsible className="rounded-[24px] border border-border/70 bg-background/85">
                     <CollapsibleTrigger asChild>
@@ -552,31 +465,33 @@ export default function DuplicatesPage() {
                         <div>
                           <p className="text-sm font-semibold text-foreground">Technical details</p>
                           <p className="mt-1 text-sm text-muted-foreground">
-                            Group ID, full paths, and low-level reference data for deeper investigation.
+                            Exact paths and reference IDs for the moments when visual review is not enough.
                           </p>
                         </div>
                         <ChevronDown className="h-4 w-4 text-muted-foreground" />
                       </button>
                     </CollapsibleTrigger>
                     <CollapsibleContent className="space-y-4 border-t px-5 py-4">
-                      <div className="space-y-2">
-                        <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-                          Group ID
-                        </p>
-                        <p className="break-all font-mono text-xs text-foreground">{selected.group_id}</p>
-                      </div>
-                      <div className="space-y-2">
-                        <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-                          Main version path
-                        </p>
-                        <p className="break-all font-mono text-xs text-foreground">{selected.canonical_path}</p>
+                      <div className="grid gap-4 lg:grid-cols-2">
+                        <div className="space-y-2">
+                          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+                            Group ID
+                          </p>
+                          <p className="break-all font-mono text-xs text-foreground">{selected.group_id}</p>
+                        </div>
+                        <div className="space-y-2">
+                          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+                            Main version path
+                          </p>
+                          <p className="break-all font-mono text-xs text-foreground">{selected.canonical_path}</p>
+                        </div>
                       </div>
                       <div className="space-y-2">
                         <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">
                           Group members
                         </p>
                         <div className="space-y-2">
-                          {selected.duplicates.map((file) => (
+                          {selected.duplicates.map((file: DuplicateFile) => (
                             <div
                               key={file.file_instance_id || file.path}
                               className="rounded-2xl border border-border/70 bg-muted/20 p-3"
@@ -595,16 +510,27 @@ export default function DuplicatesPage() {
                       </div>
                     </CollapsibleContent>
                   </Collapsible>
-                </div>
+                </>
               ) : (
                 <EmptyState
                   title="Select a group to compare"
-                  description="Choose a duplicate group from the review queue to see the main version and matching files side by side."
+                  description="Choose a duplicate group from the active filter to compare the main version against a matching file."
                 />
               )}
             </CardContent>
           </Card>
-        </div>
+
+          {selected ? (
+            <DuplicateReviewActionBar
+              activeMark={currentReviewMark(selected)}
+              hasPrev={selectedIndex > 0}
+              hasNext={selectedIndex >= 0 && selectedIndex < filteredGroups.length - 1}
+              onMark={applyReviewMark}
+              onNext={() => moveSelection(1)}
+              onPrev={() => moveSelection(-1)}
+            />
+          ) : null}
+        </>
       )}
     </div>
   );

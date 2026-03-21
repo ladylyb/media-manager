@@ -192,6 +192,15 @@ class CanonicalRecomputePayload(BaseModel):
     preferred_roots: list[str] = Field(default_factory=list)
 
 
+class DuplicateReviewPayload(BaseModel):
+    """Payload for durable duplicate review decisions."""
+
+    content_id: str
+    review_status: str
+    reviewed_canonical_instance_id: str
+    reviewed_by: str | None = None
+
+
 @dataclass(frozen=True)
 class _DiscoveryQueryArgs:
     page: int
@@ -740,6 +749,21 @@ def create_app() -> FastAPI:
         services: ReadServices = Depends(get_read_services),
     ) -> JSONResponse:
         return _execute_read("duplicates", services.duplicates)
+
+    @app.post("/api/duplicates/review")
+    def duplicate_review_set_v2(
+        payload: DuplicateReviewPayload,
+        services: OperationServices = Depends(get_operation_services),
+    ) -> JSONResponse:
+        return _execute_mutation(
+            "duplicates-review",
+            lambda: services.duplicate_review_set(
+                content_id=payload.content_id,
+                review_status=payload.review_status,
+                reviewed_canonical_instance_id=payload.reviewed_canonical_instance_id,
+                reviewed_by=payload.reviewed_by,
+            ),
+        )
 
     @app.get("/api/media-file/by-hash")
     def media_file_by_hash_v2(
