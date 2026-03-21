@@ -16,6 +16,21 @@ This file is the single source of truth for agent operating instructions in this
   - Purpose: operational workflow guidance.
   - Precedence: this root `AGENTS.md` remains authoritative for runtime invariants and safety constraints.
 
+## Branch Safety Guard
+
+Before making any repository file change, agents must run:
+
+1. `git rev-parse --abbrev-ref HEAD`
+2. `git status --porcelain`
+
+Rules:
+
+- If the current branch is `develop`, do not edit files.
+- If the current branch is `develop` and `git status --porcelain` is non-empty, warn that there are uncommitted changes on `develop` and stop.
+- Require creating or switching to a non-protected branch before any edit.
+- Allowed edit branches are `feature/*`, `fix/*`, `docs/*`, and `chore/*`.
+- Do not commit directly to `develop` even if the worktree is clean.
+
 ---
 
 This repository is developed using agent-driven workflows.

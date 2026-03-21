@@ -22,6 +22,8 @@ Before starting work:
 1. Ensure your local `develop` is up to date.
 2. Confirm `gh auth status` is valid for PR operations.
 3. Confirm your change plan does not violate `AGENTS.md` invariants.
+4. Check `git status --porcelain` before using `develop` as a base branch.
+5. If `develop` has uncommitted changes, stop and either commit, stash, or move that work before starting a new contribution.
 
 ## Standard GitHub Flow
 
@@ -32,11 +34,14 @@ Use `develop` as the base branch.
 Example:
 
 ```bash
+git status --porcelain
 git fetch origin
 git checkout develop
 git pull --ff-only origin develop
 git checkout -b feature/<short-kebab-description>
 ```
+
+Do not implement or commit work directly on `develop`, even when the worktree is clean.
 
 Branch naming guidance:
 
