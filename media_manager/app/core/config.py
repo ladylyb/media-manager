@@ -50,9 +50,9 @@ def _nearest_existing_parent(path: Path) -> Path | None:
         candidate = candidate.parent
 
 
-def _validate_storage_root(env_name: str) -> Path:
+def _validate_storage_root(env_name: str, raw: str) -> Path:
     load_environment()
-    raw = (os.getenv(env_name) or "").strip()
+    raw = raw.strip()
     if not raw:
         raise RuntimeError(f"{env_name} is required.")
 
@@ -72,7 +72,10 @@ def _validate_storage_root(env_name: str) -> Path:
 
 
 def resolve_storage_roots() -> StorageRoots:
+    load_environment()
+    canonical_raw = os.getenv("MEDIA_CANONICAL_STORAGE_PATH", "")
+    duplicate_raw = os.getenv("MEDIA_DUPLICATE_STORAGE_PATH", "")
     return StorageRoots(
-        canonical_root=_validate_storage_root("MEDIA_CANONICAL_STORAGE_PATH"),
-        duplicate_root=_validate_storage_root("MEDIA_DUPLICATE_STORAGE_PATH"),
+        canonical_root=_validate_storage_root("MEDIA_CANONICAL_STORAGE_PATH", canonical_raw),
+        duplicate_root=_validate_storage_root("MEDIA_DUPLICATE_STORAGE_PATH", duplicate_raw),
     )
