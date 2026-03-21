@@ -720,6 +720,8 @@ class PlanningService:
             desired_path=Path(desired_key),
             desired_key=desired_key,
             reserved_paths=reserved_paths,
+            # Distinct-content canonical collisions should not be named like true duplicate-role items.
+            collision_marker="C" if role == PlannedActionRole.CANONICAL.value else "DUP",
         )
         path_reservation_duration_s = perf_counter() - t_path_reservation
         planned_target_path = str(final_destination)

@@ -39,6 +39,12 @@ def test_generate_canonical_filename_deterministic() -> None:
     assert first == "IMG_20240111_060708_LL_General.jpg"
 
 
+def test_generate_canonical_filename_uses_milliseconds_when_available() -> None:
+    taken = datetime(2024, 1, 11, 6, 7, 8, 123000, tzinfo=UTC)
+    generated = generate_canonical_filename("IMG", taken, ".jpg", owner="LL", context="General")
+    assert generated == "IMG_20240111_060708123_LL_General.jpg"
+
+
 def test_generate_canonical_filename_invalid_context_too_long() -> None:
     taken = datetime(2024, 1, 11, 6, 7, 8, tzinfo=UTC)
     with pytest.raises(ValueError, match="context must be <= 20 characters"):
@@ -95,6 +101,7 @@ def test_collision_resolution_happens_in_plan(
         targets = [Path(a.target_path or "") for a in actions]
         assert len({str(t) for t in targets}) == 2
         assert any(a.action_type == "COLLISION_RESOLVED" for a in actions)
+        assert any("_C01." in (a.target_path or "") for a in actions if a.action_type == "COLLISION_RESOLVED")
 
 
 def test_replan_is_deterministic_for_targets(
