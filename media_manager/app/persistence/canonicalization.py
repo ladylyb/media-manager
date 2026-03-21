@@ -4,6 +4,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
+import time
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -23,6 +24,7 @@ from media_manager.app.persistence.models import (
 )
 
 logger = get_logger(__name__)
+_CANONICAL_PROGRESS_EVERY = 100
 
 
 class RecomputeMode(StrEnum):
@@ -99,6 +101,20 @@ def recompute_canonical_assignments(
                 .having(func.count(FileInstance.file_instance_id) > 1)
                 .order_by(FileInstance.content_id.asc())
             ).all()
+        logger.info(
+            "Run started",
+            extra={
+                "run_id": str(run_id),
+                "phase": "canonical",
+                "stage": "recompute",
+                "status": "running",
+                "policy_name": policy.name,
+                "policy_version": policy.version,
+                "recompute_mode": mode.value,
+                "total_count": len(duplicate_content_ids),
+            },
+        )
+        started_at = time.time()
 
         for content_id in duplicate_content_ids:
             sequence_no += 1
@@ -153,7 +169,10 @@ def recompute_canonical_assignments(
                     logger.info(
                         "Canonical recompute item",
                         extra={
+                            "run_id": str(run_id),
                             "phase": "canonical",
+                            "stage": "recompute",
+                            "status": "running",
                             "action": "RECOMPUTE",
                             "content_id": str(content_id),
                             "canonical_instance_id": str(selected.file_instance_id),
@@ -179,6 +198,30 @@ def recompute_canonical_assignments(
                             error_message=str(exc),
                         )
                     )
+            if duplicate_content_ids and (
+                scanned_count % _CANONICAL_PROGRESS_EVERY == 0 or scanned_count == len(duplicate_content_ids)
+            ):
+                elapsed_seconds = max(time.time() - started_at, 0.000001)
+                progress_percent = (scanned_count / len(duplicate_content_ids)) * 100.0
+                throughput_fps = scanned_count / elapsed_seconds
+                logger.info(
+                    (
+                        f"Progress: {scanned_count}/{len(duplicate_content_ids)} items ({progress_percent:.1f}%) | "
+                        f"{throughput_fps:.1f} items/sec | elapsed {elapsed_seconds:.1f}s"
+                    ),
+                    extra={
+                        "run_id": str(run_id),
+                        "phase": "canonical",
+                        "stage": "recompute",
+                        "status": "running",
+                        "processed_count": scanned_count,
+                        "total_count": len(duplicate_content_ids),
+                        "progress_percent": progress_percent,
+                        "elapsed_seconds": elapsed_seconds,
+                        "throughput_fps": throughput_fps,
+                        "recompute_mode": mode.value,
+                    },
+                )
 
         status = (
             CanonicalRecomputeStatus.COMPLETED_WITH_ERRORS.value
@@ -194,6 +237,26 @@ def recompute_canonical_assignments(
             failed_count=failed_count,
             applied_count=applied_count,
             error_message=None,
+        )
+        logger.info(
+            "Run completed",
+            extra={
+                "run_id": str(run_id),
+                "phase": "canonical",
+                "stage": "finalize",
+                "status": status,
+                "processed_count": scanned_count,
+                "total_count": len(duplicate_content_ids),
+                "progress_percent": 100.0 if duplicate_content_ids else None,
+                "elapsed_seconds": max(time.time() - started_at, 0.000001),
+                "recompute_mode": mode.value,
+                "summary": {
+                    "scanned_count": scanned_count,
+                    "changed_count": changed_count,
+                    "failed_count": failed_count,
+                    "applied_count": applied_count,
+                },
+            },
         )
         return RecomputeSummary(
             run_id=run_id,
@@ -215,6 +278,19 @@ def recompute_canonical_assignments(
             failed_count=failed_count + 1,
             applied_count=applied_count,
             error_message=str(exc),
+        )
+        logger.exception(
+            "Canonical recompute failed",
+            extra={
+                "run_id": str(run_id),
+                "phase": "canonical",
+                "stage": "finalize",
+                "status": CanonicalRecomputeStatus.FAILED.value,
+                "processed_count": scanned_count,
+                "total_count": scanned_count,
+                "elapsed_seconds": max(time.time() - started_at, 0.000001),
+                "recompute_mode": mode.value,
+            },
         )
         raise
 
@@ -241,6 +317,15 @@ def _create_recompute_run(
         )
         session.add(row)
         session.flush()
+        logger.info(
+            "Transitioning run state",
+            extra={
+                "run_id": str(row.id),
+                "phase": "canonical",
+                "stage": "recompute",
+                "status": CanonicalRecomputeStatus.STARTED.value,
+            },
+        )
         return row.id
 
 

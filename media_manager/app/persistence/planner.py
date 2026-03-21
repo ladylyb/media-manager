@@ -43,6 +43,57 @@ logger = get_logger(__name__)
 PLANNER_TRACE_VERSION = "phase10.v1"
 
 
+def _log_plan_stage(
+    run_id: uuid.UUID,
+    stage: str,
+    *,
+    status: str,
+    summary: str,
+    files_count: int | None = None,
+    duration_s: float | None = None,
+) -> None:
+    logger.info(
+        summary,
+        extra={
+            "run_id": str(run_id),
+            "phase": "plan",
+            "stage": stage,
+            "status": status,
+            "files_count": files_count,
+            "duration_s": f"{duration_s:.6f}" if duration_s is not None else None,
+        },
+    )
+
+
+def _log_plan_progress(
+    run_id: uuid.UUID,
+    stage: str,
+    *,
+    processed_count: int,
+    total_count: int,
+    elapsed_seconds: float,
+    throughput_fps: float,
+) -> None:
+    progress_percent = (processed_count / total_count) * 100.0 if total_count > 0 else 0.0
+    logger.info(
+        (
+            f"Progress: {processed_count}/{total_count} files ({progress_percent:.1f}%) | "
+            f"{throughput_fps:.1f} files/sec | elapsed {elapsed_seconds:.1f}s"
+        ),
+        extra={
+            "run_id": str(run_id),
+            "phase": "plan",
+            "stage": stage,
+            "status": "running",
+            "processed_count": processed_count,
+            "total_count": total_count,
+            "progress_percent": progress_percent,
+            "elapsed_seconds": elapsed_seconds,
+            "throughput_fps": throughput_fps,
+        },
+    )
+
+
 @dataclass(frozen=True)
 class PlanningSummary:
     run_id: uuid.UUID
@@ -85,7 +136,16 @@ class PlanningService:
             with transactional_session(self._session_factory) as session:
                 run = self._lock_run(session, run_id)
                 self._validate_planning_state(run)
-                logger.info("Run started", extra={"run_id": str(run.id), "phase": "plan", "action_type": ""})
+                logger.info(
+                    "Run started",
+                    extra={
+                        "run_id": str(run.id),
+                        "phase": "plan",
+                        "stage": "finalize",
+                        "status": "running",
+                        "action_type": "",
+                    },
+                )
 
                 old_state = run.state.value
                 validate_transition(RunState(run.state.value), RunState.PLANNED)
@@ -130,43 +190,75 @@ class PlanningService:
 
                 t_load_candidates = perf_counter()
                 if input_paths and ingest_if_needed:
+                    _log_plan_stage(run.id, "ingest_if_needed", status="running", summary="Planner ingest precheck started")
                     ingest_paths_in_session(session, sorted(input_paths, key=lambda p: p.resolve(strict=False).as_posix()))
+                    _log_plan_stage(
+                        run.id,
+                        "ingest_if_needed",
+                        status="completed",
+                        summary="Planner ingest precheck completed",
+                    )
                 if input_paths:
+                    _log_plan_stage(run.id, "discovery", status="running", summary="Planner discovery refresh started")
                     process_discovery_paths_in_session(
                         session,
                         sorted(input_paths, key=lambda p: p.resolve(strict=False).as_posix()),
                     )
                 else:
+                    _log_plan_stage(run.id, "discovery", status="running", summary="Planner discovery refresh started")
                     process_all_discovery_in_session(session)
+                _log_plan_stage(run.id, "discovery", status="completed", summary="Planner discovery refresh completed")
+                _log_plan_stage(run.id, "load_candidates", status="running", summary="Planner candidate loading started")
                 rows = self._load_candidate_instances(session, input_paths)
                 base_root = self._determine_base_root([Path(row.absolute_path) for row in rows])
                 load_candidates_duration_s = perf_counter() - t_load_candidates
+                _log_plan_stage(
+                    run.id,
+                    "load_candidates",
+                    status="completed",
+                    summary="Planner candidate loading completed",
+                    files_count=len(rows),
+                    duration_s=load_candidates_duration_s,
+                )
 
                 t_action_generation = perf_counter()
                 started_at = time.time()
                 total_count = len(rows)
                 processed_count = 0
+                _log_plan_stage(
+                    run.id,
+                    "metadata_lookup",
+                    status="running",
+                    summary="Planner metadata lookup started",
+                    files_count=total_count,
+                )
+                _log_plan_stage(
+                    run.id,
+                    "persist_actions",
+                    status="running",
+                    summary="Planner action persistence started",
+                    files_count=total_count,
+                )
+                _log_plan_stage(
+                    run.id,
+                    "action_generation",
+                    status="running",
+                    summary="Planner action generation started",
+                    files_count=total_count,
+                )
                 for instance in rows:
                     processed_count += 1
                     # Emit periodic progress so long planning loops stay visible without per-item logging.
                     if total_count > 0 and (processed_count % 100 == 0 or processed_count == total_count):
                         elapsed_seconds = max(time.time() - started_at, 0.000001)
-                        progress_percent = (processed_count / total_count) * 100.0
                         throughput_fps = processed_count / elapsed_seconds
-                        logger.info(
-                            (
-                                f"Progress: {processed_count}/{total_count} files ({progress_percent:.1f}%) | "
-                                f"{throughput_fps:.1f} files/sec | elapsed {elapsed_seconds:.1f}s"
-                            ),
-                            extra={
-                                "run_id": str(run.id),
-                                "phase": "plan",
-                                "processed_count": processed_count,
-                                "total_count": total_count,
-                                "progress_percent": progress_percent,
-                                "elapsed_seconds": elapsed_seconds,
-                                "throughput_fps": throughput_fps,
-                            },
+                        _log_plan_progress(
+                            run.id,
+                            "action_generation",
+                            processed_count=processed_count,
+                            total_count=total_count,
+                            elapsed_seconds=elapsed_seconds,
+                            throughput_fps=throughput_fps,
                         )
                     if instance.status != FileInstanceStatus.ACTIVE.value:
                         skipped_inactive_instances += 1
@@ -202,7 +294,30 @@ class PlanningService:
                     else:
                         skipped_count += 1
                 action_generation_duration_s = perf_counter() - t_action_generation
+                _log_plan_stage(
+                    run.id,
+                    "action_generation",
+                    status="completed",
+                    summary="Planner action generation completed",
+                    files_count=total_count,
+                    duration_s=action_generation_duration_s,
+                )
+                _log_plan_stage(
+                    run.id,
+                    "metadata_lookup",
+                    status="completed",
+                    summary="Planner metadata lookup completed",
+                    duration_s=self._metadata_lookup_db_time_s + self._metadata_lookup_cache_time_s,
+                )
+                _log_plan_stage(
+                    run.id,
+                    "persist_actions",
+                    status="completed",
+                    summary="Planner action persistence completed",
+                    duration_s=persist_actions_duration_s,
+                )
 
+                _log_plan_stage(run.id, "trace_write", status="running", summary="Planner trace artifact write started")
                 decision_traces = build_decision_traces(
                     session,
                     rows,
@@ -214,6 +329,8 @@ class PlanningService:
                     extra={
                         "run_id": str(run.id),
                         "phase": "plan",
+                        "stage": "trace_write",
+                        "status": "completed",
                         "action_type": "TRACE",
                         "path": str(trace_path),
                         "trace_entries": len(decision_traces),
@@ -229,11 +346,14 @@ class PlanningService:
                     noop_actions=noop_actions,
                     duplicate_actions=duplicate_actions,
                 )
+                _log_plan_stage(run.id, "finalize", status="running", summary="Planner finalization started")
                 logger.info(
                     "Summary counts",
                     extra={
                         "run_id": str(run.id),
                         "phase": "plan",
+                        "stage": "finalize",
+                        "status": "completed",
                         "action_type": "",
                         "scanned": summary.scanned_count,
                         "supported": summary.supported_count,
@@ -274,6 +394,8 @@ class PlanningService:
                     extra={
                         "run_id": str(run.id),
                         "phase": "plan",
+                        "stage": "finalize",
+                        "status": "completed",
                         "action_type": "",
                         "summary": summary.to_dict(),
                     },
@@ -309,7 +431,16 @@ class PlanningService:
                     )
                 return summary
         except Exception as exc:
-            logger.exception("Plan failed", extra={"run_id": str(run_id), "phase": "plan", "action_type": ""})
+            logger.exception(
+                "Plan failed",
+                extra={
+                    "run_id": str(run_id),
+                    "phase": "plan",
+                    "stage": "finalize",
+                    "status": "error",
+                    "action_type": "",
+                },
+            )
             self._record_planning_failure(run_id, "PLANNING_FAILED", str(exc))
             raise
 
