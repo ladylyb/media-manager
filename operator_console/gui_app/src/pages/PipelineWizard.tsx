@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ErrorAlert } from "@/components/ErrorAlert";
+import { LiveProgressPanel } from "@/components/progress/LiveProgressPanel";
 import { JsonViewer } from "@/components/JsonViewer";
 import { TopSurfaceHeader } from "@/components/layout/TopSurfaceHeader";
 import { Button } from "@/components/ui/button";
@@ -1199,6 +1200,7 @@ export default function PipelineWizard() {
     if (currentStepId === "ingest") {
       const state = wizardState.steps.ingest;
       const guidance = STEP_GUIDANCE.ingest;
+      // Keep live progress beside the active wizard action so users can watch the step they just started without leaving the flow.
       return (
         <ExecutionStep
           title="Ingest"
@@ -1214,6 +1216,7 @@ export default function PipelineWizard() {
           continueLabel="Continue to Review Ingest"
           continueDisabled={state.status !== "completed"}
           guidance={<WizardGuidancePanel sections={guidance.sections} />}
+          livePanel={<LiveProgressPanel />}
           result={renderResultConsole("ingest")}
         >
           <div className="grid gap-4 lg:grid-cols-2">
@@ -1298,6 +1301,7 @@ export default function PipelineWizard() {
       const state = wizardState.steps.plan;
       const guidance = STEP_GUIDANCE.plan;
       const ingestSnapshot = buildPlanIngestSnapshot(ingestPayload);
+      // Keep live progress beside the active wizard action so users can watch the step they just started without leaving the flow.
       return (
         <ExecutionStep
           title="Plan"
@@ -1313,6 +1317,7 @@ export default function PipelineWizard() {
           continueLabel="Continue to Duplicate Review"
           continueDisabled={state.status !== "completed"}
           guidance={<WizardGuidancePanel sections={guidance.sections} />}
+          livePanel={<LiveProgressPanel />}
           result={renderResultConsole("plan")}
         >
           <div className="rounded-xl border bg-muted/15 p-4">
@@ -1407,6 +1412,7 @@ export default function PipelineWizard() {
     if (currentStepId === "apply") {
       const state = wizardState.steps.apply;
       const guidance = STEP_GUIDANCE.apply;
+      // Keep live progress beside the active wizard action so users can watch the step they just started without leaving the flow.
       return (
         <ExecutionStep
           title="Apply"
@@ -1423,6 +1429,7 @@ export default function PipelineWizard() {
           continueLabel="Continue to Review Apply"
           continueDisabled={state.status !== "completed"}
           guidance={<WizardGuidancePanel sections={guidance.sections} />}
+          livePanel={<LiveProgressPanel />}
           result={renderResultConsole("apply")}
         >
           <div className="rounded-xl border bg-muted/15 p-4">
@@ -1501,6 +1508,7 @@ export default function PipelineWizard() {
     if (currentStepId === "canonical") {
       const state = wizardState.steps.canonical;
       const guidance = STEP_GUIDANCE.canonical;
+      // Keep live progress beside the active wizard action so users can watch the step they just started without leaving the flow.
       return (
         <ExecutionStep
           title="Canonical Recompute"
@@ -1517,6 +1525,7 @@ export default function PipelineWizard() {
           continueLabel="Continue to Review Canonical"
           continueDisabled={state.status !== "completed"}
           guidance={<WizardGuidancePanel sections={guidance.sections} />}
+          livePanel={<LiveProgressPanel />}
           result={renderResultConsole("canonical")}
         >
           <div className="rounded-xl border bg-muted/15 p-4">
@@ -1618,6 +1627,7 @@ export default function PipelineWizard() {
       const guidance = STEP_GUIDANCE.tag;
       const chosenItems = asNumber(canonicalReviewQuery.data?.total);
       const continueLabel = state.status === "completed" ? "Continue to Summary" : "Skip for now";
+      // Keep live progress beside the active wizard action so users can watch the step they just started without leaving the flow.
       return (
         <ExecutionStep
           title="Add Searchable Tags"
@@ -1700,6 +1710,7 @@ export default function PipelineWizard() {
               </CollapsibleSection>
             </div>
           }
+          livePanel={<LiveProgressPanel />}
           result={renderResultConsole("tag")}
         />
       );

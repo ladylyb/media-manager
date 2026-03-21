@@ -21,6 +21,7 @@ interface ExecutionStepProps {
   continueDisabled: boolean;
   guidance?: ReactNode;
   children?: ReactNode;
+  livePanel?: ReactNode;
   result?: ReactNode;
   footer?: ReactNode;
 }
@@ -41,6 +42,7 @@ export function ExecutionStep({
   continueDisabled,
   guidance,
   children,
+  livePanel,
   result,
   footer,
 }: ExecutionStepProps) {
@@ -69,6 +71,7 @@ export function ExecutionStep({
         {children}
         {guidance}
         {error && <ErrorAlert message={error} />}
+        {livePanel}
         {result}
 
         <div className="flex flex-wrap items-center gap-3">

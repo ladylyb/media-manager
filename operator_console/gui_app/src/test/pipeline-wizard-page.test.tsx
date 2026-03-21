@@ -49,6 +49,10 @@ function renderPage() {
 
 describe("Pipeline Wizard page", () => {
   beforeEach(() => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    } as Response);
     mocks.getDirectoryPickerCapability.mockResolvedValue({
       data: { enabled: true, roots: [{ label: "Incoming", path: "/media/incoming" }] },
     });
@@ -73,7 +77,8 @@ describe("Pipeline Wizard page", () => {
         "Guided ingest, planning, apply, chosen-version review, and enrichment with short checkpoints between stages.",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText("Progress")).toBeInTheDocument();
+    expect(screen.getAllByText("Progress").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Abort Wizard" })).toBeInTheDocument();
+    expect(await screen.findByText("[ WAITING FOR LOGS ]")).toBeInTheDocument();
   });
 });

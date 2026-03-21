@@ -2,6 +2,7 @@ import { Cog, Copy, Image, House, Route, type LucideIcon, Settings } from "lucid
 import { useLocation } from "react-router-dom";
 
 import { NavLink } from "@/components/NavLink";
+import { CompactProgressWidget } from "@/components/progress/CompactProgressWidget";
 import {
   Sidebar as ShadcnSidebar,
   SidebarContent,
@@ -95,6 +96,12 @@ export function Sidebar() {
       </SidebarHeader>
       <SidebarContent className="py-2">
         {renderGroup("Operations", mainNav)}
+        {/* Keep the sidebar version compact so users can glance at progress without pushing navigation out of view. */}
+        {!collapsed && (
+          <div className="px-2 pb-2">
+            <CompactProgressWidget />
+          </div>
+        )}
         {renderGroup("Media", mediaNav)}
         {renderGroup("System", systemNav)}
       </SidebarContent>
