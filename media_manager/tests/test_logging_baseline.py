@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import select
 
+import media_manager.app.core.logging_buffer as logging_buffer
 import media_manager.app.persistence.apply as apply_module
 import media_manager.app.persistence.canonicalization as canonical_module
 import media_manager.app.persistence.ingest as ingest_module
@@ -489,3 +490,61 @@ def test_log_level_from_env(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogC
     text = caplog.text
     assert "info should be filtered" not in text
     assert "warning should be present" in text
+
+
+def test_in_memory_log_buffer_returns_newest_last_snapshot() -> None:
+    logging_buffer.LOG_BUFFER.clear()
+    logging_buffer.LOG_BUFFER.extend(["first", "second", "third"])
+
+    assert logging_buffer.get_buffered_logs() == ["first", "second", "third"]
+    assert logging_buffer.get_buffered_logs(limit=2) == ["second", "third"]
+
+
+def test_in_memory_log_handler_registration_is_idempotent() -> None:
+    import media_manager.app.core.logging_config as logging_config
+
+    root_logger = logging.getLogger()
+    original_handlers = list(root_logger.handlers)
+    original_configured = logging_config._CONFIGURED
+    logging_buffer.LOG_BUFFER.clear()
+
+    try:
+        root_logger.handlers = [
+            handler for handler in root_logger.handlers if not isinstance(handler, logging_buffer.InMemoryLogHandler)
+        ]
+        logging_config._CONFIGURED = False
+        logging_config.configure_logging()
+        logging_config._CONFIGURED = False
+        logging_config.configure_logging()
+
+        in_memory_handlers = [
+            handler for handler in root_logger.handlers if isinstance(handler, logging_buffer.InMemoryLogHandler)
+        ]
+        assert len(in_memory_handlers) == 1
+    finally:
+        root_logger.handlers = original_handlers
+        logging_config._CONFIGURED = original_configured
+        logging_buffer.LOG_BUFFER.clear()
+
+
+def test_ingest_and_planner_logs_reach_in_memory_buffer() -> None:
+    import media_manager.app.core.logging_config as logging_config
+
+    logging_buffer.LOG_BUFFER.clear()
+    logging_config = importlib.reload(logging_config)
+    logging_config.configure_logging()
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    formatter = next((handler.formatter for handler in root_logger.handlers if handler.formatter is not None), None)
+    logging_buffer.register_in_memory_log_handler(formatter)
+    ingest_module.logger.disabled = False
+    ingest_module.logger.propagate = True
+    planner_module.logger.disabled = False
+    planner_module.logger.propagate = True
+
+    ingest_module.logger.info("ingest-buffer-check", extra={"phase": "ingest", "action": "PROGRESS"})
+    planner_module.logger.info("planner-buffer-check", extra={"phase": "plan", "run_id": "buffer-run"})
+
+    buffered_logs = logging_buffer.get_buffered_logs()
+    assert any("ingest-buffer-check" in line for line in buffered_logs)
+    assert any("planner-buffer-check" in line for line in buffered_logs)
