@@ -1,7 +1,7 @@
 """add planned action routing fields
 
 Revision ID: 0020
-Revises: 0019_admin_observability_benchmarks
+Revises: 0019_admin_benchmarks
 Create Date: 2026-03-21 00:00:00.000000
 """
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 revision = "0020"
-down_revision = "0019_admin_observability_benchmarks"
+down_revision = "0019_admin_benchmarks"
 branch_labels = None
 depends_on = None
 
