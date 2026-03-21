@@ -8,7 +8,12 @@ import pytest
 
 from media_manager.app.core.date_extraction import extract_best_date
 from media_manager.app.core.mime import detect_mime
-from media_manager.app.core.path_resolver import duplicate_filename, resolve_canonical_path, resolve_duplicate_path
+from media_manager.app.core.path_resolver import (
+    duplicate_filename,
+    reserve_planned_path_by_key,
+    resolve_canonical_path,
+    resolve_duplicate_path,
+)
 
 
 def test_date_extraction_priority_metadata_over_filename_and_fs(tmp_path: Path) -> None:
@@ -131,3 +136,35 @@ def test_mime_detection_marks_unsupported_types(tmp_path: Path) -> None:
     assert info.mime_type == "application/octet-stream"
     assert info.media_kind == "unsupported"
     assert info.is_supported is False
+
+
+def test_reserve_planned_path_by_key_preserves_collision_suffix_order(tmp_path: Path) -> None:
+    desired = (tmp_path / "canonical" / "Media" / "Photos" / "2024" / "02" / "IMG_20240203.jpg").resolve(strict=False)
+    source = (tmp_path / "inbox" / "source.jpg").resolve(strict=False)
+    reserved_paths: set[str] = {str(desired), str(desired.with_name("IMG_20240203_DUP_1.jpg"))}
+
+    reserved, had_collision = reserve_planned_path_by_key(
+        source_key=str(source),
+        desired_path=desired,
+        desired_key=str(desired),
+        reserved_paths=reserved_paths,
+    )
+
+    assert had_collision is True
+    assert reserved == desired.with_name("IMG_20240203_DUP_2.jpg")
+
+
+def test_reserve_planned_path_by_key_keeps_source_equals_destination_as_noop(tmp_path: Path) -> None:
+    source = (tmp_path / "Media" / "Photos" / "2024" / "02" / "IMG_20240203.jpg").resolve(strict=False)
+    reserved_paths: set[str] = set()
+
+    reserved, had_collision = reserve_planned_path_by_key(
+        source_key=str(source),
+        desired_path=source,
+        desired_key=str(source),
+        reserved_paths=reserved_paths,
+    )
+
+    assert had_collision is False
+    assert reserved == source
+    assert str(source) in reserved_paths

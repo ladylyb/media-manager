@@ -18,7 +18,11 @@ from media_manager.app.core.errors import MissingRequiredMetadataError, Planning
 from media_manager.app.core.filenames import generate_canonical_filename, infer_media_type_from_extension
 from media_manager.app.core.logging_config import get_logger
 from media_manager.app.core.metadata_cache import MetadataCache
-from media_manager.app.core.path_resolver import reserve_planned_path, resolve_canonical_path, resolve_duplicate_path
+from media_manager.app.core.path_resolver import (
+    reserve_planned_path_by_key,
+    resolve_canonical_path,
+    resolve_duplicate_path,
+)
 from media_manager.app.core.state_machine import RunState, validate_transition
 from media_manager.app.observability import record_planner_metrics, record_planner_stage_duration
 from media_manager.app.persistence.base import transactional_session
@@ -123,6 +127,12 @@ class RoutingDecision:
     duplicate_index: int | None
 
 
+@dataclass
+class ExistingPlanIndexes:
+    by_file_source: dict[tuple[uuid.UUID, str], PlannedAction]
+    by_exact: dict[tuple[uuid.UUID, str, str, str | None], PlannedAction]
+
+
 class PlanningService:
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
@@ -190,11 +200,13 @@ class PlanningService:
                 load_candidates_duration_s = 0.0
                 action_generation_duration_s = 0.0
                 persist_actions_duration_s = 0.0
+                path_reservation_duration_s = 0.0
                 resolved_required_codes = (
                     {code.upper() for code in required_metadata_codes}
                     if required_metadata_codes is not None
                     else resolve_required_metadata_codes()
                 )
+                path_key_cache: dict[str, str] = {}
 
                 t_load_candidates = perf_counter()
                 if input_paths and ingest_if_needed:
@@ -254,6 +266,9 @@ class PlanningService:
                     summary="Planner action generation started",
                     files_count=total_count,
                 )
+                existing_plan_indexes = self._load_existing_plan_indexes(session, run.id, path_key_cache)
+                # The planner already precomputes canonical-vs-duplicate routing in memory; the hot loop below is now
+                # mostly destination derivation, path reservation, and run-local plan reuse for each candidate instance.
                 for instance in rows:
                     processed_count += 1
                     # Emit periodic progress so long planning loops stay visible without per-item logging.
@@ -273,17 +288,22 @@ class PlanningService:
                         skipped_count += 1
                         continue
                     canonical_instances_processed += 1
-                    action, role, missing_required_count, persist_flush_duration_s = self._plan_single_instance(
+                    action, role, missing_required_count, persist_flush_duration_s, path_reservation_s = (
+                        self._plan_single_instance(
                         session,
                         run,
                         instance,
                         storage_roots=storage_roots,
                         reserved_paths=reserved_paths,
+                        existing_plan_indexes=existing_plan_indexes,
+                        path_key_cache=path_key_cache,
                         routing_decision=routing_by_instance_id.get(instance.file_instance_id),
                         required_metadata_codes=resolved_required_codes,
                         strict_missing_metadata=strict_missing_metadata,
+                        )
                     )
                     persist_actions_duration_s += persist_flush_duration_s
+                    path_reservation_duration_s += path_reservation_s
                     total_required_codes_missing += missing_required_count
                     if action == PlannedActionType.SKIP.value:
                         scanned_count += 1
@@ -390,6 +410,7 @@ class PlanningService:
                         "codes_extracted": (
                             f"lookup_db_s={self._metadata_lookup_db_time_s:.6f},"
                             f"lookup_cache_s={self._metadata_lookup_cache_time_s:.6f},"
+                            f"path_reservation_duration_s={path_reservation_duration_s:.6f},"
                             f"hit_rate={cache_stats.hit_rate:.4f},"
                             f"canonical_instances_processed={canonical_instances_processed},"
                             f"skipped_inactive_instances={skipped_inactive_instances},"
@@ -461,6 +482,32 @@ class PlanningService:
             return 1000
         return min(max(value, 1), 50_000)
 
+    def _normalize_path_key(self, raw_path: str, path_key_cache: dict[str, str]) -> str:
+        cached = path_key_cache.get(raw_path)
+        if cached is not None:
+            return cached
+        normalized = str(Path(raw_path).resolve(strict=False))
+        path_key_cache[raw_path] = normalized
+        return normalized
+
+    def _load_existing_plan_indexes(
+        self,
+        session: Session,
+        run_id: uuid.UUID,
+        path_key_cache: dict[str, str],
+    ) -> ExistingPlanIndexes:
+        rows = session.scalars(select(PlannedAction).where(PlannedAction.run_id == run_id)).all()
+        by_file_source: dict[tuple[uuid.UUID, str], PlannedAction] = {}
+        by_exact: dict[tuple[uuid.UUID, str, str, str | None], PlannedAction] = {}
+        for row in rows:
+            normalized_source = self._normalize_path_key(row.source_path, path_key_cache)
+            normalized_target = (
+                self._normalize_path_key(row.target_path, path_key_cache) if row.target_path is not None else None
+            )
+            by_file_source[(row.file_id, normalized_source)] = row
+            by_exact[(row.file_id, row.action_type, normalized_source, normalized_target)] = row
+        return ExistingPlanIndexes(by_file_source=by_file_source, by_exact=by_exact)
+
     def _lock_run(self, session: Session, run_id: uuid.UUID) -> Run:
         stmt = select(Run).where(Run.id == run_id).with_for_update()
         run = session.scalar(stmt)
@@ -529,6 +576,8 @@ class PlanningService:
 
         decisions: dict[uuid.UUID, RoutingDecision] = {}
         for content_id, grouped_instances in grouped.items():
+            # Duplicate routing is already set-based: group once per content_id, then assign canonical/duplicate
+            # roles deterministically before the hot per-item planning loop starts.
             ordered = sorted(
                 grouped_instances,
                 key=lambda item: (
@@ -576,47 +625,6 @@ class PlanningService:
         self._metadata_cache.set(cache_key, metadata)
         return metadata
 
-    def _get_existing_planned_action(
-        self,
-        session: Session,
-        *,
-        run_id: uuid.UUID,
-        file_id: uuid.UUID,
-        action_type: str,
-        source_path: str,
-        target_path: str | None,
-    ) -> PlannedAction | None:
-        stmt = select(PlannedAction).where(
-            PlannedAction.run_id == run_id,
-            PlannedAction.file_id == file_id,
-            PlannedAction.action_type == action_type,
-            PlannedAction.source_path == source_path,
-        )
-        if target_path is None:
-            stmt = stmt.where(PlannedAction.target_path.is_(None))
-        else:
-            stmt = stmt.where(PlannedAction.target_path == target_path)
-        return session.scalar(stmt.limit(1))
-
-    def _get_existing_plan_for_file(
-        self,
-        session: Session,
-        *,
-        run_id: uuid.UUID,
-        file_id: uuid.UUID,
-        source_path: str,
-    ) -> PlannedAction | None:
-        stmt = (
-            select(PlannedAction)
-            .where(
-                PlannedAction.run_id == run_id,
-                PlannedAction.file_id == file_id,
-                PlannedAction.source_path == source_path,
-            )
-            .limit(1)
-        )
-        return session.scalar(stmt)
-
     def _plan_single_instance(
         self,
         session: Session,
@@ -625,19 +633,21 @@ class PlanningService:
         *,
         storage_roots: StorageRoots,
         reserved_paths: set[str],
+        existing_plan_indexes: ExistingPlanIndexes,
+        path_key_cache: dict[str, str],
         routing_decision: RoutingDecision | None,
         required_metadata_codes: set[str],
         strict_missing_metadata: bool,
-    ) -> tuple[str, str, int, float]:
-        source = Path(instance.absolute_path)
-        source_path = str(source.resolve(strict=False))
-        existing_for_file = self._get_existing_plan_for_file(
-            session, run_id=run.id, file_id=instance.file_instance_id, source_path=source_path
-        )
+    ) -> tuple[str, str, int, float, float]:
+        # This inner loop is the dominant hotspot on duplicate-heavy datasets, so we normalize once and reuse
+        # in-memory keys instead of repeatedly resolving the same source/target paths and re-querying run-local plans.
+        source_path = self._normalize_path_key(instance.absolute_path, path_key_cache)
+        source = Path(source_path)
+        existing_for_file = existing_plan_indexes.by_file_source.get((instance.file_instance_id, source_path))
         if existing_for_file is not None:
             if existing_for_file.target_path:
-                reserved_paths.add(str(Path(existing_for_file.target_path).resolve(strict=False)))
-            return existing_for_file.action_type, existing_for_file.role, 0, 0.0
+                reserved_paths.add(self._normalize_path_key(existing_for_file.target_path, path_key_cache))
+            return existing_for_file.action_type, existing_for_file.role, 0, 0.0, 0.0
 
         metadata_map = self._load_metadata_by_content_id(session, instance.content_id)
         present_codes = {code.upper() for code in metadata_map.keys()}
@@ -663,17 +673,17 @@ class PlanningService:
                     "codes_extracted": ",".join(sorted(metadata_map.keys())),
                 },
             )
-            return "SKIPPED_MISSING_METADATA", PlannedActionRole.CANONICAL.value, len(missing_required), 0.0
+            return "SKIPPED_MISSING_METADATA", PlannedActionRole.CANONICAL.value, len(missing_required), 0.0, 0.0
 
         owner = metadata_map.get("OWNER")
         context = metadata_map.get("CONTEXT")
         taken_dt_raw = metadata_map.get("TAKEN_DT")
         if not owner or not context or not taken_dt_raw:
-            return "SKIPPED_MISSING_METADATA", PlannedActionRole.CANONICAL.value, 0, 0.0
+            return "SKIPPED_MISSING_METADATA", PlannedActionRole.CANONICAL.value, 0, 0.0, 0.0
 
         media_type = infer_media_type_from_extension(source)
         if media_type is None:
-            return "SKIPPED_UNSUPPORTED_MIME", PlannedActionRole.CANONICAL.value, 0, 0.0
+            return "SKIPPED_UNSUPPORTED_MIME", PlannedActionRole.CANONICAL.value, 0, 0.0, 0.0
 
         role = routing_decision.role if routing_decision is not None else PlannedActionRole.CANONICAL.value
         duplicate_index = routing_decision.duplicate_index if routing_decision is not None else None
@@ -703,26 +713,25 @@ class PlanningService:
                 canonical_filename=canonical_filename,
             )
 
-        final_destination, had_collision = reserve_planned_path(
-            source.resolve(strict=False),
-            desired_destination.resolve(strict=False),
-            reserved_paths,
+        desired_key = self._normalize_path_key(str(desired_destination), path_key_cache)
+        t_path_reservation = perf_counter()
+        final_destination, had_collision = reserve_planned_path_by_key(
+            source_key=source_path,
+            desired_path=Path(desired_key),
+            desired_key=desired_key,
+            reserved_paths=reserved_paths,
         )
-        planned_target_path = str(final_destination.resolve(strict=False))
-        if source.resolve(strict=False) == final_destination.resolve(strict=False):
+        path_reservation_duration_s = perf_counter() - t_path_reservation
+        planned_target_path = str(final_destination)
+        if source_path == planned_target_path:
             action_type = PlannedActionType.SKIP.value
         elif role == PlannedActionRole.DUPLICATE.value or had_collision:
             action_type = PlannedActionType.COLLISION_RESOLVED.value
         else:
             action_type = PlannedActionType.RENAME.value
 
-        existing_plan = self._get_existing_planned_action(
-            session,
-            run_id=run.id,
-            file_id=instance.file_instance_id,
-            action_type=action_type,
-            source_path=source_path,
-            target_path=planned_target_path,
+        existing_plan = existing_plan_indexes.by_exact.get(
+            (instance.file_instance_id, action_type, source_path, planned_target_path)
         )
         persist_flush_duration_s = 0.0
         if existing_plan is None:
@@ -739,7 +748,11 @@ class PlanningService:
             t_flush = perf_counter()
             session.flush()
             persist_flush_duration_s = perf_counter() - t_flush
-        return action_type, role, 0, persist_flush_duration_s
+            existing_plan_indexes.by_file_source[(instance.file_instance_id, source_path)] = plan
+            existing_plan_indexes.by_exact[(instance.file_instance_id, action_type, source_path, planned_target_path)] = (
+                plan
+            )
+        return action_type, role, 0, persist_flush_duration_s, path_reservation_duration_s
 
     def _record_planning_failure(self, run_id: uuid.UUID, code: str, message: str) -> None:
         with transactional_session(self._session_factory) as session:
