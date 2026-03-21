@@ -27,6 +27,19 @@ describe("parseProgressLogs", () => {
     expect(result.totalCount).toBe(80);
   });
 
+  it("uses the newest completion line instead of an older active progress line", () => {
+    const result = parseProgressLogs([
+      "2026-03-21 INFO media_manager.app.persistence.ingest phase=ingest action=PROGRESS processed_count=2800 total_count=2850 progress_percent=98.2 throughput_fps=28.2 Progress: 2800/2850 files (98.2%) | 28.2 files/sec | elapsed 99.2s",
+      "2026-03-21 INFO media_manager.app.persistence.ingest phase=ingest action=PROGRESS processed_count=2850 total_count=2850 progress_percent=100.0 throughput_fps=28.2 Progress: 2850/2850 files (100.0%) | 28.2 files/sec | elapsed 101.1s",
+    ]);
+
+    expect(result.phase).toBe("ingest");
+    expect(result.processedCount).toBe(2850);
+    expect(result.totalCount).toBe(2850);
+    expect(result.progressPercent).toBe(100);
+    expect(result.status).toBe("idle");
+  });
+
   it("marks warning and error lines for highlighting", () => {
     expect(getLogLineTone("2026-03-21 WARNING planner something odd")).toBe("warning");
     expect(getLogLineTone("2026-03-21 ERROR planner failed badly")).toBe("error");
