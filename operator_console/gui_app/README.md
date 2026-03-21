@@ -60,7 +60,7 @@ src/
 | `/operations` | Import workspace with risk labels and calmer follow-up actions |
 | `/pipeline-wizard` | Organize workflow with guided review checkpoints |
 | `/admin/diagnostics` | Legacy compatibility route into Admin tabs for activity, file history, and integrity checks |
-| `/duplicates` | Duplicate Review workspace for side-by-side comparison |
+| `/duplicates` | Throughput-first duplicate review workspace with queue, progress, and keyboard shortcuts |
 | `/gallery` | Library browsing surface with filters, sort controls, and detail modal |
 | `/gallery/:fileId` | Full-page canonical media detail |
 | `/policy` | Legacy compatibility route that redirects to Admin Library Rules |

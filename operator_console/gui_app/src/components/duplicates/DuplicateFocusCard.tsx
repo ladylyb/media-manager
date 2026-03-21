@@ -1,0 +1,58 @@
+import { Card, CardContent } from "@/components/ui/card";
+import { StatusBadge } from "@/components/StatusBadge";
+import type { DuplicateFile } from "@/types";
+
+import { DuplicateMediaPreview } from "@/components/duplicates/DuplicateMediaPreview";
+
+function basename(path: string): string {
+  const segments = path.split(/[\\/]/).filter(Boolean);
+  return segments.at(-1) ?? path;
+}
+
+interface DuplicateFocusCardProps {
+  badge: string;
+  description: string;
+  emphasis?: "default" | "success" | "info";
+  file: DuplicateFile;
+  title?: string;
+}
+
+export function DuplicateFocusCard({
+  badge,
+  description,
+  emphasis = "default",
+  file,
+  title,
+}: DuplicateFocusCardProps) {
+  return (
+    <Card
+      className={
+        emphasis === "success"
+          ? "overflow-hidden rounded-[28px] border-success/35 bg-success/5 shadow-sm"
+          : emphasis === "info"
+            ? "overflow-hidden rounded-[28px] border-primary/25 bg-primary/5 shadow-sm"
+            : "overflow-hidden rounded-[28px] border-border/70 bg-background/90 shadow-sm"
+      }
+    >
+      <CardContent className="space-y-4 p-4">
+        <DuplicateMediaPreview
+          src={file.thumbnail_url}
+          alt={basename(file.path)}
+          isImage={file.is_image}
+          mediaType={file.media_type}
+          className="aspect-[4/3]"
+        />
+        <div className="space-y-2">
+          <StatusBadge
+            label={badge}
+            severity={emphasis === "success" ? "success" : emphasis === "info" ? "info" : "neutral"}
+          />
+          <div>
+            <p className="text-base font-semibold text-foreground">{title ?? basename(file.path)}</p>
+            <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
