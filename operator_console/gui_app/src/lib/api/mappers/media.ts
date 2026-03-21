@@ -57,6 +57,7 @@ export function mapDuplicateGroups(payload: Record<string, unknown>): DuplicateG
         path: absolutePath,
         media_type: String(item.media_type ?? "OTHER"),
         is_image: Boolean(item.is_image),
+        media_url: item.media_url ? String(item.media_url) : null,
         thumbnail_url: item.thumbnail_url ? String(item.thumbnail_url) : null,
         is_canonical: absolutePath === canonicalPath,
       };
@@ -66,6 +67,13 @@ export function mapDuplicateGroups(payload: Record<string, unknown>): DuplicateG
       hash: String(row.group_id ?? ""),
       canonical_path: String(canonical.absolute_path ?? ""),
       duplicates: mappedFiles,
+      review_status: row.review_status ? String(row.review_status) as DuplicateGroup["review_status"] : null,
+      reviewed_at: row.reviewed_at ? String(row.reviewed_at) : null,
+      reviewed_canonical_instance_id: row.reviewed_canonical_instance_id
+        ? String(row.reviewed_canonical_instance_id)
+        : null,
+      is_stale: Boolean(row.is_stale),
+      stale_reason: row.stale_reason ? String(row.stale_reason) as DuplicateGroup["stale_reason"] : null,
     };
   });
 }

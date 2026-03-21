@@ -28,6 +28,11 @@ export interface DuplicateGroup {
   hash: string;
   canonical_path: string;
   duplicates: DuplicateFile[];
+  review_status?: "looks_right" | "needs_review" | "not_sure" | null;
+  reviewed_at?: string | null;
+  reviewed_canonical_instance_id?: string | null;
+  is_stale?: boolean;
+  stale_reason?: "canonical_changed" | "group_membership_changed" | null;
 }
 
 export interface DuplicateFile {
@@ -35,6 +40,7 @@ export interface DuplicateFile {
   path: string;
   media_type: string;
   is_image: boolean;
+  media_url?: string | null;
   thumbnail_url?: string | null;
   is_canonical: boolean;
 }

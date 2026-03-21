@@ -1,4 +1,4 @@
-import { apiGet } from "@/lib/api/client";
+import { apiGet, apiPost } from "@/lib/api/client";
 import { withData } from "@/lib/api/envelope";
 import {
   mapAnalyticsSummary,
@@ -41,6 +41,16 @@ export const getCanonicalTags = async (q?: string) => {
 export const getDuplicates = async () => {
   const envelope = await apiGet<Record<string, unknown>>("/duplicates");
   return withData(envelope, mapDuplicateGroups(envelope.data));
+};
+
+export const setDuplicateReview = async (payload: {
+  content_id: string;
+  review_status: "looks_right" | "needs_review" | "not_sure";
+  reviewed_canonical_instance_id: string;
+  reviewed_by?: string;
+}) => {
+  const envelope = await apiPost<Record<string, unknown>>("/duplicates/review", payload);
+  return withData(envelope, envelope.data);
 };
 
 export const getMediaByHash = async (hashPrefix: string, params?: { page?: number; limit?: number }) => {

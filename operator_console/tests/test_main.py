@@ -57,6 +57,7 @@ def test_canonical_api_route_inventory_and_v1_removal() -> None:
         "/api/admin/benchmarks/runs/{operation_run_id}",
         "/api/admin/benchmarks/runs/{operation_run_id}/cancel",
         "/api/gallery/{file_id}",
+        "/api/duplicates/review",
     }
 
     assert expected_canonical_paths.issubset(route_paths)
@@ -256,6 +257,7 @@ class _FakeService:
                             "absolute_path": "/dataset/a.jpg",
                             "media_type": "IMG",
                             "is_image": True,
+                            "media_url": "/media/aaaaaaaa-0000-0000-0000-000000000001",
                             "thumbnail_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000001",
                         },
                         {
@@ -263,6 +265,7 @@ class _FakeService:
                             "absolute_path": "/dataset/b.jpg",
                             "media_type": "IMG",
                             "is_image": True,
+                            "media_url": "/media/aaaaaaaa-0000-0000-0000-000000000002",
                             "thumbnail_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000002",
                         },
                     ],
@@ -468,9 +471,13 @@ class _FakeService:
 
     def resolve_media_source(self, file_instance_id: UUID) -> tuple[Path, str] | None:
         if str(file_instance_id) in {
+            "aaaaaaaa-0000-0000-0000-000000000001",
+            "aaaaaaaa-0000-0000-0000-000000000002",
             "33333333-0000-0000-0000-000000000001",
             "33333333-0000-0000-0000-000000000002",
         }:
+            if str(file_instance_id).startswith("aaaaaaaa-"):
+                return Path(__file__), "image/jpeg"
             return Path(__file__), "video/mp4"
         return None
 
@@ -840,6 +847,7 @@ class _FakeReadServices:
                             "absolute_path": "/dataset/a.jpg",
                             "media_type": "IMG",
                             "is_image": True,
+                            "media_url": "/media/aaaaaaaa-0000-0000-0000-000000000001",
                             "thumbnail_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000001",
                         },
                         {
@@ -847,6 +855,7 @@ class _FakeReadServices:
                             "absolute_path": "/dataset/b.jpg",
                             "media_type": "IMG",
                             "is_image": True,
+                            "media_url": "/media/aaaaaaaa-0000-0000-0000-000000000002",
                             "thumbnail_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000002",
                         },
                     ],
@@ -854,6 +863,11 @@ class _FakeReadServices:
                         "file_instance_id": "aaaaaaaa-0000-0000-0000-000000000001",
                         "absolute_path": "/dataset/a.jpg",
                     },
+                    "review_status": None,
+                    "reviewed_at": None,
+                    "reviewed_canonical_instance_id": None,
+                    "is_stale": False,
+                    "stale_reason": None,
                 }
             ]
         }
@@ -980,6 +994,27 @@ class _FakeReadServices:
 
 
 class _FakeOperationServices:
+    def duplicate_review_set(
+        self,
+        *,
+        content_id: str,
+        review_status: str,
+        reviewed_canonical_instance_id: str,
+        reviewed_by: str | None = None,
+    ) -> dict[str, object]:
+        _ = reviewed_by
+        UUID(content_id)
+        UUID(reviewed_canonical_instance_id)
+        return {
+            "content_id": content_id,
+            "review_status": review_status,
+            "reviewed_at": "2026-03-21T10:00:00+00:00",
+            "reviewed_canonical_instance_id": reviewed_canonical_instance_id,
+            "group_signature": "signature",
+            "is_stale": False,
+            "stale_reason": None,
+        }
+
     def ingest(self, *, folder_path: str, dry_run: bool) -> dict[str, object]:
         return {
             "operation": "INGEST",
@@ -1883,6 +1918,19 @@ def test_media_endpoint_streams_file() -> None:
     assert response.headers["content-type"].startswith("video/mp4")
 
 
+def test_media_endpoint_streams_duplicate_image_file() -> None:
+    """GET /media/{id} should stream full duplicate image bytes when eligible."""
+    app.dependency_overrides[get_operator_console_service] = _FakeService
+    client = TestClient(app)
+    try:
+        response = client.get("/media/aaaaaaaa-0000-0000-0000-000000000001")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/jpeg")
+
+
 def test_media_endpoint_returns_404_for_missing() -> None:
     """GET /media/{id} should return 404 when media cannot be resolved."""
     app.dependency_overrides[get_operator_console_service] = _FakeService
@@ -1981,6 +2029,7 @@ def test_duplicates_endpoint_returns_json() -> None:
                         "absolute_path": "/dataset/a.jpg",
                         "media_type": "IMG",
                         "is_image": True,
+                        "media_url": "/media/aaaaaaaa-0000-0000-0000-000000000001",
                         "thumbnail_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000001",
                     },
                     {
@@ -1988,6 +2037,7 @@ def test_duplicates_endpoint_returns_json() -> None:
                         "absolute_path": "/dataset/b.jpg",
                         "media_type": "IMG",
                         "is_image": True,
+                        "media_url": "/media/aaaaaaaa-0000-0000-0000-000000000002",
                         "thumbnail_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000002",
                     },
                 ],
@@ -1995,9 +2045,34 @@ def test_duplicates_endpoint_returns_json() -> None:
                     "file_instance_id": "aaaaaaaa-0000-0000-0000-000000000001",
                     "absolute_path": "/dataset/a.jpg",
                 },
+                "review_status": None,
+                "reviewed_at": None,
+                "reviewed_canonical_instance_id": None,
+                "is_stale": False,
+                "stale_reason": None,
             }
         ]
     }
+
+
+def test_duplicates_review_endpoint_persists_decision() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/duplicates/review",
+            json={
+                "content_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "review_status": "looks_right",
+                "reviewed_canonical_instance_id": "aaaaaaaa-0000-0000-0000-000000000001",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"]["review_status"] == "looks_right"
 
 
 def test_thumbnail_endpoint_returns_file_response() -> None:

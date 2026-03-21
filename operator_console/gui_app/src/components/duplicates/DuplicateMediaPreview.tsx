@@ -10,6 +10,7 @@ interface DuplicateMediaPreviewProps {
   isImage: boolean;
   mediaType: string;
   className?: string;
+  fit?: "cover" | "contain";
 }
 
 export function DuplicateMediaPreview({
@@ -18,6 +19,7 @@ export function DuplicateMediaPreview({
   isImage,
   mediaType,
   className,
+  fit = "cover",
 }: DuplicateMediaPreviewProps) {
   const [imageSrc, setImageSrc] = useState(src ?? null);
 
@@ -36,7 +38,7 @@ export function DuplicateMediaPreview({
         <img
           src={imageSrc}
           alt={alt}
-          className="h-full w-full object-cover"
+          className={cn("h-full w-full", fit === "contain" ? "object-contain" : "object-cover")}
           onError={() => setImageSrc(null)}
         />
       ) : (

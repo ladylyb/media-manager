@@ -15,6 +15,9 @@ interface DuplicateFocusCardProps {
   emphasis?: "default" | "success" | "info";
   file: DuplicateFile;
   title?: string;
+  className?: string;
+  previewClassName?: string;
+  previewFit?: "cover" | "contain";
 }
 
 export function DuplicateFocusCard({
@@ -23,24 +26,30 @@ export function DuplicateFocusCard({
   emphasis = "default",
   file,
   title,
+  className,
+  previewClassName,
+  previewFit,
 }: DuplicateFocusCardProps) {
   return (
     <Card
       className={
-        emphasis === "success"
-          ? "overflow-hidden rounded-[28px] border-success/35 bg-success/5 shadow-sm"
-          : emphasis === "info"
-            ? "overflow-hidden rounded-[28px] border-primary/25 bg-primary/5 shadow-sm"
-            : "overflow-hidden rounded-[28px] border-border/70 bg-background/90 shadow-sm"
+        `${
+          emphasis === "success"
+            ? "overflow-hidden rounded-[28px] border-success/35 bg-success/5 shadow-sm"
+            : emphasis === "info"
+              ? "overflow-hidden rounded-[28px] border-primary/25 bg-primary/5 shadow-sm"
+              : "overflow-hidden rounded-[28px] border-border/70 bg-background/90 shadow-sm"
+        } ${className ?? ""}`
       }
     >
       <CardContent className="space-y-4 p-4">
         <DuplicateMediaPreview
-          src={file.thumbnail_url}
+          src={file.media_url ?? file.thumbnail_url}
           alt={basename(file.path)}
           isImage={file.is_image}
           mediaType={file.media_type}
-          className="aspect-[4/3]"
+          className={previewClassName ?? "aspect-[4/3]"}
+          fit={previewFit}
         />
         <div className="space-y-2">
           <StatusBadge
@@ -48,8 +57,8 @@ export function DuplicateFocusCard({
             severity={emphasis === "success" ? "success" : emphasis === "info" ? "info" : "neutral"}
           />
           <div>
-            <p className="text-base font-semibold text-foreground">{title ?? basename(file.path)}</p>
-            <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+            <p className="truncate text-base font-semibold text-foreground">{title ?? basename(file.path)}</p>
+            <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{description}</p>
           </div>
         </div>
       </CardContent>

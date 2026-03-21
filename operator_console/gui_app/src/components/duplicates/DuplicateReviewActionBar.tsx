@@ -3,7 +3,7 @@ import { AlertCircle, ArrowLeft, ArrowRight, CheckCircle2, HelpCircle } from "lu
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-type ReviewMark = "looks-right" | "needs-review" | "unsure";
+type ReviewMark = "looks_right" | "needs_review" | "not_sure";
 
 interface DuplicateReviewActionBarProps {
   activeMark?: ReviewMark;
@@ -55,32 +55,9 @@ export function DuplicateReviewActionBar({
   onPrev,
 }: DuplicateReviewActionBarProps) {
   return (
-    <div className="sticky bottom-4 z-10 rounded-[28px] border border-border/70 bg-card/95 p-4 shadow-lg backdrop-blur">
+    <div className="sticky bottom-4 z-10 rounded-[24px] border border-border/70 bg-card/95 p-4 shadow-lg backdrop-blur">
       <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <div className="flex flex-wrap gap-2">
-          <ActionChoice
-            active={activeMark === "looks-right"}
-            icon={CheckCircle2}
-            label="Looks right"
-            onClick={() => onMark("looks-right")}
-            tone="success"
-          />
-          <ActionChoice
-            active={activeMark === "needs-review"}
-            icon={AlertCircle}
-            label="Needs review"
-            onClick={() => onMark("needs-review")}
-            tone="destructive"
-          />
-          <ActionChoice
-            active={activeMark === "unsure"}
-            icon={HelpCircle}
-            label="Not sure"
-            onClick={() => onMark("unsure")}
-            tone="caution"
-          />
-        </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button type="button" variant="outline" onClick={onPrev} disabled={!hasPrev}>
             <ArrowLeft className="h-4 w-4" />
             Prev
@@ -89,6 +66,30 @@ export function DuplicateReviewActionBar({
             Next
             <ArrowRight className="h-4 w-4" />
           </Button>
+          <span className="ml-1 text-xs text-muted-foreground">1 / 2 / 3 to mark</span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <ActionChoice
+            active={activeMark === "looks_right"}
+            icon={CheckCircle2}
+            label="Looks right"
+            onClick={() => onMark("looks_right")}
+            tone="success"
+          />
+          <ActionChoice
+            active={activeMark === "needs_review"}
+            icon={AlertCircle}
+            label="Needs review"
+            onClick={() => onMark("needs_review")}
+            tone="destructive"
+          />
+          <ActionChoice
+            active={activeMark === "not_sure"}
+            icon={HelpCircle}
+            label="Not sure"
+            onClick={() => onMark("not_sure")}
+            tone="caution"
+          />
         </div>
       </div>
     </div>
