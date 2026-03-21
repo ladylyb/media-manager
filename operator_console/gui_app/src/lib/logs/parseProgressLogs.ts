@@ -85,14 +85,8 @@ export function parseProgressLogs(lines: string[]): ParsedLogState {
     })
     .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null);
 
-  const activePlan = [...candidates]
-    .reverse()
-    .find((candidate) => candidate.phase === "plan" && (candidate.progressPercent ?? 100) < 100);
-  const activeIngest = [...candidates]
-    .reverse()
-    .find((candidate) => candidate.phase === "ingest" && (candidate.progressPercent ?? 100) < 100);
   const latest = [...candidates].reverse().find(Boolean) ?? null;
-  const selected = activePlan ?? activeIngest ?? latest;
+  const selected = latest;
 
   if (!selected) {
     return {
