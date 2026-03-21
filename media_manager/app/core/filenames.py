@@ -78,7 +78,7 @@ def generate_canonical_filename(
     owner: str = "LL",
     context: str = "General",
 ) -> str:
-    """Return deterministic canonical filename: [Type]_[YYYYMMDD]_[HHMMSS]_[Owner]_[Context].[ext]."""
+    """Return deterministic canonical filename with optional millisecond precision."""
     media = media_type.upper()
     if media not in {"IMG", "VID"}:
         raise ValueError("media_type must be IMG or VID")
@@ -88,6 +88,10 @@ def generate_canonical_filename(
 
     dt_utc = taken_datetime.astimezone(UTC)
     date_part = dt_utc.strftime("%Y%m%d")
+    # Some capture sources include sub-second precision. Preserve milliseconds when present so
+    # same-second bursts can fan out into distinct canonical names before collision fallback kicks in.
     time_part = dt_utc.strftime("%H%M%S")
+    if dt_utc.microsecond:
+        time_part = f"{time_part}{dt_utc.microsecond // 1000:03d}"
     ext = _normalize_extension(extension)
     return f"{media}_{date_part}_{time_part}_{owner}_{context}.{ext}"
