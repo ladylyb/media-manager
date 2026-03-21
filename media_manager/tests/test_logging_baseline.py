@@ -235,6 +235,28 @@ def test_plan_logs_stage_narration_for_realistic_run(
     assert ("finalize", "completed") in stage_statuses
 
 
+def test_plan_perf_metric_includes_path_reservation_timing(
+    tmp_path: Path, session_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, dict]] = []
+
+    def _capture(message: str, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        calls.append((message, kwargs.get("extra", {})))
+
+    monkeypatch.setattr(planner_module.logger, "info", _capture)
+
+    run_service = RunService(session_factory)
+    planner = PlanningService(session_factory)
+    run = run_service.create_run()
+    first = _write_file(tmp_path / "planner-perf" / "a.jpg", b"same")
+    second = _write_file(tmp_path / "planner-perf" / "b.jpg", b"same")
+    planner.plan_run(run.id, [first, second])
+
+    perf_logs = [extra for message, extra in calls if message == "Perf metric" and extra.get("phase") == "plan"]
+    assert len(perf_logs) == 1
+    assert "path_reservation_duration_s=" in perf_logs[0]["codes_extracted"]
+
+
 def test_plan_short_run_still_logs_final_progress(
     tmp_path: Path, session_factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:

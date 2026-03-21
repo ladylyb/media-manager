@@ -19,13 +19,35 @@ def duplicate_filename(canonical_filename: str, duplicate_index: int) -> str:
     return f"{path.stem}_DUP_{duplicate_index}{path.suffix}"
 
 
+def collision_filename(canonical_filename: str, collision_index: int) -> str:
+    if collision_index < 1:
+        raise ValueError("collision_index must be >= 1")
+    path = Path(canonical_filename)
+    return f"{path.stem}_C{collision_index:02d}{path.suffix}"
+
+
 def reserve_planned_path(
     source_path: Path,
     desired_path: Path,
     reserved_paths: set[str],
 ) -> tuple[Path, bool]:
-    desired_key = str(desired_path.resolve(strict=False))
-    source_key = str(source_path.resolve(strict=False))
+    return reserve_planned_path_by_key(
+        source_key=str(source_path.resolve(strict=False)),
+        desired_path=desired_path.resolve(strict=False),
+        desired_key=str(desired_path.resolve(strict=False)),
+        reserved_paths=reserved_paths,
+    )
+
+
+def reserve_planned_path_by_key(
+    *,
+    source_key: str,
+    desired_path: Path,
+    desired_key: str,
+    reserved_paths: set[str],
+    collision_marker: str = "DUP",
+) -> tuple[Path, bool]:
+    """Reserve a deterministic target path using already-normalized string keys."""
     if source_key == desired_key:
         reserved_paths.add(desired_key)
         return desired_path, False
@@ -37,8 +59,11 @@ def reserve_planned_path(
     suffix = desired_path.suffix
     idx = 1
     while True:
-        candidate = desired_path.with_name(f"{stem}_DUP_{idx}{suffix}")
-        candidate_key = str(candidate.resolve(strict=False))
+        if collision_marker == "C":
+            candidate = desired_path.with_name(f"{stem}_C{idx:02d}{suffix}")
+        else:
+            candidate = desired_path.with_name(f"{stem}_{collision_marker}_{idx}{suffix}")
+        candidate_key = str(candidate)
         if source_key == candidate_key:
             reserved_paths.add(candidate_key)
             return candidate, False
