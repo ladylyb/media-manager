@@ -8,6 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import time
 from time import perf_counter
 
 from sqlalchemy import func, select
@@ -142,7 +143,31 @@ class PlanningService:
                 load_candidates_duration_s = perf_counter() - t_load_candidates
 
                 t_action_generation = perf_counter()
+                started_at = time.time()
+                total_count = len(rows)
+                processed_count = 0
                 for instance in rows:
+                    processed_count += 1
+                    # Emit periodic progress so long planning loops stay visible without per-item logging.
+                    if total_count > 0 and (processed_count % 100 == 0 or processed_count == total_count):
+                        elapsed_seconds = max(time.time() - started_at, 0.000001)
+                        progress_percent = (processed_count / total_count) * 100.0
+                        throughput_fps = processed_count / elapsed_seconds
+                        logger.info(
+                            (
+                                f"Progress: {processed_count}/{total_count} files ({progress_percent:.1f}%) | "
+                                f"{throughput_fps:.1f} files/sec | elapsed {elapsed_seconds:.1f}s"
+                            ),
+                            extra={
+                                "run_id": str(run.id),
+                                "phase": "plan",
+                                "processed_count": processed_count,
+                                "total_count": total_count,
+                                "progress_percent": progress_percent,
+                                "elapsed_seconds": elapsed_seconds,
+                                "throughput_fps": throughput_fps,
+                            },
+                        )
                     if instance.status != FileInstanceStatus.ACTIVE.value:
                         skipped_inactive_instances += 1
                         skipped_count += 1

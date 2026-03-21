@@ -9,8 +9,10 @@ import pytest
 from sqlalchemy import select
 
 import media_manager.app.persistence.apply as apply_module
+import media_manager.app.persistence.ingest as ingest_module
 import media_manager.app.persistence.planner as planner_module
 from media_manager.app.persistence.apply import ApplyService
+from media_manager.app.persistence.ingest import IngestService
 from media_manager.app.persistence.models import FailureEvent, FailurePhase, Run
 from media_manager.app.persistence.planner import PlanningService
 from media_manager.app.persistence.runs import RunService
@@ -83,6 +85,115 @@ def test_plan_logs_transition_and_summary_counts(
     assert extra["duplicates"] == summary.duplicate_actions
     assert extra["noop"] == summary.noop_actions
     assert extra["errors"] == 0
+
+
+def test_ingest_logs_progress_for_long_scan_and_final_item(
+    tmp_path: Path, session_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, dict]] = []
+
+    def _capture(message: str, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        calls.append((message, kwargs.get("extra", {})))
+
+    monkeypatch.setattr(ingest_module.logger, "info", _capture)
+
+    ingest = IngestService(session_factory)
+    files = [_write_file(tmp_path / "batch" / f"{idx:03d}.jpg", f"file-{idx}".encode()) for idx in range(105)]
+    ingest.ingest_paths(files)
+
+    progress_logs = [(msg, extra) for msg, extra in calls if extra.get("action") == "PROGRESS"]
+    assert len(progress_logs) == 2
+    first_msg, first_extra = progress_logs[0]
+    final_msg, final_extra = progress_logs[-1]
+    assert "Progress: 100/105 files" in first_msg
+    assert first_extra["phase"] == "ingest"
+    assert first_extra["processed_count"] == 100
+    assert first_extra["total_count"] == 105
+    assert isinstance(first_extra["progress_percent"], float)
+    assert isinstance(first_extra["elapsed_seconds"], float)
+    assert isinstance(first_extra["throughput_fps"], float)
+    assert "Progress: 105/105 files" in final_msg
+    assert final_extra["processed_count"] == 105
+    assert final_extra["total_count"] == 105
+
+
+def test_ingest_short_scan_still_logs_final_progress(
+    tmp_path: Path, session_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, dict]] = []
+
+    def _capture(message: str, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        calls.append((message, kwargs.get("extra", {})))
+
+    monkeypatch.setattr(ingest_module.logger, "info", _capture)
+
+    ingest = IngestService(session_factory)
+    files = [_write_file(tmp_path / "short" / f"{idx:03d}.jpg", f"short-{idx}".encode()) for idx in range(3)]
+    ingest.ingest_paths(files)
+
+    progress_logs = [(msg, extra) for msg, extra in calls if extra.get("action") == "PROGRESS"]
+    assert len(progress_logs) == 1
+    message, extra = progress_logs[0]
+    assert "Progress: 3/3 files" in message
+    assert extra["processed_count"] == 3
+    assert extra["total_count"] == 3
+
+
+def test_plan_logs_progress_for_long_run_and_final_item(
+    tmp_path: Path, session_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, dict]] = []
+
+    def _capture(message: str, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        calls.append((message, kwargs.get("extra", {})))
+
+    monkeypatch.setattr(planner_module.logger, "info", _capture)
+
+    run_service = RunService(session_factory)
+    planner = PlanningService(session_factory)
+    run = run_service.create_run()
+    files = [_write_file(tmp_path / "planner" / f"{idx:03d}.jpg", f"planner-{idx}".encode()) for idx in range(105)]
+    planner.plan_run(run.id, files)
+
+    progress_logs = [(msg, extra) for msg, extra in calls if "processed_count" in extra and extra.get("phase") == "plan"]
+    assert len(progress_logs) == 2
+    first_msg, first_extra = progress_logs[0]
+    final_msg, final_extra = progress_logs[-1]
+    assert "Progress: 100/105 files" in first_msg
+    assert first_extra["run_id"] == str(run.id)
+    assert first_extra["processed_count"] == 100
+    assert first_extra["total_count"] == 105
+    assert isinstance(first_extra["progress_percent"], float)
+    assert isinstance(first_extra["elapsed_seconds"], float)
+    assert isinstance(first_extra["throughput_fps"], float)
+    assert "Progress: 105/105 files" in final_msg
+    assert final_extra["processed_count"] == 105
+    assert final_extra["total_count"] == 105
+
+
+def test_plan_short_run_still_logs_final_progress(
+    tmp_path: Path, session_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, dict]] = []
+
+    def _capture(message: str, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        calls.append((message, kwargs.get("extra", {})))
+
+    monkeypatch.setattr(planner_module.logger, "info", _capture)
+
+    run_service = RunService(session_factory)
+    planner = PlanningService(session_factory)
+    run = run_service.create_run()
+    candidate = _write_file(tmp_path / "single" / "candidate.jpg", b"x")
+    planner.plan_run(run.id, [candidate])
+
+    progress_logs = [(msg, extra) for msg, extra in calls if "processed_count" in extra and extra.get("phase") == "plan"]
+    assert len(progress_logs) == 1
+    message, extra = progress_logs[0]
+    assert "Progress: 1/1 files" in message
+    assert extra["run_id"] == str(run.id)
+    assert extra["processed_count"] == 1
+    assert extra["total_count"] == 1
 
 
 def test_apply_logs_run_start_transition_end(
