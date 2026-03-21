@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 
 from media_manager.app.canonical.context import CanonicalContext
-from media_manager.app.canonical.policies import FirstSeenPolicy, PreferRootPolicy, ShortestPathPolicy
+from media_manager.app.canonical.policies import (
+    ExifFilenameFallbackPolicy,
+    FirstSeenPolicy,
+    PreferRootPolicy,
+    ShortestPathPolicy,
+)
 from media_manager.app.core.errors import CanonicalPolicyException
 from media_manager.app.persistence.models import FileInstance, FileInstanceStatus
 
@@ -60,6 +65,71 @@ def test_shortest_path_policy_uses_deterministic_sort_key() -> None:
     assert selected.file_instance_id == short_path.file_instance_id
 
 
+def test_exif_filename_fallback_prefers_embedded_metadata_first() -> None:
+    policy = ExifFilenameFallbackPolicy()
+    a = _instance("C:/archive/no-date.jpg", seen_second=2)
+    b = _instance("C:/archive/IMG_20240214.jpg", seen_second=1)
+
+    selected = policy.select(
+        "content-4",
+        [a, b],
+        CanonicalContext(taken_dt_source="metadata", filename_evidence_instance_ids=frozenset({str(b.file_instance_id)})),
+    )
+
+    assert selected.file_instance_id == b.file_instance_id
+
+
+def test_exif_filename_fallback_prefers_filename_over_filesystem_only() -> None:
+    policy = ExifFilenameFallbackPolicy()
+    filename_candidate = _instance("C:/archive/IMG_20240214.jpg", seen_second=3)
+    fs_only_candidate = _instance("C:/archive/copy.jpg", seen_second=1)
+
+    selected = policy.select(
+        "content-5",
+        [fs_only_candidate, filename_candidate],
+        CanonicalContext(
+            taken_dt_source="filesystem",
+            filename_evidence_instance_ids=frozenset({str(filename_candidate.file_instance_id)}),
+        ),
+    )
+
+    assert selected.file_instance_id == filename_candidate.file_instance_id
+
+
+def test_exif_filename_fallback_applies_preferred_root_after_evidence_quality() -> None:
+    policy = ExifFilenameFallbackPolicy()
+    filename_candidate = _instance("C:/other/IMG_20240214.jpg", seen_second=5)
+    preferred_root_fs_only = _instance("C:/archive/copy.jpg", seen_second=1)
+
+    selected = policy.select(
+        "content-6",
+        [preferred_root_fs_only, filename_candidate],
+        CanonicalContext(
+            preferred_roots=(Path("C:/archive"),),
+            taken_dt_source="filesystem",
+            filename_evidence_instance_ids=frozenset({str(filename_candidate.file_instance_id)}),
+        ),
+    )
+
+    assert selected.file_instance_id == filename_candidate.file_instance_id
+
+
+def test_exif_filename_fallback_is_deterministic_with_shuffled_input() -> None:
+    policy = ExifFilenameFallbackPolicy()
+    a = _instance("C:/archive/a.jpg", seen_second=3)
+    b = _instance("C:/archive/b.jpg", seen_second=1)
+    c = _instance("C:/archive/IMG_20240214.jpg", seen_second=2)
+    context = CanonicalContext(
+        taken_dt_source="filesystem",
+        filename_evidence_instance_ids=frozenset({str(c.file_instance_id)}),
+    )
+
+    selected_1 = policy.select("content-7", [a, b, c], context)
+    selected_2 = policy.select("content-7", [c, a, b], context)
+    assert selected_1.file_instance_id == c.file_instance_id
+    assert selected_2.file_instance_id == c.file_instance_id
+
+
 def test_policies_raise_for_empty_candidate_list() -> None:
     context = CanonicalContext()
     with pytest.raises(CanonicalPolicyException):
@@ -68,4 +138,6 @@ def test_policies_raise_for_empty_candidate_list() -> None:
         PreferRootPolicy().select("x", [], context)
     with pytest.raises(CanonicalPolicyException):
         ShortestPathPolicy().select("x", [], context)
+    with pytest.raises(CanonicalPolicyException):
+        ExifFilenameFallbackPolicy().select("x", [], context)
 

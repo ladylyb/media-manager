@@ -244,6 +244,13 @@ const policyOptions = [
     helper: "Use this when folder location matters.",
   },
   {
+    value: "EXIF_FILENAME_FALLBACK",
+    title: "Prefer embedded dates, then filename evidence",
+    description:
+      "Best for archives where filesystem timestamps drifted over time and filename patterns are more trustworthy than copied modified dates.",
+    helper: "Uses embedded metadata first, then filename dates, then deterministic fallbacks.",
+  },
+  {
     value: "SHORTEST_PATH",
     title: "Prefer the shortest folder path",
     description:
@@ -254,6 +261,10 @@ const policyOptions = [
 
 function explainPolicyRule(rule: string): string {
   switch (rule) {
+    case "embedded_metadata_evidence DESC":
+      return "Prefer copies backed by embedded metadata or EXIF date evidence first.";
+    case "filename_date_evidence DESC":
+      return "If embedded metadata is not available, prefer copies whose filenames contain a usable date.";
     case "preferred_root_match DESC":
       return "Prefer files inside your chosen folders first.";
     case "first_seen_at ASC":

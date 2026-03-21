@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -12,11 +13,19 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from media_manager.app.core.date_extraction import filename_has_date
 from media_manager.app.core.hashing import sha256_file
 from media_manager.app.core.logging_config import get_logger
 from media_manager.app.persistence.models import FileContent, MediaMetadata, MetadataCode
 
 logger = get_logger(__name__)
+_FILENAME_DT_RE = re.compile(
+    r"(?P<y>19\d{2}|20\d{2})[-_]?"
+    r"(?P<m>0[1-9]|1[0-2])[-_]?"
+    r"(?P<d>0[1-9]|[12]\d|3[01])"
+    r"(?:[T _-]?(?P<h>[01]\d|2[0-3])(?P<min>[0-5]\d)(?P<s>[0-5]\d))?"
+)
+_TAKEN_DT_SOURCE_RANK = {"metadata": 0, "filename": 1, "filesystem": 2, "unknown": 3}
 
 
 @dataclass(frozen=True)
@@ -102,6 +111,54 @@ def _extract_optional_exif(path: Path) -> dict[str, str]:
     return result
 
 
+def _parse_taken_dt_value(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        parsed = _parse_exif_datetime(value)
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _extract_filename_datetime(path: Path) -> datetime | None:
+    match = _FILENAME_DT_RE.search(path.name)
+    if match is None:
+        return None
+    year = int(match.group("y"))
+    month = int(match.group("m"))
+    day = int(match.group("d"))
+    hour = int(match.group("h") or "0")
+    minute = int(match.group("min") or "0")
+    second = int(match.group("s") or "0")
+    try:
+        return datetime(year, month, day, hour, minute, second, tzinfo=UTC)
+    except ValueError:
+        return None
+
+
+def _resolve_taken_datetime(path: Path, exif_values: dict[str, str], stat: object) -> tuple[datetime, str]:
+    taken_dt_raw = exif_values.get("TAKEN_DT")
+    if taken_dt_raw:
+        parsed = _parse_taken_dt_value(taken_dt_raw)
+        if parsed is not None:
+            return parsed, "metadata"
+
+    if filename_has_date(path.name):
+        filename_dt = _extract_filename_datetime(path)
+        if filename_dt is not None:
+            return filename_dt, "filename"
+
+    ctime = datetime.fromtimestamp(float(stat.st_ctime), tz=UTC)
+    return ctime, "filesystem"
+
+
+def taken_dt_source_rank(source: str | None) -> int:
+    return _TAKEN_DT_SOURCE_RANK.get((source or "unknown").strip().lower(), _TAKEN_DT_SOURCE_RANK["unknown"])
+
+
 def extract_file_metadata(path: Path, file_hash: str) -> list[MetadataItem]:
     _ = file_hash  # hash is part of extraction context and logging identity.
     stat = path.stat()
@@ -116,8 +173,9 @@ def extract_file_metadata(path: Path, file_hash: str) -> list[MetadataItem]:
     }
     exif_values = _extract_optional_exif(path)
     rows.update(exif_values)
-    if "TAKEN_DT" not in rows:
-        rows["TAKEN_DT"] = ctime
+    taken_dt, taken_dt_source = _resolve_taken_datetime(path, exif_values, stat)
+    rows["TAKEN_DT"] = taken_dt.isoformat()
+    rows["TAKEN_DT_SOURCE"] = taken_dt_source
 
     return [MetadataItem(code_type=code_type, decode_value=decode_value) for code_type, decode_value in rows.items()]
 

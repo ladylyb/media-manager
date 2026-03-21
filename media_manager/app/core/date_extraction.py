@@ -40,12 +40,23 @@ def _from_metadata(stat_meta: dict | None) -> DateInfo | None:
             dt = value.astimezone(UTC)
         else:
             parsed: datetime | None = None
+            try:
+                parsed = datetime.fromisoformat(str(value))
+            except ValueError:
+                parsed = None
+            if parsed is not None:
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=UTC)
+                else:
+                    parsed = parsed.astimezone(UTC)
             for fmt in (
                 "%Y:%m:%d %H:%M:%S",
                 "%Y-%m-%d %H:%M:%S",
                 "%Y-%m-%dT%H:%M:%S",
                 "%Y-%m-%d_%H%M%S",
             ):
+                if parsed is not None:
+                    break
                 try:
                     parsed = datetime.strptime(str(value), fmt)
                     break
@@ -69,6 +80,10 @@ def _from_filename(filename: str) -> DateInfo | None:
         month = match.group("m")
         return DateInfo(year=year, month=month, source="filename")
     return None
+
+
+def filename_has_date(filename: str) -> bool:
+    return _from_filename(filename) is not None
 
 
 def _from_filesystem(path: Path, stat_meta: dict | None) -> DateInfo | None:

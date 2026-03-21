@@ -11,4 +11,6 @@ class CanonicalContext:
     preferred_roots: tuple[Path, ...] = ()
     created_at_weight: float = 1.0
     path_depth_weight: float = 1.0
+    taken_dt_source: str | None = None
+    filename_evidence_instance_ids: frozenset[str] = frozenset()
 

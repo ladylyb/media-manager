@@ -4,6 +4,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
+from pathlib import Path
 import time
 
 from sqlalchemy import func, select
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from media_manager.app.canonical.context import CanonicalContext
 from media_manager.app.canonical.policies import CanonicalPolicy
+from media_manager.app.core.date_extraction import filename_has_date
 from media_manager.app.core.logging_config import get_logger
 from media_manager.app.persistence.base import transactional_session
 from media_manager.app.persistence.models import (
@@ -21,6 +23,8 @@ from media_manager.app.persistence.models import (
     CanonicalRecomputeRun,
     CanonicalRecomputeStatus,
     FileInstance,
+    MediaMetadata,
+    MetadataCode,
 )
 
 logger = get_logger(__name__)
@@ -75,6 +79,34 @@ def append_assignment(
     session.add(row)
     session.flush()
     return row
+
+
+def build_selection_context(
+    session: Session,
+    *,
+    content_id: uuid.UUID,
+    instances: list[FileInstance],
+    preferred_roots: tuple[Path, ...] = (),
+) -> CanonicalContext:
+    metadata_map = {
+        code_type: value
+        for code_type, value in session.execute(
+            select(MetadataCode.code_type, MediaMetadata.decode_value)
+            .select_from(MediaMetadata)
+            .join(MetadataCode, MediaMetadata.code_id == MetadataCode.id)
+            .where(MediaMetadata.content_id == content_id)
+        ).all()
+    }
+    filename_evidence_instance_ids = frozenset(
+        str(instance.file_instance_id)
+        for instance in instances
+        if filename_has_date(Path(instance.absolute_path).name)
+    )
+    return CanonicalContext(
+        preferred_roots=preferred_roots,
+        taken_dt_source=metadata_map.get("TAKEN_DT_SOURCE"),
+        filename_evidence_instance_ids=filename_evidence_instance_ids,
+    )
 
 
 def recompute_canonical_assignments(
@@ -132,7 +164,16 @@ def recompute_canonical_assignments(
                     ).all()
                     active_assignment = get_active_assignment(session, content_id)
                     old_id = active_assignment.canonical_instance_id if active_assignment else None
-                    selected = policy.select(str(content_id), instances, context)
+                    selected = policy.select(
+                        str(content_id),
+                        instances,
+                        build_selection_context(
+                            session,
+                            content_id=content_id,
+                            instances=instances,
+                            preferred_roots=context.preferred_roots,
+                        ),
+                    )
                     changed = old_id != selected.file_instance_id
 
                     if changed:

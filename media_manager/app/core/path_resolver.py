@@ -16,7 +16,7 @@ def duplicate_filename(canonical_filename: str, duplicate_index: int) -> str:
     if duplicate_index < 1:
         raise ValueError("duplicate_index must be >= 1")
     path = Path(canonical_filename)
-    return f"{path.stem}_DUP{duplicate_index}{path.suffix}"
+    return f"{path.stem}_DUP_{duplicate_index}{path.suffix}"
 
 
 def reserve_planned_path(
@@ -37,7 +37,7 @@ def reserve_planned_path(
     suffix = desired_path.suffix
     idx = 1
     while True:
-        candidate = desired_path.with_name(f"{stem}_{idx}{suffix}")
+        candidate = desired_path.with_name(f"{stem}_DUP_{idx}{suffix}")
         candidate_key = str(candidate.resolve(strict=False))
         if source_key == candidate_key:
             reserved_paths.add(candidate_key)

@@ -4,6 +4,7 @@ import os
 
 from media_manager.app.canonical.policies import (
     CanonicalPolicy,
+    ExifFilenameFallbackPolicy,
     FirstSeenPolicy,
     PreferRootPolicy,
     ShortestPathPolicy,
@@ -25,5 +26,7 @@ def build_canonical_policy(policy_name: str) -> CanonicalPolicy:
         return PreferRootPolicy()
     if normalized == "SHORTEST_PATH":
         return ShortestPathPolicy()
+    if normalized == "EXIF_FILENAME_FALLBACK":
+        return ExifFilenameFallbackPolicy()
     raise CanonicalPolicyException(f"Unknown canonical policy: {policy_name}")
 

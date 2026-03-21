@@ -40,6 +40,14 @@ class PolicySettingsSnapshot:
                 "first_seen_at ASC",
                 "file_instance_id ASC",
             ]
+        elif normalized == "EXIF_FILENAME_FALLBACK":
+            order = [
+                "embedded_metadata_evidence DESC",
+                "filename_date_evidence DESC",
+                "preferred_root_match DESC",
+                "first_seen_at ASC",
+                "file_instance_id ASC",
+            ]
         else:
             order = [
                 "absolute_path_length ASC",

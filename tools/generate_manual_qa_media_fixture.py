@@ -428,7 +428,7 @@ Signals are intentionally descriptive so you can compare planner/apply output ag
 - Verify `05_unsupported_and_noise` produces skips only.
 - Verify `04_exact_duplicates` stays stable across repeated runs.
 - Run `06_collision_targets` with `rename`, `skip`, and `fail`.
-- Confirm `rename` mode yields suffixed destinations such as `__dup01` during apply.
+- Confirm `rename` mode yields suffixed destinations such as `_DUP_1` during apply.
 - Re-run plan/apply after completion and confirm the result shape remains easy to explain.
 """
     _write_text(FIXTURE_ROOT / "00_README_EXPECTATIONS" / "README.md", content)

@@ -18,6 +18,7 @@ from media_manager.app.persistence.models import (
     MediaFile,
     MediaFileStatus,
     MediaMetadata,
+    MetadataCode,
 )
 
 
@@ -62,6 +63,29 @@ def test_ingest_copy_new_path_creates_second_instance(tmp_path: Path, session_fa
         assert len(instances) == 2
         assert len(ledgers) == 2
         assert {row.status for row in ledgers} == {MediaFileStatus.INGESTED.value}
+
+
+def test_ingest_duplicate_with_stronger_filename_evidence_upgrades_taken_dt_source(tmp_path: Path, session_factory) -> None:
+    ingest = IngestService(session_factory)
+    first = _write_file(tmp_path / "copy.jpg", b"same")
+    second = _write_file(tmp_path / "IMG_20240214_235959.jpg", b"same")
+
+    ingest.ingest_paths([first])
+    ingest.ingest_paths([second])
+
+    with session_factory() as session:
+        content = session.scalar(select(FileContent))
+        assert content is not None
+        rows = {
+            code_type: value
+            for code_type, value in session.execute(
+                select(MetadataCode.code_type, MediaMetadata.decode_value)
+                .join(MediaMetadata, MediaMetadata.code_id == MetadataCode.id)
+                .where(MediaMetadata.content_id == content.content_id)
+            ).all()
+        }
+        assert rows["TAKEN_DT_SOURCE"] == "filename"
+        assert rows["TAKEN_DT"] == "2024-02-14T23:59:59+00:00"
 
 
 def test_ingest_same_digest_batch_creates_single_content_and_counts_duplicates(tmp_path: Path, session_factory) -> None:

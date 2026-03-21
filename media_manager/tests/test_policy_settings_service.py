@@ -43,6 +43,21 @@ def test_update_settings_persists_normalized_values(session_factory) -> None:
         assert rows[0].id == 1
 
 
+def test_update_settings_accepts_exif_filename_fallback_policy(session_factory) -> None:
+    service = PolicySettingsService(session_factory)
+
+    created = service.update_settings(
+        UpdatePolicySettingsCommand(
+            selected_policy="exif_filename_fallback",
+            preferred_roots=("/archive",),
+            recanonicalization_enabled=False,
+            version=0,
+        )
+    )
+
+    assert created.selected_policy == "EXIF_FILENAME_FALLBACK"
+
+
 def test_update_settings_rejects_unknown_policy(session_factory) -> None:
     service = PolicySettingsService(session_factory)
 

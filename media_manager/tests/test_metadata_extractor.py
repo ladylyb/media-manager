@@ -29,9 +29,24 @@ def test_extract_file_metadata_uses_exif_taken_dt_when_available(
     rows = metadata_extractor.extract_file_metadata(path, file_hash="h1")
     as_dict = {row.code_type: row.decode_value for row in rows}
     assert as_dict["TAKEN_DT"] == "2024-01-11T10:11:12+00:00"
+    assert as_dict["TAKEN_DT_SOURCE"] == "metadata"
     assert as_dict["OWNER"] == "LL"
     assert as_dict["CONTEXT"] == "General"
     assert as_dict["CAMERA_MODEL"] == "Nikon"
+
+
+def test_extract_file_metadata_uses_filename_date_when_exif_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _write_file(tmp_path / "IMG_20240214_235959.jpg", b"x")
+    monkeypatch.setattr(metadata_extractor, "_extract_optional_exif", lambda _path: {})
+    fixed = datetime(2024, 1, 1, 1, 2, 3, tzinfo=UTC).timestamp()
+    monkeypatch.setattr(Path, "stat", lambda self: type("S", (), {"st_ctime": fixed, "st_mtime": fixed})())
+
+    rows = metadata_extractor.extract_file_metadata(path, file_hash="h1")
+    as_dict = {row.code_type: row.decode_value for row in rows}
+    assert as_dict["TAKEN_DT"] == "2024-02-14T23:59:59+00:00"
+    assert as_dict["TAKEN_DT_SOURCE"] == "filename"
 
 
 def test_extract_file_metadata_falls_back_to_filesystem_timestamp(
@@ -45,6 +60,7 @@ def test_extract_file_metadata_falls_back_to_filesystem_timestamp(
     rows = metadata_extractor.extract_file_metadata(path, file_hash="h1")
     as_dict = {row.code_type: row.decode_value for row in rows}
     assert as_dict["TAKEN_DT"] == datetime.fromtimestamp(fixed, tz=UTC).isoformat()
+    assert as_dict["TAKEN_DT_SOURCE"] == "filesystem"
     assert as_dict["FS_CTIME"] == datetime.fromtimestamp(fixed, tz=UTC).isoformat()
     assert as_dict["FS_MTIME"] == datetime.fromtimestamp(fixed, tz=UTC).isoformat()
 
