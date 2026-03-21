@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+import time
 from time import perf_counter
 
 from sqlalchemy import func, select
@@ -21,7 +23,6 @@ from media_manager.app.persistence.models import (
     FileInstanceStatus,
     MediaFile,
     MediaFileStatus,
-    MediaMetadata,
 )
 
 logger = get_logger(__name__)
@@ -129,6 +130,29 @@ class _IngestLatencySamples:
     db_write_latencies_ms: list[float]
 
 
+@dataclass(frozen=True)
+class _ScannedFileCandidate:
+    path: Path
+    absolute_path: str
+    size_bytes: int
+    digest: str
+
+
+@dataclass(frozen=True)
+class _ScanBatchResult:
+    files_scanned: int
+    scanned_candidates: list[_ScannedFileCandidate]
+    observed_paths: set[str]
+
+
+@dataclass(frozen=True)
+class _IngestSyncResult:
+    new_contents: int
+    new_instances: int
+    duplicates: int
+    metadata_extracted: int
+
+
 @dataclass
 class _ValidationWorkingSet:
     files_scanned: int = 0
@@ -188,6 +212,79 @@ def _append_validation_sample(
     if len(bucket) >= _VALIDATION_SAMPLE_LIMIT:
         return
     bucket.append(IngestValidationSample(current_path=current_path, status=status, detail=detail))
+
+
+def _scan_files_for_ingest(
+    files: list[Path],
+    *,
+    latency_samples: _IngestLatencySamples | None = None,
+) -> _ScanBatchResult:
+    files_scanned = 0
+    scanned_candidates: list[_ScannedFileCandidate] = []
+    observed_paths: set[str] = set()
+    started_at = time.time()
+    total_count = len(files)
+
+    for candidate in files:
+        if not candidate.exists() or not candidate.is_file():
+            continue
+
+        absolute_path = str(candidate.resolve(strict=False))
+        try:
+            size_bytes = int(candidate.stat().st_size)
+            files_scanned += 1
+            # Emit periodic progress so long scans stay visible without per-file log overhead.
+            if total_count > 0 and (files_scanned % 100 == 0 or files_scanned == total_count):
+                elapsed_seconds = max(time.time() - started_at, 0.000001)
+                progress_percent = (files_scanned / total_count) * 100.0
+                throughput_fps = files_scanned / elapsed_seconds
+                logger.info(
+                    (
+                        f"Progress: {files_scanned}/{total_count} files ({progress_percent:.1f}%) | "
+                        f"{throughput_fps:.1f} files/sec | elapsed {elapsed_seconds:.1f}s"
+                    ),
+                    extra={
+                        "phase": "ingest",
+                        "action": "PROGRESS",
+                        "processed_count": files_scanned,
+                        "total_count": total_count,
+                        "progress_percent": progress_percent,
+                        "elapsed_seconds": elapsed_seconds,
+                        "throughput_fps": throughput_fps,
+                    },
+                )
+            t_hash_start = perf_counter()
+            digest = sha256_file(candidate)
+            hash_latency_ms = (perf_counter() - t_hash_start) * 1000.0
+            if latency_samples is not None:
+                latency_samples.hash_latencies_ms.append(hash_latency_ms)
+        except OSError:
+            logger.warning(
+                "File disappeared during ingest; skipping candidate",
+                extra={
+                    "phase": "ingest",
+                    "action": "FILE_MISSING_DURING_INGEST",
+                    "filename": absolute_path,
+                    "files_count": 1,
+                },
+            )
+            continue
+
+        scanned_candidates.append(
+            _ScannedFileCandidate(
+                path=candidate,
+                absolute_path=absolute_path,
+                size_bytes=size_bytes,
+                digest=digest,
+            )
+        )
+        observed_paths.add(absolute_path)
+
+    return _ScanBatchResult(
+        files_scanned=files_scanned,
+        scanned_candidates=scanned_candidates,
+        observed_paths=observed_paths,
+    )
 
 
 def _upsert_media_file_ledger(
@@ -281,6 +378,184 @@ def _upsert_media_file_ledger(
                 ),
             },
         )
+
+
+def _sync_media_file_ledger_batch(
+    session: Session,
+    *,
+    scanned_candidates: list[_ScannedFileCandidate],
+) -> list[MediaFile]:
+    if not scanned_candidates:
+        return []
+
+    absolute_paths = [candidate.absolute_path for candidate in scanned_candidates]
+    live_rows = session.scalars(
+        select(MediaFile)
+        .where(
+            MediaFile.current_path.in_(absolute_paths),
+            MediaFile.status != MediaFileStatus.DELETED.value,
+        )
+        .with_for_update()
+    ).all()
+    ledger_by_path = {row.current_path: row for row in live_rows if row.current_path is not None}
+
+    deleted_counts = {
+        path: int(count)
+        for path, count in session.execute(
+            select(MediaFile.current_path, func.count())
+            .where(
+                MediaFile.current_path.in_(absolute_paths),
+                MediaFile.status == MediaFileStatus.DELETED.value,
+            )
+            .group_by(MediaFile.current_path)
+        ).all()
+        if path is not None
+    }
+
+    new_ledger_rows: list[MediaFile] = []
+    for candidate in scanned_candidates:
+        row = ledger_by_path.get(candidate.absolute_path)
+        if row is None:
+            prior_deleted_count = deleted_counts.get(candidate.absolute_path, 0)
+            if prior_deleted_count > 0:
+                logger.info(
+                    "Path reappeared after delete",
+                    extra={
+                        "phase": "ingest",
+                        "action": "REAPPEARED_AFTER_DELETE",
+                        "filename": candidate.absolute_path,
+                        "files_count": 1,
+                        "codes_extracted": f"prior_deleted_rows={prior_deleted_count}",
+                    },
+                )
+            row = MediaFile(
+                discovered_path=candidate.absolute_path,
+                current_path=candidate.absolute_path,
+                size_bytes=candidate.size_bytes,
+                hash_sha256=candidate.digest,
+                discovered_at=func.now(),
+                status=MediaFileStatus.INGESTED.value,
+                quarantined_at=None,
+                deleted_at=None,
+                ingested_at=func.now(),
+            )
+            ledger_by_path[candidate.absolute_path] = row
+            new_ledger_rows.append(row)
+            continue
+
+        row.current_path = candidate.absolute_path
+        row.size_bytes = candidate.size_bytes
+        row.ingested_at = func.greatest(func.now(), row.discovered_at)
+
+        if row.hash_sha256 is None:
+            row.hash_sha256 = candidate.digest
+            continue
+
+        if row.hash_sha256 != candidate.digest:
+            logger.warning(
+                "Ingest hash mismatch observed for existing ledger row",
+                extra={
+                    "phase": "ingest",
+                    "action": "HASH_MISMATCH",
+                    "filename": candidate.absolute_path,
+                    "files_count": 1,
+                    "file_hash": candidate.digest[:_HASH_PREFIX_LEN],
+                    "codes_extracted": (
+                        f"stored_hash_prefix={row.hash_sha256[:_HASH_PREFIX_LEN]},"
+                        f"computed_hash_prefix={candidate.digest[:_HASH_PREFIX_LEN]},"
+                        f"file_size={candidate.size_bytes}"
+                    ),
+                },
+            )
+
+    return new_ledger_rows
+
+
+def _sync_ingest_batch(
+    session: Session,
+    *,
+    scanned_candidates: list[_ScannedFileCandidate],
+) -> _IngestSyncResult:
+    if not scanned_candidates:
+        return _IngestSyncResult(new_contents=0, new_instances=0, duplicates=0, metadata_extracted=0)
+
+    digests = sorted({candidate.digest for candidate in scanned_candidates})
+    absolute_paths = sorted({candidate.absolute_path for candidate in scanned_candidates})
+
+    content_by_hash = {
+        row.sha256_hash: row
+        for row in session.scalars(select(FileContent).where(FileContent.sha256_hash.in_(digests)).with_for_update()).all()
+    }
+    instance_by_path = {
+        row.absolute_path: row
+        for row in session.scalars(
+            select(FileInstance).where(FileInstance.absolute_path.in_(absolute_paths)).with_for_update()
+        ).all()
+    }
+
+    new_content_rows: list[FileContent] = []
+    new_instance_rows: list[FileInstance] = []
+    metadata_targets: list[tuple[_ScannedFileCandidate, uuid.UUID]] = []
+
+    new_contents = 0
+    new_instances = 0
+    duplicates = 0
+
+    # Keep file-order semantics stable while reusing preloaded DB state so later
+    # files in the same batch see content/instance rows staged earlier in the run.
+    for candidate in scanned_candidates:
+        content = content_by_hash.get(candidate.digest)
+        if content is None:
+            content = FileContent(content_id=uuid.uuid4(), sha256_hash=candidate.digest)
+            content_by_hash[candidate.digest] = content
+            new_content_rows.append(content)
+            metadata_targets.append((candidate, content.content_id))
+            new_contents += 1
+        else:
+            duplicates += 1
+
+        instance = instance_by_path.get(candidate.absolute_path)
+        if instance is None:
+            instance = FileInstance(
+                file_instance_id=uuid.uuid4(),
+                content_id=content.content_id,
+                absolute_path=candidate.absolute_path,
+                filesystem_id=None,
+                status=FileInstanceStatus.ACTIVE.value,
+            )
+            instance_by_path[candidate.absolute_path] = instance
+            new_instance_rows.append(instance)
+            new_instances += 1
+        else:
+            instance.content_id = content.content_id
+            instance.last_seen_at = func.greatest(func.now(), instance.last_seen_at)
+            instance.status = FileInstanceStatus.ACTIVE.value
+
+    new_ledger_rows = _sync_media_file_ledger_batch(session, scanned_candidates=scanned_candidates)
+
+    if new_content_rows:
+        session.add_all(new_content_rows)
+        session.flush()
+    if new_instance_rows:
+        session.add_all(new_instance_rows)
+    if new_ledger_rows:
+        session.add_all(new_ledger_rows)
+
+    metadata_extracted = 0
+    if metadata_targets:
+        metadata_by_content: dict[uuid.UUID, list[metadata_extractor.MetadataItem]] = {}
+        for candidate, content_id in metadata_targets:
+            rows = metadata_extractor.extract_file_metadata(candidate.path, candidate.digest)
+            metadata_by_content[content_id] = rows
+            metadata_extracted += len(rows)
+        metadata_extractor.upsert_metadata_bulk(session, metadata_by_content)
+
+    return _IngestSyncResult(
+        new_contents=new_contents,
+        new_instances=new_instances,
+        duplicates=duplicates,
+        metadata_extracted=metadata_extracted,
+    )
 
 
 def _mark_missing_paths_deleted_for_root(
@@ -435,92 +710,23 @@ def ingest_paths_in_session(
     latency_samples: _IngestLatencySamples | None = None,
 ) -> IngestSummary:
     t_start = perf_counter()
-    scanned = 0
-    new_contents = 0
-    new_instances = 0
-    duplicates = 0
-    metadata_extracted = 0
-    observed_paths: set[str] = set()
+    scan_result = _scan_files_for_ingest(files, latency_samples=latency_samples)
+    scanned = scan_result.files_scanned
 
-    for candidate in files:
-        if not candidate.exists() or not candidate.is_file():
-            continue
-        absolute_path = str(candidate.resolve(strict=False))
-        try:
-            size_bytes = int(candidate.stat().st_size)
-            scanned += 1
-            t_hash_start = perf_counter()
-            # TODO(phase14): if ingest throughput demands it, move to a batched
-            # hash/db pipeline. Phase 13 keeps per-file hashing for correctness.
-            digest = sha256_file(candidate)
-            hash_latency_ms = (perf_counter() - t_hash_start) * 1000.0
-            if latency_samples is not None:
-                latency_samples.hash_latencies_ms.append(hash_latency_ms)
-        except OSError:
-            logger.warning(
-                "File disappeared during ingest; skipping candidate",
-                extra={
-                    "phase": "ingest",
-                    "action": "FILE_MISSING_DURING_INGEST",
-                    "filename": absolute_path,
-                    "files_count": 1,
-                },
-            )
-            continue
-
-        observed_paths.add(absolute_path)
-
-        t_db_start = perf_counter()
-        # media_file remains a pure ingest ledger. Canonical winner/duplicate
-        # decisions, including same-hash cross-path reasoning, live elsewhere.
-        # Hash mismatch reconciliation is intentionally deferred past Phase 13.
-        _upsert_media_file_ledger(session, absolute_path=absolute_path, digest=digest, size_bytes=size_bytes)
-
-        content = session.scalar(select(FileContent).where(FileContent.sha256_hash == digest).with_for_update())
-        content_was_new = False
-        if content is None:
-            content = FileContent(sha256_hash=digest)
-            session.add(content)
-            session.flush()
-            content_was_new = True
-            new_contents += 1
-        else:
-            duplicates += 1
-
-        instance = session.scalar(
-            select(FileInstance).where(FileInstance.absolute_path == absolute_path).with_for_update()
-        )
-        if instance is None:
-            instance = FileInstance(
-                content_id=content.content_id,
-                absolute_path=absolute_path,
-                filesystem_id=None,
-                status=FileInstanceStatus.ACTIVE.value,
-            )
-            session.add(instance)
-            session.flush()
-            new_instances += 1
-        else:
-            instance.content_id = content.content_id
-            instance.last_seen_at = func.now()
-            instance.status = FileInstanceStatus.ACTIVE.value
-
-        if content_was_new:
-            existing_rows = session.scalar(
-                select(func.count())
-                .select_from(MediaMetadata)
-                .where(MediaMetadata.content_id == content.content_id)
-            )
-            if int(existing_rows or 0) == 0:
-                rows = metadata_extractor.extract_file_metadata(candidate, digest)
-                metadata_extractor.upsert_metadata_for_content(session, rows, content.content_id)
-                metadata_extracted += len(rows)
-        db_write_latency_ms = (perf_counter() - t_db_start) * 1000.0
-        if latency_samples is not None:
-            latency_samples.db_write_latencies_ms.append(db_write_latency_ms)
+    t_db_start = perf_counter()
+    sync_result = _sync_ingest_batch(session, scanned_candidates=scan_result.scanned_candidates)
+    db_write_latency_ms = (perf_counter() - t_db_start) * 1000.0
 
     if authoritative_root is not None:
-        _mark_missing_paths_deleted_for_root(session, root=authoritative_root, observed_paths=observed_paths)
+        _mark_missing_paths_deleted_for_root(session, root=authoritative_root, observed_paths=scan_result.observed_paths)
+
+    # Keep ingest results visible to subsequent operations running in the same
+    # session, such as discovery/planning steps that follow ingest immediately.
+    session.flush()
+
+    if latency_samples is not None and scanned > 0:
+        amortized_db_write_ms = db_write_latency_ms / scanned if db_write_latency_ms > 0 else 0.000001
+        latency_samples.db_write_latencies_ms.extend([amortized_db_write_ms] * scanned)
 
     duration_s = perf_counter() - t_start
     logger.info(
@@ -531,17 +737,17 @@ def ingest_paths_in_session(
             "files_count": scanned,
             "duration_s": f"{duration_s:.6f}",
             "codes_extracted": (
-                f"new_contents={new_contents},new_instances={new_instances},"
-                f"duplicates={duplicates},metadata_rows={metadata_extracted}"
+                f"new_contents={sync_result.new_contents},new_instances={sync_result.new_instances},"
+                f"duplicates={sync_result.duplicates},metadata_rows={sync_result.metadata_extracted}"
             ),
         },
     )
     return IngestSummary(
         files_scanned=scanned,
-        new_contents=new_contents,
-        new_instances=new_instances,
-        duplicates_detected=duplicates,
-        metadata_extracted=metadata_extracted,
+        new_contents=sync_result.new_contents,
+        new_instances=sync_result.new_instances,
+        duplicates_detected=sync_result.duplicates,
+        metadata_extracted=sync_result.metadata_extracted,
         duration_s=duration_s,
     )
 

@@ -7,6 +7,7 @@ from time import sleep
 from sqlalchemy import select
 
 import media_manager.app.persistence.ingest as ingest_module
+import media_manager.app.core.metadata_extractor as metadata_extractor
 from media_manager.app.core.hashing import sha256_file
 from media_manager.app.persistence.discovery import process_discovery_paths_in_session
 from media_manager.app.persistence.ingest import IngestService
@@ -61,6 +62,25 @@ def test_ingest_copy_new_path_creates_second_instance(tmp_path: Path, session_fa
         assert len(instances) == 2
         assert len(ledgers) == 2
         assert {row.status for row in ledgers} == {MediaFileStatus.INGESTED.value}
+
+
+def test_ingest_same_digest_batch_creates_single_content_and_counts_duplicates(tmp_path: Path, session_factory) -> None:
+    ingest = IngestService(session_factory)
+    first = _write_file(tmp_path / "first.jpg", b"same")
+    second = _write_file(tmp_path / "nested" / "second.jpg", b"same")
+    third = _write_file(tmp_path / "nested" / "third.jpg", b"same")
+
+    summary = ingest.ingest_paths([first, second, third])
+
+    assert summary.files_scanned == 3
+    assert summary.new_contents == 1
+    assert summary.new_instances == 3
+    assert summary.duplicates_detected == 2
+
+    with session_factory() as session:
+        assert len(session.scalars(select(FileContent)).all()) == 1
+        assert len(session.scalars(select(FileInstance)).all()) == 3
+        assert len(session.scalars(select(MediaMetadata)).all()) > 0
 
 
 def test_canonical_selection_first_seen_wins(tmp_path: Path, session_factory) -> None:
@@ -286,6 +306,40 @@ def test_ingest_zero_byte_file_hash_recording(tmp_path: Path, session_factory) -
         row = session.scalar(select(MediaFile).where(MediaFile.current_path == str(target.resolve(strict=False))))
         assert row is not None
         assert row.hash_sha256 == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+
+def test_ingest_bulk_metadata_upsert_only_targets_new_content(tmp_path: Path, session_factory, monkeypatch) -> None:
+    ingest = IngestService(session_factory)
+    existing = _write_file(tmp_path / "existing.jpg", b"existing")
+    new_file = _write_file(tmp_path / "new.jpg", b"new")
+
+    ingest.ingest_paths([existing])
+
+    bulk_calls: list[dict[object, object]] = []
+    extracted_paths: list[str] = []
+
+    real_extract = metadata_extractor.extract_file_metadata
+    real_bulk = metadata_extractor.upsert_metadata_bulk
+
+    def _capture_extract(path: Path, file_hash: str) -> list[metadata_extractor.MetadataItem]:
+        extracted_paths.append(str(path.resolve(strict=False)))
+        return real_extract(path, file_hash)
+
+    def _capture_bulk(session, metadata_by_content, *args, **kwargs):  # type: ignore[no-untyped-def]
+        bulk_calls.append(dict(metadata_by_content))
+        return real_bulk(session, metadata_by_content, *args, **kwargs)
+
+    monkeypatch.setattr(metadata_extractor, "extract_file_metadata", _capture_extract)
+    monkeypatch.setattr(metadata_extractor, "upsert_metadata_bulk", _capture_bulk)
+
+    summary = ingest.ingest_paths([existing, new_file])
+
+    assert summary.new_contents == 1
+    assert summary.duplicates_detected == 1
+    assert extracted_paths == [str(new_file.resolve(strict=False))]
+    assert len(bulk_calls) == 1
+    assert len(bulk_calls[0]) == 1
+    assert len(next(iter(bulk_calls[0].values()))) > 0
 
 
 def test_ingest_file_disappears_mid_scan_is_safely_skipped(tmp_path: Path, session_factory, monkeypatch) -> None:

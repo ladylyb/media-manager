@@ -183,8 +183,12 @@ def test_cache_hit_ratio_metrics_are_correct_for_repeat_reads(
 ) -> None:
     monkeypatch.setenv("CANONICAL_READ_CACHE_ENABLED", "true")
     ingest = IngestService(session_factory)
+    run_service = RunService(session_factory)
+    planner = PlanningService(session_factory)
     files = _build_dataset(tmp_path / "cache")
     ingest.ingest_paths(files)
+    run = run_service.create_run()
+    planner.plan_run(run.id, files, ingest_if_needed=False)
 
     # Deterministic cache counters require a known-empty cache for the first read.
     materialized_reads._READ_CACHE.clear()
