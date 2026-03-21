@@ -65,6 +65,13 @@ class ApplyIntegrityException(MediaManagerError):
     """Raised when post-apply verification detects integrity violations."""
 
 
+class ApplyTargetOccupiedError(MediaManagerError):
+    """Raised when apply encounters an unexpected occupied destination path."""
+
+    def __init__(self, target_path: str) -> None:
+        super().__init__(f"Apply target path already occupied unexpectedly: {target_path}")
+
+
 class CanonicalPolicyException(MediaManagerError):
     """Raised when canonical policy selection cannot deterministically resolve an instance."""
 

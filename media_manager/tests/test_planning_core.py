@@ -8,7 +8,7 @@ import pytest
 
 from media_manager.app.core.date_extraction import extract_best_date
 from media_manager.app.core.mime import detect_mime
-from media_manager.app.core.path_resolver import resolve_canonical_path, resolve_duplicate_path
+from media_manager.app.core.path_resolver import duplicate_filename, resolve_canonical_path, resolve_duplicate_path
 
 
 def test_date_extraction_priority_metadata_over_filename_and_fs(tmp_path: Path) -> None:
@@ -84,21 +84,33 @@ def test_date_extraction_filesystem_fallback_uses_path_stat_when_higher_sources_
 def test_canonical_path_resolution_and_duplicates(tmp_path: Path) -> None:
     photo = tmp_path / "IMG_20240203.jpg"
     photo.write_bytes(b"abc")
-    info = extract_best_date(photo, mime_type="image/jpeg", stat_meta={}, filename=photo.name)
+    taken = datetime(2024, 2, 3, 1, 2, 3, tzinfo=UTC)
 
-    target = resolve_canonical_path(photo, media_kind="photo", date_info=info, hash_value="a" * 64)
-    assert target == "Media/Photos/2024/02/IMG_20240203.jpg"
-
-    unknown_target = resolve_canonical_path(
-        photo,
-        media_kind="video",
-        date_info=type(info)(year=None, month=None, source="unknown"),
-        hash_value="b" * 64,
+    target = resolve_canonical_path(
+        canonical_root=tmp_path / "canonical",
+        media_type="IMG",
+        taken_datetime=taken,
+        canonical_filename=photo.name,
     )
-    assert unknown_target == "Media/Videos/unknown/IMG_20240203.jpg"
+    assert target == tmp_path / "canonical" / "Media" / "Photos" / "2024" / "02" / "IMG_20240203.jpg"
 
-    duplicate = resolve_duplicate_path(photo, "abcdef123456")
-    assert duplicate == "Media/duplicates/abcdef12/IMG_20240203.jpg"
+    duplicate = resolve_duplicate_path(
+        duplicate_root=tmp_path / "duplicates",
+        media_type="VID",
+        taken_datetime=taken,
+        canonical_filename="VID_20240203_010203_LL_General.mp4",
+        duplicate_index=2,
+    )
+    assert duplicate == (
+        tmp_path
+        / "duplicates"
+        / "Media"
+        / "Videos"
+        / "2024"
+        / "02"
+        / "VID_20240203_010203_LL_General_DUP2.mp4"
+    )
+    assert duplicate_filename("IMG_20240203_010203_LL_General.jpg", 3) == "IMG_20240203_010203_LL_General_DUP3.jpg"
 
 
 def test_mime_detection_classifies_photo_video(tmp_path: Path) -> None:

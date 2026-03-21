@@ -16,8 +16,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from media_manager.app.core.errors import (
     ApplyIntegrityException,
     ApplyStateError,
+    ApplyTargetOccupiedError,
     CanonicalUnreadableError,
-    CollisionResolutionError,
     RunNotFoundError,
 )
 from media_manager.app.core.logging_config import get_logger
@@ -33,6 +33,7 @@ from media_manager.app.persistence.models import (
     FileInstance,
     FileInstanceStatus,
     PlannedAction,
+    PlannedActionRole,
     Run,
     RunStateDB,
 )
@@ -491,48 +492,20 @@ class ApplyService:
 
         destination.parent.mkdir(parents=True, exist_ok=True)
         collision_detected = destination.exists()
-        collision_resolved = False
-
-        final_destination = destination
         if collision_detected:
-            if collision_mode == "skip":
-                return ActionOutcome(
-                    result="SKIPPED",
-                    source_path=str(source_resolved),
-                    target_path=str(destination_resolved),
-                    error_message="collision skipped",
-                    collision_detected=True,
-                    collision_resolved=False,
-                    file_instance_id=action.file_id,
-                    planned_action_id=action.id,
-                )
-            if collision_mode == "fail":
-                logger.error(
-                    "Collision mode fail",
-                    extra={
-                        "run_id": str(run_id),
-                        "phase": "apply",
-                        "planned_action_id": str(action.id),
-                        "file_instance_id": str(action.file_id),
-                        "collision_mode": collision_mode,
-                        "target_path": str(destination_resolved),
-                    },
-                )
-                return ActionOutcome(
-                    result="FAILED",
-                    source_path=str(source_resolved),
-                    target_path=str(destination_resolved),
-                    error_message=f"collision at target path: {destination_resolved}",
-                    collision_detected=True,
-                    collision_resolved=False,
-                    file_instance_id=action.file_id,
-                    planned_action_id=action.id,
-                )
+            self._record_target_occupied_event(run_id, str(destination_resolved))
+            return ActionOutcome(
+                result="FAILED",
+                source_path=str(source_resolved),
+                target_path=str(destination_resolved),
+                error_message=str(ApplyTargetOccupiedError(str(destination_resolved))),
+                collision_detected=True,
+                collision_resolved=False,
+                file_instance_id=action.file_id,
+                planned_action_id=action.id,
+            )
 
-            final_destination = self._resolve_collision_destination(destination, collision_mode)
-            collision_resolved = True
-
-        source.rename(final_destination)
+        source.rename(destination)
         logger.info(
             "File renamed",
             extra={
@@ -540,33 +513,22 @@ class ApplyService:
                 "phase": "apply",
                 "planned_action_id": str(action.id),
                 "file_instance_id": str(action.file_id),
-                "target_filename": final_destination.name,
+                "target_filename": destination.name,
                 "action_type": action.action_type,
                 "action": action.action_type,
+                "role": action.role,
+                "duplicate_index": action.duplicate_index,
             },
         )
         return ActionOutcome(
             result="APPLIED",
             source_path=str(source_resolved),
-            target_path=str(final_destination.resolve(strict=False)),
+            target_path=str(destination.resolve(strict=False)),
             error_message=None,
             collision_detected=collision_detected,
-            collision_resolved=collision_resolved,
+            collision_resolved=False,
             file_instance_id=action.file_id,
             planned_action_id=action.id,
-        )
-
-    def _resolve_collision_destination(self, target_path: Path, collision_mode: CollisionMode) -> Path:
-        original_stem = target_path.stem
-        ext = target_path.suffix
-        for i in range(1, 101):
-            candidate = target_path.with_name(f"{original_stem}__dup{i:02d}{ext}")
-            if not candidate.exists():
-                return candidate
-        raise CollisionResolutionError(
-            original_target_path=str(target_path.resolve(strict=False)),
-            collision_mode=collision_mode,
-            attempt_count=100,
         )
 
     def _verify_applied_action(self, outcome: ActionOutcome) -> bool:
@@ -746,6 +708,20 @@ class ApplyService:
                 )
             )
 
+    def _record_target_occupied_event(self, run_id: uuid.UUID, target_path: str) -> None:
+        with transactional_session(self._session_factory) as session:
+            run = session.scalar(select(Run).where(Run.id == run_id).with_for_update())
+            if run is None:
+                return
+            session.add(
+                FailureEvent(
+                    run_id=run_id,
+                    phase=FailurePhase.APPLY,
+                    error_code="TARGET_PATH_OCCUPIED",
+                    error_message=target_path,
+                )
+            )
+
     def _canonical_guard_context_for_action(self, action: PlannedAction) -> CanonicalGuardContext | None:
         """Return unreadable canonical context when duplicate-destructive action must be skipped."""
         with transactional_session(self._session_factory) as session:
@@ -765,7 +741,10 @@ class ApplyService:
                 )
                 or 0
             )
-            duplicate_action = action.action_type in {"COLLISION_RESOLVED", "MARK_DUPLICATE"}
+            duplicate_action = (
+                action.role == PlannedActionRole.DUPLICATE.value
+                and action.action_type in {"COLLISION_RESOLVED", "MARK_DUPLICATE"}
+            )
             if not duplicate_action and active_duplicate_count <= 1:
                 return None
 

@@ -52,6 +52,11 @@ class PlannedActionType(StrEnum):
     COLLISION_RESOLVED = "COLLISION_RESOLVED"
 
 
+class PlannedActionRole(StrEnum):
+    CANONICAL = "CANONICAL"
+    DUPLICATE = "DUPLICATE"
+
+
 class FileInstanceStatus(StrEnum):
     ACTIVE = "ACTIVE"
     DELETED = "DELETED"
@@ -567,6 +572,8 @@ class PlannedAction(Base):
         nullable=False,
     )
     action_type: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False, default=PlannedActionRole.CANONICAL.value)
+    duplicate_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_path: Mapped[str] = mapped_column(Text, nullable=False)
     target_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

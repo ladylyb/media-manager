@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 
 import pytest
 from sqlalchemy import delete, select, text, update
@@ -131,7 +132,7 @@ def test_phase8_strict_missing_metadata_behavior(tmp_path: Path, session_factory
         )
 
 
-def test_phase8_collision_modes_and_deterministic_rename(tmp_path: Path, session_factory) -> None:
+def test_phase8_target_occupied_records_failure_and_does_not_retarget(tmp_path: Path, session_factory) -> None:
     root = tmp_path / "dataset-collisions"
     files = _build_dataset(root, total_files=20)
     run_service = RunService(session_factory)
@@ -155,48 +156,8 @@ def test_phase8_collision_modes_and_deterministic_rename(tmp_path: Path, session
     collision_target.parent.mkdir(parents=True, exist_ok=True)
     collision_target.write_bytes(b"preexisting")
 
-    summary = apply_service.apply_run(run.id, collision_mode="rename")
-    assert summary.applied_count >= 1
-    assert any(path.name.endswith("__dup01.jpg") for path in collision_target.parent.glob("*__dup01.jpg"))
-    assert not any(path.name.endswith("__dup1.jpg") for path in collision_target.parent.glob("*__dup1.jpg"))
-
-    _truncate_all(session_factory)
-    root_skip = tmp_path / "dataset-skip"
-    files_skip = _build_dataset(root_skip, total_files=20)
-    ingest.ingest_paths(files_skip)
-    run_skip = run_service.create_run()
-    planner.plan_run(run_skip.id, files_skip, ingest_if_needed=False)
-    with session_factory() as session:
-        action_skip = session.scalar(
-            select(PlannedAction)
-            .where(PlannedAction.run_id == run_skip.id, PlannedAction.target_path.is_not(None))
-            .order_by(PlannedAction.target_path.asc())
-        )
-        assert action_skip is not None
-        skip_target = Path(action_skip.target_path)
-    skip_target.parent.mkdir(parents=True, exist_ok=True)
-    skip_target.write_bytes(b"preexisting")
-    skip_summary = apply_service.apply_run(run_skip.id, collision_mode="skip")
-    assert skip_summary.skipped_count >= 1
-
-    _truncate_all(session_factory)
-    root_fail = tmp_path / "dataset-fail"
-    files_fail = _build_dataset(root_fail, total_files=20)
-    ingest.ingest_paths(files_fail)
-    run_fail = run_service.create_run()
-    planner.plan_run(run_fail.id, files_fail, ingest_if_needed=False)
-    with session_factory() as session:
-        action_fail = session.scalar(
-            select(PlannedAction)
-            .where(PlannedAction.run_id == run_fail.id, PlannedAction.target_path.is_not(None))
-            .order_by(PlannedAction.target_path.asc())
-        )
-        assert action_fail is not None
-        fail_target = Path(action_fail.target_path)
-    fail_target.parent.mkdir(parents=True, exist_ok=True)
-    fail_target.write_bytes(b"preexisting")
     with pytest.raises(Exception):
-        apply_service.apply_run(run_fail.id, collision_mode="fail")
+        apply_service.apply_run(run.id, collision_mode="rename")
 
 
 def test_phase8_deterministic_replay_and_canonical_assignment(tmp_path: Path, session_factory) -> None:
@@ -227,10 +188,12 @@ def test_phase8_deterministic_replay_and_canonical_assignment(tmp_path: Path, se
     assert plan_first == plan_repeat
 
     apply_service.apply_run(run1.id, collision_mode="rename")
-    paths_first = _final_paths(root1)
+    paths_first = _final_paths(tmp_path)
     canon_first = _canonical_by_hash(session_factory)
 
     _truncate_all(session_factory)
+    shutil.rmtree(tmp_path / "Media", ignore_errors=True)
+    shutil.rmtree(tmp_path / "Duplicates", ignore_errors=True)
     root2 = tmp_path / "dataset-b"
     files2 = _build_dataset(root2)
     ingest.ingest_paths(files2)
@@ -238,7 +201,7 @@ def test_phase8_deterministic_replay_and_canonical_assignment(tmp_path: Path, se
     run2 = run_service.create_run()
     planner.plan_run(run2.id, files2, ingest_if_needed=False)
     apply_service.apply_run(run2.id, collision_mode="rename")
-    paths_second = _final_paths(root2)
+    paths_second = _final_paths(tmp_path)
     canon_second = _canonical_by_hash(session_factory)
 
     assert paths_first == paths_second

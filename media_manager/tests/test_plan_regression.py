@@ -39,6 +39,8 @@ def _plan_struct(summary, actions: list[PlannedAction]) -> dict[str, object]:
         "actions": [
             {
                 "action_type": row.action_type,
+                "role": row.role,
+                "duplicate_index": row.duplicate_index,
                 "source_path": row.source_path,
                 "target_path": row.target_path,
                 "file_id": str(row.file_id),
@@ -74,16 +76,16 @@ def test_plan_output_parity_structural_snapshot(tmp_path: Path, session_factory)
 
     assert first == second
     assert first["summary"] == {
-        "scanned_count": 2,
-        "supported_count": 2,
+        "scanned_count": 3,
+        "supported_count": 3,
         "skipped_count": 1,
-        "move_actions": 1,
+        "move_actions": 2,
         "noop_actions": 0,
         "duplicate_actions": 1,
     }
 
     action_types = [row["action_type"] for row in first["actions"]]
-    assert action_types == ["COLLISION_RESOLVED", "RENAME"]
+    assert action_types == ["COLLISION_RESOLVED", "RENAME", "RENAME"]
 
 
 def test_plan_structural_output_excludes_trace_artifact_fields(tmp_path: Path, session_factory) -> None:

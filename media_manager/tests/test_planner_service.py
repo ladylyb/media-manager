@@ -16,6 +16,7 @@ from media_manager.app.persistence.models import (
     MediaMetadata,
     MetadataCode,
     PlannedAction,
+    PlannedActionRole,
     PlannedActionType,
     Run,
 )
@@ -53,7 +54,7 @@ def test_duplicate_identity_and_canonical_selection(tmp_path: Path, session_fact
         assert assignments[-1].canonical_instance_id == expected.file_instance_id
 
 
-def test_planner_generates_actions_from_canonical_instances_only(tmp_path: Path, session_factory) -> None:
+def test_planner_generates_actions_for_canonical_and_duplicate_instances(tmp_path: Path, session_factory) -> None:
     run_service = RunService(session_factory)
     planner = PlanningService(session_factory)
     ingest = IngestService(session_factory)
@@ -71,6 +72,8 @@ def test_planner_generates_actions_from_canonical_instances_only(tmp_path: Path,
         actions = session.scalars(select(PlannedAction).where(PlannedAction.run_id == run.id)).all()
         assert len(actions) >= 2
         assert any(a.action_type in {PlannedActionType.RENAME.value, PlannedActionType.COLLISION_RESOLVED.value} for a in actions)
+        assert any(a.role == PlannedActionRole.CANONICAL.value for a in actions)
+        assert any(a.role == PlannedActionRole.DUPLICATE.value for a in actions)
 
 
 def test_planner_does_not_hash_when_planning_from_db_only(
@@ -269,9 +272,14 @@ def test_planner_reads_canonical_assignment_and_ignores_legacy_column(tmp_path: 
 
     run = run_service.create_run()
     summary = planner.plan_run(run.id, [first, second], ingest_if_needed=False)
-    assert summary.scanned_count >= 1
+    assert summary.scanned_count >= 2
     with session_factory() as session:
         actions = session.scalars(select(PlannedAction).where(PlannedAction.run_id == run.id)).all()
-        planned_source_paths = {Path(action.source_path).resolve(strict=False) for action in actions}
-        assert Path(assignment_authority_instance.absolute_path).resolve(strict=False) in planned_source_paths
-        assert Path(legacy_instance.absolute_path).resolve(strict=False) not in planned_source_paths
+        actions_by_source = {Path(action.source_path).resolve(strict=False): action for action in actions}
+        authority_source = Path(assignment_authority_instance.absolute_path).resolve(strict=False)
+        legacy_source = Path(legacy_instance.absolute_path).resolve(strict=False)
+        assert authority_source in actions_by_source
+        assert legacy_source in actions_by_source
+        assert actions_by_source[authority_source].role == PlannedActionRole.CANONICAL.value
+        assert actions_by_source[legacy_source].role == PlannedActionRole.DUPLICATE.value
+        assert actions_by_source[legacy_source].duplicate_index == 1
