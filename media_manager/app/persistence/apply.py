@@ -7,6 +7,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import time
 from typing import Literal
 
 from sqlalchemy import func, select
@@ -38,6 +39,7 @@ from media_manager.app.persistence.models import (
 
 logger = get_logger(__name__)
 _WINDOWS_DRIVE_PATH_RE = re.compile(r"^([A-Za-z]):[\\/](.*)$")
+_APPLY_PROGRESS_EVERY = 100
 
 CollisionMode = Literal["rename", "skip", "fail"]
 
@@ -140,7 +142,19 @@ class ApplyService:
             if len(actions) != total_actions:
                 total_actions = len(actions)
 
-            logger.info("Run started", extra={"run_id": str(run_id), "phase": "apply", "action_type": ""})
+            logger.info(
+                "Run started",
+                extra={
+                    "run_id": str(run_id),
+                    "phase": "apply",
+                    "stage": "execute_actions",
+                    "status": "running",
+                    "action_type": "",
+                    "total_count": total_actions,
+                },
+            )
+            started_at = time.time()
+            processed_count = 0
 
             for action in actions:
                 try:
@@ -186,6 +200,36 @@ class ApplyService:
                     self._persist_action_item(audit_run_id, outcome, outcome.error_message or "action failed")
                     raise RuntimeError(outcome.error_message or "apply action failed")
 
+                processed_count += 1
+                # Emit periodic action progress so long applies show forward movement without per-action chatter.
+                if total_actions > 0 and (
+                    processed_count % _APPLY_PROGRESS_EVERY == 0 or processed_count == total_actions
+                ):
+                    elapsed_seconds = max(time.time() - started_at, 0.000001)
+                    progress_percent = (processed_count / total_actions) * 100.0
+                    throughput_fps = processed_count / elapsed_seconds
+                    logger.info(
+                        (
+                            f"Progress: {processed_count}/{total_actions} items ({progress_percent:.1f}%) | "
+                            f"{throughput_fps:.1f} items/sec | elapsed {elapsed_seconds:.1f}s"
+                        ),
+                        extra={
+                            "run_id": str(run_id),
+                            "phase": "apply",
+                            "stage": "execute_actions",
+                            "status": "running",
+                            "processed_count": processed_count,
+                            "total_count": total_actions,
+                            "progress_percent": progress_percent,
+                            "elapsed_seconds": elapsed_seconds,
+                            "throughput_fps": throughput_fps,
+                            "applied": applied_count,
+                            "skipped": skipped_count,
+                            "duplicates": duplicates_count,
+                            "moves": moves_count,
+                        },
+                    )
+
             self._complete_success(
                 run_id=run_id,
                 audit_run_id=audit_run_id,
@@ -208,7 +252,12 @@ class ApplyService:
                 extra={
                     "run_id": str(run_id),
                     "phase": "apply",
+                    "stage": "finalize",
+                    "status": "completed",
                     "action_type": "",
+                    "processed_count": applied_count + skipped_count,
+                    "total_count": total_actions,
+                    "progress_percent": 100.0 if total_actions > 0 else None,
                     "applied": summary.applied_count,
                     "skipped": summary.skipped_count,
                     "moves": summary.moves_count,
@@ -225,7 +274,12 @@ class ApplyService:
                 extra={
                     "run_id": str(run_id),
                     "phase": "apply",
+                    "stage": "finalize",
+                    "status": "completed",
                     "action_type": "",
+                    "processed_count": applied_count + skipped_count,
+                    "total_count": total_actions,
+                    "progress_percent": 100.0 if total_actions > 0 else None,
                     "summary": summary.to_dict(),
                 },
             )
@@ -243,6 +297,8 @@ class ApplyService:
                 extra={
                     "run_id": str(run_id),
                     "phase": "apply",
+                    "stage": "finalize",
+                    "status": "error",
                     "action_type": "",
                     "collision_mode": collision_mode,
                 },

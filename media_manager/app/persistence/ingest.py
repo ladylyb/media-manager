@@ -32,6 +32,24 @@ _HASH_PREFIX_LEN = 12
 _VALIDATION_SAMPLE_LIMIT = 100
 
 
+def _log_ingest_stage(
+    stage: str,
+    *,
+    status: str,
+    summary: str,
+    files_count: int | None = None,
+) -> None:
+    logger.info(
+        summary,
+        extra={
+            "phase": "ingest",
+            "stage": stage,
+            "status": status,
+            "files_count": files_count,
+        },
+    )
+
+
 @dataclass(frozen=True)
 class IngestSummary:
     files_scanned: int
@@ -245,6 +263,8 @@ def _scan_files_for_ingest(
                     ),
                     extra={
                         "phase": "ingest",
+                        "stage": "scan",
+                        "status": "running",
                         "action": "PROGRESS",
                         "processed_count": files_scanned,
                         "total_count": total_count,
@@ -543,12 +563,24 @@ def _sync_ingest_batch(
 
     metadata_extracted = 0
     if metadata_targets:
+        _log_ingest_stage(
+            "metadata",
+            status="running",
+            summary="Ingest metadata extraction started",
+            files_count=len(metadata_targets),
+        )
         metadata_by_content: dict[uuid.UUID, list[metadata_extractor.MetadataItem]] = {}
         for candidate, content_id in metadata_targets:
             rows = metadata_extractor.extract_file_metadata(candidate.path, candidate.digest)
             metadata_by_content[content_id] = rows
             metadata_extracted += len(rows)
         metadata_extractor.upsert_metadata_bulk(session, metadata_by_content)
+        _log_ingest_stage(
+            "metadata",
+            status="completed",
+            summary="Ingest metadata extraction completed",
+            files_count=len(metadata_targets),
+        )
 
     return _IngestSyncResult(
         new_contents=new_contents,
@@ -710,19 +742,38 @@ def ingest_paths_in_session(
     latency_samples: _IngestLatencySamples | None = None,
 ) -> IngestSummary:
     t_start = perf_counter()
+    _log_ingest_stage("scan", status="running", summary="Ingest scan started", files_count=len(files))
     scan_result = _scan_files_for_ingest(files, latency_samples=latency_samples)
     scanned = scan_result.files_scanned
+    _log_ingest_stage("scan", status="completed", summary="Ingest scan completed", files_count=scanned)
+    _log_ingest_stage(
+        "finalize",
+        status="running",
+        summary="Finalizing ingest after scan progress reached its latest checkpoint",
+        files_count=scanned,
+    )
 
+    _log_ingest_stage("db_sync", status="running", summary="Ingest database sync started", files_count=scanned)
     t_db_start = perf_counter()
     sync_result = _sync_ingest_batch(session, scanned_candidates=scan_result.scanned_candidates)
     db_write_latency_ms = (perf_counter() - t_db_start) * 1000.0
+    _log_ingest_stage("db_sync", status="completed", summary="Ingest database sync completed", files_count=scanned)
 
     if authoritative_root is not None:
+        _log_ingest_stage("finalize", status="running", summary="Ingest deletion reconciliation started", files_count=scanned)
         _mark_missing_paths_deleted_for_root(session, root=authoritative_root, observed_paths=scan_result.observed_paths)
+        _log_ingest_stage(
+            "finalize",
+            status="completed",
+            summary="Ingest deletion reconciliation completed",
+            files_count=scanned,
+        )
 
     # Keep ingest results visible to subsequent operations running in the same
     # session, such as discovery/planning steps that follow ingest immediately.
+    _log_ingest_stage("finalize", status="running", summary="Ingest finalization started", files_count=scanned)
     session.flush()
+    _log_ingest_stage("finalize", status="completed", summary="Ingest finalization completed", files_count=scanned)
 
     if latency_samples is not None and scanned > 0:
         amortized_db_write_ms = db_write_latency_ms / scanned if db_write_latency_ms > 0 else 0.000001
@@ -733,9 +784,14 @@ def ingest_paths_in_session(
         "Ingest summary",
         extra={
             "phase": "ingest",
+            "stage": "metadata",
+            "status": "completed",
             "action": "EXTRACTED",
             "files_count": scanned,
             "duration_s": f"{duration_s:.6f}",
+            "processed_count": scanned,
+            "total_count": scanned,
+            "progress_percent": 100.0 if scanned > 0 else None,
             "codes_extracted": (
                 f"new_contents={sync_result.new_contents},new_instances={sync_result.new_instances},"
                 f"duplicates={sync_result.duplicates},metadata_rows={sync_result.metadata_extracted}"

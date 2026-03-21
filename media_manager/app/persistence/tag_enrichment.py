@@ -5,6 +5,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from statistics import mean
+import time
 from time import perf_counter
 
 from sqlalchemy import delete, func, select
@@ -30,6 +31,7 @@ from media_manager.app.persistence.tag_normalization import normalize_tag_name
 from media_manager.app.persistence.tagging import upsert_canonical_tag
 
 logger = get_logger(__name__)
+_TAG_PROGRESS_EVERY = 100
 
 
 # Backward-compatible alias used by existing internal imports.
@@ -183,6 +185,20 @@ def run_tag_enrichment(
     sequence_no = 0
 
     try:
+        logger.info(
+            "Run started",
+            extra={
+                "run_id": str(run_id),
+                "phase": "tag_enrichment",
+                "stage": "enrich",
+                "status": "running",
+                "scope": command.scope.value,
+                "source": command.source.value,
+                "batch_size": command.batch_size,
+                "total_count": len(target_ids),
+            },
+        )
+        started_at_perf = time.time()
         for offset in range(0, len(target_ids), command.batch_size):
             batch = target_ids[offset : offset + command.batch_size]
             logger.info(
@@ -190,6 +206,8 @@ def run_tag_enrichment(
                 extra={
                     "run_id": str(run_id),
                     "phase": "tag_enrichment",
+                    "stage": "enrich",
+                    "status": "running",
                     "scope": command.scope.value,
                     "source": command.source.value,
                     "batch_size": command.batch_size,
@@ -224,8 +242,34 @@ def run_tag_enrichment(
                         extra={
                             "run_id": str(run_id),
                             "phase": "tag_enrichment",
+                            "stage": "enrich",
+                            "status": "error",
                             "canonical_id": str(canonical_id),
                             "sequence_no": sequence_no,
+                        },
+                    )
+                if target_ids and (processed_count % _TAG_PROGRESS_EVERY == 0 or processed_count == len(target_ids)):
+                    elapsed_seconds = max(time.time() - started_at_perf, 0.000001)
+                    progress_percent = (processed_count / len(target_ids)) * 100.0
+                    throughput_fps = processed_count / elapsed_seconds
+                    logger.info(
+                        (
+                            f"Progress: {processed_count}/{len(target_ids)} items ({progress_percent:.1f}%) | "
+                            f"{throughput_fps:.1f} items/sec | elapsed {elapsed_seconds:.1f}s"
+                        ),
+                        extra={
+                            "run_id": str(run_id),
+                            "phase": "tag_enrichment",
+                            "stage": "enrich",
+                            "status": "running",
+                            "scope": command.scope.value,
+                            "source": command.source.value,
+                            "processed_count": processed_count,
+                            "total_count": len(target_ids),
+                            "progress_percent": progress_percent,
+                            "elapsed_seconds": elapsed_seconds,
+                            "throughput_fps": throughput_fps,
+                            "failed_items": failed_items,
                         },
                     )
 
@@ -253,10 +297,14 @@ def run_tag_enrichment(
             extra={
                 "run_id": str(run_id),
                 "phase": "tag_enrichment",
+                "stage": "finalize",
                 "scope": command.scope.value,
                 "source": command.source.value,
                 "status": status,
                 "processed_count": processed_count,
+                "total_count": len(target_ids),
+                "progress_percent": 100.0 if target_ids else None,
+                "elapsed_seconds": max(time.time() - started_at_perf, 0.000001),
                 "failed_items": failed_items,
                 "duration_ms": duration_ms,
             },
@@ -284,6 +332,20 @@ def run_tag_enrichment(
             status=TagEnrichmentStatus.FAILED.value,
             failed_items=failed_items + 1,
             error_message=str(exc),
+        )
+        logger.exception(
+            "Tag enrichment run failed",
+            extra={
+                "run_id": str(run_id),
+                "phase": "tag_enrichment",
+                "stage": "finalize",
+                "scope": command.scope.value,
+                "source": command.source.value,
+                "status": TagEnrichmentStatus.FAILED.value,
+                "processed_count": processed_count,
+                "total_count": len(target_ids),
+                "elapsed_seconds": max(time.time() - started_at_perf, 0.000001),
+            },
         )
         raise
 
