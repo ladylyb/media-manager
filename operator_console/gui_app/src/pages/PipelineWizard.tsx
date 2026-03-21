@@ -62,6 +62,7 @@ import type {
   DuplicateGroup,
   PaginatedResponse,
 } from "@/types";
+import type { ProgressOperationKind, ProgressOperationStatus } from "@/types/logs";
 
 type StepId =
   | "ingest"
@@ -333,6 +334,18 @@ const STEP_GUIDANCE: Record<
 function parseError(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+function toProgressOperationStatus(status: StepStatus): ProgressOperationStatus {
+  if (status === "running") return "running";
+  if (status === "completed") return "completed";
+  if (status === "failed") return "error";
+  return "idle";
+}
+
+function toProgressOperationKind(stepId: ExecutionStepId): ProgressOperationKind {
+  if (stepId === "canonical") return "canonical";
+  return stepId;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -1216,7 +1229,12 @@ export default function PipelineWizard() {
           continueLabel="Continue to Review Ingest"
           continueDisabled={state.status !== "completed"}
           guidance={<WizardGuidancePanel sections={guidance.sections} />}
-          livePanel={<LiveProgressPanel />}
+          livePanel={
+            <LiveProgressPanel
+              operationKind={toProgressOperationKind("ingest")}
+              operationStatus={toProgressOperationStatus(state.status)}
+            />
+          }
           result={renderResultConsole("ingest")}
         >
           <div className="grid gap-4 lg:grid-cols-2">
@@ -1317,7 +1335,12 @@ export default function PipelineWizard() {
           continueLabel="Continue to Duplicate Review"
           continueDisabled={state.status !== "completed"}
           guidance={<WizardGuidancePanel sections={guidance.sections} />}
-          livePanel={<LiveProgressPanel />}
+          livePanel={
+            <LiveProgressPanel
+              operationKind={toProgressOperationKind("plan")}
+              operationStatus={toProgressOperationStatus(state.status)}
+            />
+          }
           result={renderResultConsole("plan")}
         >
           <div className="rounded-xl border bg-muted/15 p-4">
@@ -1429,7 +1452,12 @@ export default function PipelineWizard() {
           continueLabel="Continue to Review Apply"
           continueDisabled={state.status !== "completed"}
           guidance={<WizardGuidancePanel sections={guidance.sections} />}
-          livePanel={<LiveProgressPanel />}
+          livePanel={
+            <LiveProgressPanel
+              operationKind={toProgressOperationKind("apply")}
+              operationStatus={toProgressOperationStatus(state.status)}
+            />
+          }
           result={renderResultConsole("apply")}
         >
           <div className="rounded-xl border bg-muted/15 p-4">
@@ -1525,7 +1553,12 @@ export default function PipelineWizard() {
           continueLabel="Continue to Review Canonical"
           continueDisabled={state.status !== "completed"}
           guidance={<WizardGuidancePanel sections={guidance.sections} />}
-          livePanel={<LiveProgressPanel />}
+          livePanel={
+            <LiveProgressPanel
+              operationKind={toProgressOperationKind("canonical")}
+              operationStatus={toProgressOperationStatus(state.status)}
+            />
+          }
           result={renderResultConsole("canonical")}
         >
           <div className="rounded-xl border bg-muted/15 p-4">
@@ -1710,7 +1743,12 @@ export default function PipelineWizard() {
               </CollapsibleSection>
             </div>
           }
-          livePanel={<LiveProgressPanel />}
+          livePanel={
+            <LiveProgressPanel
+              operationKind={toProgressOperationKind("tag")}
+              operationStatus={toProgressOperationStatus(state.status)}
+            />
+          }
           result={renderResultConsole("tag")}
         />
       );

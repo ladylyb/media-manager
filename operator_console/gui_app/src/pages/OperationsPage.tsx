@@ -48,6 +48,7 @@ import { queryOptions } from "@/lib/api/queryOptions";
 import { executionStepGuidance } from "@/lib/workflow/executionStepGuidance";
 import { cn } from "@/lib/utils";
 import type { OperationResult, PaginatedResponse, Run } from "@/types";
+import type { ProgressOperationKind, ProgressOperationStatus } from "@/types/logs";
 
 type ExecuteState = {
   loading: boolean;
@@ -67,6 +68,13 @@ const INITIAL_EXECUTE_STATE: ExecuteState = {
 function parseError(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+function toExecuteOperationStatus(state: ExecuteState): ProgressOperationStatus {
+  if (state.loading) return "running";
+  if (state.error) return "error";
+  if (state.result) return "completed";
+  return "idle";
 }
 
 function ResultPanel({ state, idleCopy }: { state: ExecuteState; idleCopy: string }) {
@@ -206,6 +214,7 @@ export default function OperationsPage() {
   const [selectedPlanRunId, setSelectedPlanRunId] = useState("");
   const [manualRunId, setManualRunId] = useState("");
   const [showManualRunId, setShowManualRunId] = useState(false);
+  const [activeProgressKind, setActiveProgressKind] = useState<ProgressOperationKind>(null);
   const [recheckState, setRecheckState] = useState<{ ingest: ExecuteState; plan: ExecuteState }>({
     ingest: INITIAL_EXECUTE_STATE,
     plan: INITIAL_EXECUTE_STATE,
@@ -284,6 +293,30 @@ export default function OperationsPage() {
       : section,
   );
 
+  const activeProgressState = useMemo(() => {
+    if (activeProgressKind === "ingest") {
+      const status = toExecuteOperationStatus(recheckState.ingest);
+      return status === "idle" ? null : { kind: activeProgressKind, status };
+    }
+    if (activeProgressKind === "plan") {
+      const status = toExecuteOperationStatus(recheckState.plan);
+      return status === "idle" ? null : { kind: activeProgressKind, status };
+    }
+    if (activeProgressKind === "apply") {
+      const status = toExecuteOperationStatus(applyState);
+      return status === "idle" ? null : { kind: activeProgressKind, status };
+    }
+    if (activeProgressKind === "canonical") {
+      const status = toExecuteOperationStatus(canonicalState);
+      return status === "idle" ? null : { kind: activeProgressKind, status };
+    }
+    if (activeProgressKind === "tag") {
+      const status = toExecuteOperationStatus(tagState);
+      return status === "idle" ? null : { kind: activeProgressKind, status };
+    }
+    return null;
+  }, [activeProgressKind, applyState, canonicalState, recheckState.ingest, recheckState.plan, tagState]);
+
   const togglePanel = (panelId: PanelId) => {
     setOpenPanel((current) => (current === panelId ? null : panelId));
   };
@@ -305,6 +338,7 @@ export default function OperationsPage() {
       ...current,
       [mode]: { loading: true, error: null, result: null },
     }));
+    setActiveProgressKind(mode);
 
     try {
       const response =
@@ -340,6 +374,7 @@ export default function OperationsPage() {
     }
 
     setApplyState({ loading: true, error: null, result: null });
+    setActiveProgressKind("apply");
     try {
       const response = await runApply({ run_id: activeApplyRunId, collision_mode: "rename" });
       setApplyState({ loading: false, error: null, result: response.data });
@@ -353,6 +388,7 @@ export default function OperationsPage() {
 
   const executeCanonicalRefresh = async () => {
     setCanonicalState({ loading: true, error: null, result: null });
+    setActiveProgressKind("canonical");
     try {
       const response = await runCanonicalRecompute({
         policy_name: "FIRST_SEEN",
@@ -370,6 +406,7 @@ export default function OperationsPage() {
 
   const executeTagEnrichment = async () => {
     setTagState({ loading: true, error: null, result: null });
+    setActiveProgressKind("tag");
     try {
       const response = await runTagEnrichment({ all: true, batch_size: 100, source: "system" });
       setTagState({ loading: false, error: null, result: response.data });
@@ -403,7 +440,10 @@ export default function OperationsPage() {
       </TopSurfaceHeader>
 
       {/* Keep one shared live panel above the action sections so progress stays visible while users move between explicit operation controls. */}
-      <LiveProgressPanel />
+      <LiveProgressPanel
+        operationKind={activeProgressState?.kind}
+        operationStatus={activeProgressState?.status}
+      />
 
       <div className="space-y-4">
         <ActionPanel

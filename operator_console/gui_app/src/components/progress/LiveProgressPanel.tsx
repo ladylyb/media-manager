@@ -1,63 +1,92 @@
 import { ChevronDown, ChevronUp } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { useLiveLogs } from "@/hooks/useLiveLogs";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Progress } from "@/components/ui/progress";
-import { fetchLogs } from "@/lib/api/endpoints/system";
+import { resolveOperationDisplayState } from "@/lib/logs/resolveOperationDisplayState";
 import { cn } from "@/lib/utils";
-import { getLogLineTone, mergeLogLines, parseProgressLogs } from "@/lib/logs/parseProgressLogs";
+import { getLogLineTone } from "@/lib/logs/parseProgressLogs";
+import type { ProgressOperationKind, ProgressOperationStatus } from "@/types/logs";
 
-function formatHeaderLabel(phase: "ingest" | "plan" | null, status: "idle" | "running" | "error") {
-  if (status === "running" && phase === "plan") return "[ PLAN RUNNING ]";
-  if (status === "running" && phase === "ingest") return "[ INGEST RUNNING ]";
+function formatOperationName(kind: ProgressOperationKind) {
+  if (kind === "ingest") return "INGEST";
+  if (kind === "plan") return "PLAN";
+  if (kind === "apply") return "APPLY";
+  if (kind === "canonical") return "CANONICAL";
+  if (kind === "tag") return "TAG";
+  return null;
+}
+
+function formatHeaderLabel(kind: ProgressOperationKind, status: ProgressOperationStatus) {
+  const name = formatOperationName(kind);
+  if (name && status === "running") return `[ ${name} RUNNING ]`;
+  if (name && status === "finalizing") return `[ FINALIZING ${name} ]`;
+  if (name && status === "completed") return `[ ${name} COMPLETE ]`;
+  if (name && status === "error") return `[ ${name} FAILED ]`;
+  if (name && status === "idle") return `[ ${name} READY ]`;
   return "[ WAITING FOR LOGS ]";
 }
 
-function formatPhaseLabel(phase: "ingest" | "plan" | null) {
-  if (phase === "plan") return "Planning";
-  if (phase === "ingest") return "Ingest";
+function formatPhaseLabel(kind: ProgressOperationKind, status: ProgressOperationStatus) {
+  if (kind === "plan") return status === "finalizing" ? "Finalizing Plan" : "Plan";
+  if (kind === "ingest") return status === "finalizing" ? "Finalizing Ingest" : "Ingest";
+  if (kind === "apply") return status === "finalizing" ? "Finalizing Apply" : "Apply";
+  if (kind === "canonical") return status === "finalizing" ? "Finalizing Canonical" : "Canonical";
+  if (kind === "tag") return status === "finalizing" ? "Finalizing Tags" : "Tag";
+  if (status === "completed") return "Complete";
+  if (status === "error") return "Failed";
   return "Idle";
 }
 
-export function LiveProgressPanel({ className }: { className?: string }) {
-  const [lines, setLines] = useState<string[]>([]);
-  const [fetchError, setFetchError] = useState<string | null>(null);
+function formatMetricValue(value: number | null, suffix = "") {
+  return value === null ? "--" : `${value.toFixed(1)}${suffix}`;
+}
+
+function formatCountLabel(kind: ProgressOperationKind) {
+  return kind === "ingest" || kind === "plan" ? "Files" : "Processed";
+}
+
+function formatThroughput(kind: ProgressOperationKind, throughputFps: number | null) {
+  if (throughputFps === null) return "--";
+  const unit = kind === "ingest" || kind === "plan" ? "files/sec" : "items/sec";
+  return `${throughputFps.toFixed(1)} ${unit}`;
+}
+
+function formatStageLabel(stage: string | null) {
+  if (!stage) return null;
+  return stage
+    .split(/[_-]/)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
+interface LiveProgressPanelProps {
+  className?: string;
+  operationKind?: ProgressOperationKind;
+  operationStatus?: ProgressOperationStatus;
+}
+
+export function LiveProgressPanel({
+  className,
+  operationKind,
+  operationStatus,
+}: LiveProgressPanelProps) {
   // Optional support panels in this UI default collapsed so the main workflow stays visually primary.
   const [open, setOpen] = useState(false);
+  const { parsed, lines, error: fetchError } = useLiveLogs(100);
   const logViewportRef = useRef<HTMLDivElement | null>(null);
   const shouldAutoScrollRef = useRef(true);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadLogs = async () => {
-      try {
-        // Poll the lightweight log buffer directly so the panel stays read-only and self-contained.
-        const nextLines = await fetchLogs(100);
-        if (cancelled) return;
-        setLines((current) => mergeLogLines(current, nextLines, 100));
-        setFetchError(null);
-      } catch (error) {
-        if (cancelled) return;
-        setFetchError(error instanceof Error ? error.message : "Unable to load logs.");
-      }
-    };
-
-    void loadLogs();
-    const intervalId = window.setInterval(() => {
-      void loadLogs();
-    }, 1_000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, []);
-
-  const parsed = useMemo(() => parseProgressLogs(lines), [lines]);
+  const displayState = resolveOperationDisplayState({
+    operationKind,
+    operationStatus,
+    parsedPhase: parsed.phase,
+    parsedStatus: parsed.status,
+    progressPercent: parsed.progressPercent,
+  });
 
   useEffect(() => {
     const viewport = logViewportRef.current;
@@ -65,10 +94,22 @@ export function LiveProgressPanel({ className }: { className?: string }) {
     viewport.scrollTop = viewport.scrollHeight;
   }, [lines]);
 
-  const progressValue = Math.max(0, Math.min(100, parsed.progressPercent ?? 0));
+  const progressValue = Math.max(
+    0,
+    Math.min(
+      100,
+      displayState.status === "completed" && parsed.progressPercent === null
+        ? 100
+        : parsed.progressPercent ?? 0,
+    ),
+  );
   const badgeSeverity =
-    parsed.status === "running"
+    displayState.status === "running" || displayState.status === "finalizing"
       ? "info"
+      : displayState.status === "completed"
+        ? "success"
+        : displayState.status === "error"
+          ? "destructive"
       : fetchError
         ? "caution"
         : "neutral";
@@ -79,13 +120,13 @@ export function LiveProgressPanel({ className }: { className?: string }) {
         <CardHeader className="space-y-3 pb-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <CardTitle className="font-mono text-sm tracking-[0.24em] text-foreground">
-              {formatHeaderLabel(parsed.phase, parsed.status)}
+              {formatHeaderLabel(displayState.kind, displayState.status)}
             </CardTitle>
             <div className="flex items-center gap-2">
               <StatusBadge
-                label={formatPhaseLabel(parsed.phase)}
+                label={formatPhaseLabel(displayState.kind, displayState.status)}
                 severity={badgeSeverity}
-                dot={parsed.status === "running"}
+                dot={displayState.status === "running" || displayState.status === "finalizing"}
               />
               <CollapsibleTrigger asChild>
                 <Button type="button" variant="ghost" size="sm">
@@ -108,26 +149,36 @@ export function LiveProgressPanel({ className }: { className?: string }) {
         <CollapsibleContent>
           <CardContent className="space-y-4 border-t pt-4">
             <Progress value={progressValue} className="h-2.5 bg-muted/70" />
+            {displayState.status === "finalizing" ? (
+              <p className="text-xs text-muted-foreground">
+                The latest progress checkpoint has been reached. The request is still finishing backend work.
+              </p>
+            ) : null}
+            {parsed.stage && (displayState.status === "running" || displayState.status === "finalizing" || lines.length > 0) ? (
+              <p className="text-xs text-muted-foreground">
+                Current stage: <span className="font-medium text-foreground">{formatStageLabel(parsed.stage)}</span>
+              </p>
+            ) : null}
             <div className="grid gap-3 md:grid-cols-3">
               <div className="rounded-xl border bg-muted/20 p-3">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
                   Progress
                 </p>
-                <p className="mt-2 text-lg font-semibold">{(parsed.progressPercent ?? 0).toFixed(1)}%</p>
+                <p className="mt-2 text-lg font-semibold">{formatMetricValue(parsed.progressPercent, "%")}</p>
               </div>
               <div className="rounded-xl border bg-muted/20 p-3">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                  Files
+                  {formatCountLabel(displayState.kind)}
                 </p>
                 <p className="mt-2 text-lg font-semibold">
-                  {parsed.processedCount ?? 0} / {parsed.totalCount ?? 0}
+                  {parsed.processedCount ?? "--"} / {parsed.totalCount ?? "--"}
                 </p>
               </div>
               <div className="rounded-xl border bg-muted/20 p-3">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
                   Speed
                 </p>
-                <p className="mt-2 text-lg font-semibold">{(parsed.throughputFps ?? 0).toFixed(1)} files/sec</p>
+                <p className="mt-2 text-lg font-semibold">{formatThroughput(displayState.kind, parsed.throughputFps)}</p>
               </div>
             </div>
 
