@@ -40,6 +40,33 @@ _MUTATION_SEMAPHORE = threading.BoundedSemaphore(value=4)
 _TRUTHY_ENV = {"1", "true", "yes", "on"}
 
 
+class _LogsEndpointAccessFilter(logging.Filter):
+    """Reduce `/logs` polling noise unless the server is running in DEBUG."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name != "uvicorn.access":
+            return True
+
+        message = record.getMessage()
+        if "\"GET /logs" not in message:
+            return True
+
+        if logging.getLogger().getEffectiveLevel() > logging.DEBUG:
+            return False
+
+        record.levelno = logging.DEBUG
+        record.levelname = logging.getLevelName(logging.DEBUG)
+        return True
+
+
+def _install_logs_endpoint_access_filter() -> None:
+    """Keep high-frequency `/logs` access records out of INFO-level server logs."""
+    access_logger = logging.getLogger("uvicorn.access")
+    if any(isinstance(existing, _LogsEndpointAccessFilter) for existing in access_logger.filters):
+        return
+    access_logger.addFilter(_LogsEndpointAccessFilter())
+
+
 @lru_cache(maxsize=1)
 def get_operator_console_service() -> OperatorConsoleReadService:
     """Build and cache the read-only Operator Console service."""
@@ -456,6 +483,9 @@ def create_app() -> FastAPI:
     package_root = Path(__file__).parent
     static_v2_dir = package_root / "static_v2"
     static_v2_index = static_v2_dir / "index.html"
+
+    # Polling `/logs` is intentional, but its access records should not dominate INFO logs.
+    _install_logs_endpoint_access_filter()
 
     app = FastAPI(title="Media Manager Operator Console")
     app.mount("/static-v2", StaticFiles(directory=str(static_v2_dir)), name="static-v2")
