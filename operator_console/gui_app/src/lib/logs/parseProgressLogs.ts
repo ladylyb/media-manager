@@ -1,7 +1,7 @@
 import type { LogPhase, ParsedLogState } from "@/types/logs";
 
 const MESSAGE_PROGRESS_PATTERN =
-  /Progress:\s*(\d+)\/(\d+)\s+files\s+\(([\d.]+)%\)\s+\|\s+([\d.]+)\s+files\/sec/i;
+  /Progress:\s*(\d+)\/(\d+)\s+(?:files|items)\s+\(([\d.]+)%\)\s+\|\s+([\d.]+)\s+(?:files|items)\/sec/i;
 
 function extractNumber(line: string, field: string): number | null {
   const match = line.match(new RegExp(`${field}=([0-9.]+)`));
@@ -11,8 +11,15 @@ function extractNumber(line: string, field: string): number | null {
 }
 
 function extractPhase(line: string): LogPhase {
-  const match = line.match(/phase=(ingest|plan)\b/);
-  return (match?.[1] as LogPhase | undefined) ?? null;
+  const match = line.match(/phase=(ingest|plan|apply|canonical|tag_enrichment|tag)\b/);
+  const phase = match?.[1];
+  if (phase === "tag_enrichment") return "tag";
+  return (phase as LogPhase | undefined) ?? null;
+}
+
+function extractStage(line: string): string | null {
+  const match = line.match(/stage=([A-Za-z0-9_.-]+)/);
+  return match?.[1] ?? null;
 }
 
 function parseLine(line: string) {
@@ -29,6 +36,7 @@ function parseLine(line: string) {
   ) {
     return {
       phase: extractPhase(line),
+      stage: extractStage(line),
       processedCount,
       totalCount,
       progressPercent,
@@ -41,6 +49,7 @@ function parseLine(line: string) {
 
   return {
     phase: extractPhase(line),
+    stage: extractStage(line),
     processedCount: Number(messageMatch[1]),
     totalCount: Number(messageMatch[2]),
     progressPercent: Number(messageMatch[3]),
@@ -91,6 +100,7 @@ export function parseProgressLogs(lines: string[]): ParsedLogState {
   if (!selected) {
     return {
       phase: null,
+      stage: null,
       processedCount: null,
       totalCount: null,
       progressPercent: null,
@@ -102,6 +112,7 @@ export function parseProgressLogs(lines: string[]): ParsedLogState {
 
   return {
     phase: selected.phase,
+    stage: selected.stage,
     processedCount: selected.processedCount,
     totalCount: selected.totalCount,
     progressPercent: selected.progressPercent,

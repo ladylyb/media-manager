@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -79,6 +79,33 @@ describe("Pipeline Wizard page", () => {
     ).toBeInTheDocument();
     expect(screen.getAllByText("Progress").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Abort Wizard" })).toBeInTheDocument();
-    expect(await screen.findByText("[ WAITING FOR LOGS ]")).toBeInTheDocument();
+    expect(await screen.findByText("[ INGEST READY ]")).toBeInTheDocument();
+  });
+
+  it("shows finalizing ingest while the request is still in flight after scan progress reaches 100%", async () => {
+    let resolveIngest: ((value: { data: Record<string, unknown> }) => void) | null = null;
+    mocks.runWizardIngest.mockReturnValue(
+      new Promise((resolve) => {
+        resolveIngest = resolve;
+      }),
+    );
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => [
+        "2026-03-21 INFO media_manager.app.persistence.ingest phase=ingest action=PROGRESS processed_count=2850 total_count=2850 progress_percent=100.0 throughput_fps=25.0 Progress: 2850/2850 files (100.0%) | 25.0 files/sec | elapsed 113.9s",
+      ],
+    } as Response);
+
+    renderPage();
+
+    fireEvent.change(await screen.findByLabelText("Folder Path"), {
+      target: { value: "/media/incoming" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run Ingest" }));
+
+    expect(await screen.findByText("[ FINALIZING INGEST ]")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run Ingest" })).toBeDisabled());
+
+    resolveIngest?.({ data: { files_scanned: 2850 } });
   });
 });
