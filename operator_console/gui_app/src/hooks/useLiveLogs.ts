@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
 import { fetchLogs } from "@/lib/api/endpoints/system";
@@ -12,6 +12,7 @@ function documentIsVisible() {
 
 export function useLiveLogs(limit = 100) {
   const [lines, setLines] = useState<string[]>([]);
+  const queryClient = useQueryClient();
 
   const logsQuery = useQuery({
     queryKey: queryKeys.liveLogs(limit),
@@ -29,13 +30,13 @@ export function useLiveLogs(limit = 100) {
   useEffect(() => {
     const onVisibilityChange = () => {
       if (documentIsVisible()) {
-        void logsQuery.refetch();
+        void queryClient.invalidateQueries({ queryKey: queryKeys.liveLogs(limit) });
       }
     };
 
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => document.removeEventListener("visibilitychange", onVisibilityChange);
-  }, [logsQuery]);
+  }, [limit, queryClient]);
 
   const parsed = useMemo(
     () => parseProgressLogs(lines),
