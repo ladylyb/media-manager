@@ -14,9 +14,32 @@ from contextlib import contextmanager
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from media_manager.app.core.config import load_environment
+
+
+def _validate_database_url(url: str) -> str:
+    if "${" in url:
+        raise RuntimeError(
+            "DATABASE_URL contains an unresolved environment variable placeholder. "
+            "Expand placeholders such as ${WINDOWS_DB_HOST} before starting the application."
+        )
+
+    try:
+        parsed = make_url(url)
+    except Exception as exc:  # pragma: no cover - delegated parser error details
+        raise RuntimeError("DATABASE_URL is not a valid SQLAlchemy database URL.") from exc
+
+    if not parsed.drivername.startswith("postgresql"):
+        raise RuntimeError("DATABASE_URL must point to PostgreSQL; SQLite is not supported.")
+    if not parsed.host:
+        raise RuntimeError(
+            "DATABASE_URL must include an explicit PostgreSQL host. "
+            "Without a host psycopg attempts a local Unix socket, which fails unless PostgreSQL is running locally."
+        )
+    return url
 
 
 def get_database_url() -> str:
@@ -24,9 +47,7 @@ def get_database_url() -> str:
     url = os.getenv("DATABASE_URL")
     if not url:
         raise RuntimeError("DATABASE_URL must be set for PostgreSQL execution.")
-    if "postgresql" not in url:
-        raise RuntimeError("DATABASE_URL must point to PostgreSQL; SQLite is not supported.")
-    return url
+    return _validate_database_url(url)
 
 
 def create_db_engine(database_url: str | None = None) -> Engine:

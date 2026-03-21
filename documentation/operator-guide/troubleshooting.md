@@ -6,6 +6,13 @@
 - Verify database configuration (`DATABASE_URL`).
 - Verify input path exists.
 
+### PostgreSQL Socket Error On Startup
+
+- Symptom: `connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed`
+- Usual cause: `DATABASE_URL` resolved without a hostname, so psycopg fell back to a local Unix socket.
+- Check for unresolved placeholders such as `${WINDOWS_DB_HOST}` in `.env`.
+- Fix by setting an explicit host in `DATABASE_URL`, for example `postgresql+psycopg://user:password@localhost:5432/media_manager`.
+
 ## Plan Does Not Produce Expected Actions
 
 - Confirm ingest scope and input path.
