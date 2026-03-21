@@ -14,6 +14,7 @@ from media_manager.app.service_layer.errors import ServiceLayerException
 import operator_console.main as main_module
 from operator_console.main import (
     app,
+    create_app,
     get_admin_services,
     get_operation_services,
     get_operator_console_service,
@@ -24,6 +25,7 @@ def test_canonical_api_route_inventory_and_v1_removal() -> None:
     route_paths = {route.path for route in app.routes}
 
     expected_canonical_paths = {
+        "/favicon.ico",
         "/logs",
         "/api/status",
         "/api/home",
@@ -60,6 +62,34 @@ def test_canonical_api_route_inventory_and_v1_removal() -> None:
     assert expected_canonical_paths.issubset(route_paths)
     assert "/api/v1/ledger/hash-audit" not in route_paths
     assert not any(path.startswith("/api/v2") for path in route_paths)
+
+
+def test_favicon_route_serves_built_asset() -> None:
+    client = TestClient(app)
+
+    response = client.get("/favicon.ico")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/vnd.microsoft.icon"
+    assert len(response.content) > 0
+
+
+def test_favicon_route_returns_404_when_asset_missing(monkeypatch) -> None:
+    favicon_path = Path(main_module.__file__).parent / "static_v2" / "favicon.ico"
+    original_exists = Path.exists
+
+    def _fake_exists(path: Path) -> bool:
+        if path == favicon_path:
+            return False
+        return original_exists(path)
+
+    monkeypatch.setattr(Path, "exists", _fake_exists)
+    client = TestClient(create_app())
+
+    response = client.get("/favicon.ico")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "favicon.ico was not found."}
 
 
 def test_logs_endpoint_returns_recent_log_lines() -> None:

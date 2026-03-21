@@ -520,6 +520,14 @@ def create_app() -> FastAPI:
             )
         return FileResponse(path=static_v2_index)
 
+    @app.get("/favicon.ico")
+    def favicon() -> Response:
+        """Serve the root favicon expected by browsers and crawlers."""
+        favicon_path = static_v2_dir / "favicon.ico"
+        if not favicon_path.exists():
+            raise HTTPException(status_code=404, detail="favicon.ico was not found.")
+        return FileResponse(path=favicon_path)
+
     @app.get("/", response_class=HTMLResponse)
     def dashboard() -> Response:
         """Render the Operator Console dashboard page."""
