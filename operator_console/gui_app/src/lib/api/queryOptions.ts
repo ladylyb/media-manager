@@ -8,6 +8,9 @@ export const queryOptions = {
   latestMetrics: {
     staleTime: 20_000,
   },
+  liveLogs: {
+    staleTime: 0,
+  },
   dashboardSummary: {
     staleTime: 45_000,
   },

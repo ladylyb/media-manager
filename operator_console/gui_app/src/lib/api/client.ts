@@ -57,6 +57,27 @@ export async function apiGet<T>(path: string, params?: Record<string, string | n
   return parseEnvelope<T>(res);
 }
 
+export async function apiGetJson<T>(
+  path: string,
+  params?: Record<string, string | number | boolean | undefined>,
+  options?: { basePath?: string }
+): Promise<T> {
+  const basePath = options?.basePath ?? API_BASE;
+  const url = new URL(`${basePath}${path}`, window.location.origin);
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== "") url.searchParams.set(k, String(v));
+    });
+  }
+  const res = await fetch(url.toString(), {
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) {
+    throw new ApiClientError(`HTTP ${res.status}`, res.status);
+  }
+  return (await res.json()) as T;
+}
+
 export async function apiPost<T>(path: string, body?: unknown): Promise<ApiEnvelope<T>> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",

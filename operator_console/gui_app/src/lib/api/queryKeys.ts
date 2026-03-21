@@ -11,6 +11,7 @@ export const queryKeys = {
   home: ["home"] as const,
   dashboardSummary: ["dashboard-summary"] as const,
   latestMetrics: ["latest-metrics"] as const,
+  liveLogs: (limit = 100) => ["live-logs", { limit }] as const,
   runsRoot: ["runs"] as const,
   runs: (limit = 200) => ["runs", { limit }] as const,
   canonicalRoot: ["canonical"] as const,

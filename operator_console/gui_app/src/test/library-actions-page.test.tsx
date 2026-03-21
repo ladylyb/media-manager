@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import OperationsPage from "@/pages/OperationsPage";
 
 const mocks = vi.hoisted(() => ({
+  getDirectoryPickerListing: vi.fn(),
   getDirectoryPickerCapability: vi.fn(),
   getRuns: vi.fn(),
   invalidateReadsAfterOperation: vi.fn(),
@@ -17,6 +18,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/api/endpoints", () => ({
+  getDirectoryPickerListing: mocks.getDirectoryPickerListing,
   getDirectoryPickerCapability: mocks.getDirectoryPickerCapability,
   getRuns: mocks.getRuns,
   invalidateReadsAfterOperation: mocks.invalidateReadsAfterOperation,
@@ -47,8 +49,19 @@ function renderPage() {
 
 describe("Import page", () => {
   beforeEach(() => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    } as Response);
     mocks.getDirectoryPickerCapability.mockResolvedValue({
       data: { enabled: true, roots: [{ label: "Incoming", path: "/media/incoming" }] },
+    });
+    mocks.getDirectoryPickerListing.mockResolvedValue({
+      data: {
+        path: "/media/incoming",
+        parent_path: null,
+        directories: [],
+      },
     });
     mocks.getRuns.mockResolvedValue({
       data: {
@@ -93,6 +106,7 @@ describe("Import page", () => {
     expect(screen.queryByText("Legacy Composite Run")).not.toBeInTheDocument();
     expect(screen.queryByText("Mutating")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open Organize" })).toBeInTheDocument();
+    expect(await screen.findByText("[ WAITING FOR LOGS ]")).toBeInTheDocument();
   });
 
   it("shows wizard-aligned guidance headings and keeps only one panel open", async () => {
@@ -235,5 +249,134 @@ describe("Import page", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Apply Saved Work" })).toBeDisabled();
     expect(mocks.runApply).not.toHaveBeenCalled();
+  });
+
+  it("shows finalizing ingest on the shared panel while refresh discovery is still finishing", async () => {
+    let resolveIngest: ((value: { data: Record<string, unknown> }) => void) | null = null;
+    mocks.runIngest.mockReturnValue(
+      new Promise((resolve) => {
+        resolveIngest = resolve;
+      }),
+    );
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => [
+        "2026-03-21 INFO media_manager.app.persistence.ingest phase=ingest action=PROGRESS processed_count=2850 total_count=2850 progress_percent=100.0 throughput_fps=25.0 Progress: 2850/2850 files (100.0%) | 25.0 files/sec | elapsed 113.9s",
+      ],
+    } as Response);
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /Recheck a Folder/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Browse Folders" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Use This Path" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Refresh Discovery" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+
+    expect(await screen.findByText("[ FINALIZING INGEST ]")).toBeInTheDocument();
+
+    resolveIngest?.({
+      data: {
+        operation: "INGEST",
+        success: true,
+        summary: "Discovery refreshed.",
+        details: { files_scanned: 2850 },
+        duration_ms: 42,
+      },
+    });
+  });
+
+  it("shows apply as running from request state even when no log KPI is available", async () => {
+    let resolveApply: ((value: { data: Record<string, unknown> }) => void) | null = null;
+    mocks.runApply.mockReturnValue(
+      new Promise((resolve) => {
+        resolveApply = resolve;
+      }),
+    );
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    } as Response);
+
+    renderPage();
+
+    await screen.findByText("Continue a Saved Plan");
+    fireEvent.click(screen.getByRole("button", { name: /Continue a Saved Plan/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply Saved Work" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+
+    expect(await screen.findByText("[ APPLY RUNNING ]")).toBeInTheDocument();
+
+    resolveApply?.({
+      data: {
+        operation: "APPLY",
+        success: true,
+        summary: "Applied saved work.",
+        details: { run_id: "durable-run-1" },
+        duration_ms: 42,
+      },
+    });
+  });
+
+  it("shows canonical refresh as running from request state", async () => {
+    let resolveCanonical: ((value: { data: Record<string, unknown> }) => void) | null = null;
+    mocks.runCanonicalRecompute.mockReturnValue(
+      new Promise((resolve) => {
+        resolveCanonical = resolve;
+      }),
+    );
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    } as Response);
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /Refresh Library Decisions/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview Refresh" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+
+    expect(await screen.findByText("[ CANONICAL RUNNING ]")).toBeInTheDocument();
+
+    resolveCanonical?.({
+      data: {
+        operation: "CANONICAL_RECOMPUTE",
+        success: true,
+        summary: "Previewed canonical refresh.",
+        details: { changed_count: 1 },
+        duration_ms: 42,
+      },
+    });
+  });
+
+  it("shows tag enrichment as running from request state", async () => {
+    let resolveTag: ((value: { data: Record<string, unknown> }) => void) | null = null;
+    mocks.runTagEnrichment.mockReturnValue(
+      new Promise((resolve) => {
+        resolveTag = resolve;
+      }),
+    );
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    } as Response);
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /Add Searchable Details/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Add Searchable Details" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+
+    expect(await screen.findByText("[ TAG RUNNING ]")).toBeInTheDocument();
+
+    resolveTag?.({
+      data: {
+        operation: "TAG_ENRICHMENT",
+        success: true,
+        summary: "Enriched tags.",
+        details: { number_of_items_processed: 2 },
+        duration_ms: 42,
+      },
+    });
   });
 });
