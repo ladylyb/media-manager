@@ -31,8 +31,8 @@ def test_phase10_1_plan_regression_contract(tmp_path: Path, session_factory) -> 
     summary_a = planner.plan_run(run_a.id, files, ingest_if_needed=True)
     summary_b = planner.plan_run(run_b.id, files, ingest_if_needed=True)
 
-    assert summary_a.scanned_count == summary_b.scanned_count == 2
-    assert summary_a.move_actions == summary_b.move_actions == 1
+    assert summary_a.scanned_count == summary_b.scanned_count == 3
+    assert summary_a.move_actions == summary_b.move_actions == 2
     assert summary_a.duplicate_actions == summary_b.duplicate_actions == 1
     assert summary_a.noop_actions == summary_b.noop_actions == 0
     assert summary_a.skipped_count == summary_b.skipped_count == 1

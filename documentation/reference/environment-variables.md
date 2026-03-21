@@ -51,6 +51,20 @@ Defaults below reflect runtime code defaults, not shell defaults.
 - Default in code: `OWNER,CONTEXT,TAKEN_DT`
 - Example: `OWNER,CONTEXT,TAKEN_DT`
 
+### `MEDIA_CANONICAL_STORAGE_PATH`
+- Purpose: Root directory for planner-computed canonical file destinations.
+- Format: Absolute directory path.
+- Default in code: none (required)
+- Safety note: validation is non-mutating; the configured path or an existing parent must be writable by the runtime.
+- Example: `/srv/media-library`
+
+### `MEDIA_DUPLICATE_STORAGE_PATH`
+- Purpose: Root directory for planner-computed duplicate file destinations.
+- Format: Absolute directory path.
+- Default in code: none (required)
+- Safety note: validation is non-mutating; the configured path or an existing parent must be writable by the runtime.
+- Example: `/srv/media-library/Duplicates`
+
 ### `MEDIA_MANAGER_TAG_NORMALIZATION_REMOVE_PUNCTUATION`
 - Purpose: Toggle punctuation removal in tag normalization.
 - Truthy values: `1`, `true`, `yes`, `on`

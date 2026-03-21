@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -14,11 +13,12 @@ from time import perf_counter
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from media_manager.app.core.config import resolve_required_metadata_codes
+from media_manager.app.core.config import StorageRoots, resolve_required_metadata_codes, resolve_storage_roots
 from media_manager.app.core.errors import MissingRequiredMetadataError, PlanningStateError
 from media_manager.app.core.filenames import generate_canonical_filename, infer_media_type_from_extension
 from media_manager.app.core.logging_config import get_logger
 from media_manager.app.core.metadata_cache import MetadataCache
+from media_manager.app.core.path_resolver import reserve_planned_path, resolve_canonical_path, resolve_duplicate_path
 from media_manager.app.core.state_machine import RunState, validate_transition
 from media_manager.app.observability import record_planner_metrics, record_planner_stage_duration
 from media_manager.app.persistence.base import transactional_session
@@ -34,6 +34,7 @@ from media_manager.app.persistence.models import (
     MediaMetadata,
     MetadataCode,
     PlannedAction,
+    PlannedActionRole,
     PlannedActionType,
     Run,
     RunStateDB,
@@ -116,6 +117,12 @@ class PlanningSummary:
         }
 
 
+@dataclass(frozen=True)
+class RoutingDecision:
+    role: str
+    duplicate_index: int | None
+
+
 class PlanningService:
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
@@ -168,6 +175,7 @@ class PlanningService:
                 self._metadata_lookup_cache_time_s = 0.0
                 batch_size = self._get_metadata_batch_size()
 
+                storage_roots = resolve_storage_roots()
                 reserved_paths: set[str] = set()
                 scanned_count = 0
                 supported_count = 0
@@ -210,7 +218,7 @@ class PlanningService:
                 _log_plan_stage(run.id, "discovery", status="completed", summary="Planner discovery refresh completed")
                 _log_plan_stage(run.id, "load_candidates", status="running", summary="Planner candidate loading started")
                 rows = self._load_candidate_instances(session, input_paths)
-                base_root = self._determine_base_root([Path(row.absolute_path) for row in rows])
+                routing_by_instance_id = self._build_routing_decisions(session, rows)
                 load_candidates_duration_s = perf_counter() - t_load_candidates
                 _log_plan_stage(
                     run.id,
@@ -265,29 +273,30 @@ class PlanningService:
                         skipped_count += 1
                         continue
                     canonical_instances_processed += 1
-                    action, missing_required_count, persist_flush_duration_s = self._plan_single_instance(
+                    action, role, missing_required_count, persist_flush_duration_s = self._plan_single_instance(
                         session,
                         run,
                         instance,
-                        base_root,
-                        reserved_paths,
-                        resolved_required_codes,
-                        strict_missing_metadata,
+                        storage_roots=storage_roots,
+                        reserved_paths=reserved_paths,
+                        routing_decision=routing_by_instance_id.get(instance.file_instance_id),
+                        required_metadata_codes=resolved_required_codes,
+                        strict_missing_metadata=strict_missing_metadata,
                     )
                     persist_actions_duration_s += persist_flush_duration_s
                     total_required_codes_missing += missing_required_count
-                    if action == PlannedActionType.RENAME.value:
-                        scanned_count += 1
-                        supported_count += 1
-                        move_actions += 1
-                    elif action == PlannedActionType.SKIP.value:
+                    if action == PlannedActionType.SKIP.value:
                         scanned_count += 1
                         supported_count += 1
                         noop_actions += 1
-                    elif action == PlannedActionType.COLLISION_RESOLVED.value:
+                    elif role == PlannedActionRole.DUPLICATE.value:
                         scanned_count += 1
                         supported_count += 1
                         duplicate_actions += 1
+                    elif action in {PlannedActionType.RENAME.value, PlannedActionType.COLLISION_RESOLVED.value}:
+                        scanned_count += 1
+                        supported_count += 1
+                        move_actions += 1
                     elif action == "SKIPPED_MISSING_METADATA":
                         skipped_count += 1
                         skipped_missing_metadata_count += 1
@@ -464,6 +473,28 @@ class PlanningService:
             raise PlanningStateError(f"Planning is only allowed from CREATED. Current state: {run.state.value}")
 
     def _load_candidate_instances(self, session: Session, input_paths: list[Path] | None) -> list[FileInstance]:
+        stmt = select(FileInstance).order_by(
+            FileInstance.content_id.asc(),
+            FileInstance.first_seen_at.asc(),
+            FileInstance.absolute_path.asc(),
+            FileInstance.file_instance_id.asc(),
+        )
+        if input_paths:
+            normalized = sorted({str(path.resolve(strict=False)) for path in input_paths})
+            if not normalized:
+                return []
+            stmt = stmt.where(FileInstance.absolute_path.in_(normalized))
+        return session.scalars(stmt).all()
+
+    def _build_routing_decisions(
+        self,
+        session: Session,
+        instances: list[FileInstance],
+    ) -> dict[uuid.UUID, RoutingDecision]:
+        content_ids = sorted({instance.content_id for instance in instances}, key=str)
+        if not content_ids:
+            return {}
+
         latest_assignments = (
             select(
                 CanonicalAssignment.content_id.label("content_id"),
@@ -478,38 +509,52 @@ class PlanningService:
                 )
                 .label("rn"),
             )
+            .where(CanonicalAssignment.content_id.in_(content_ids))
             .subquery()
         )
-        stmt = (
-            select(FileInstance)
-            .join(
-                latest_assignments,
-                (latest_assignments.c.canonical_instance_id == FileInstance.file_instance_id)
-                & (latest_assignments.c.rn == 1),
+        canonical_by_content = {
+            content_id: canonical_instance_id
+            for content_id, canonical_instance_id in session.execute(
+                select(latest_assignments.c.content_id, latest_assignments.c.canonical_instance_id).where(
+                    latest_assignments.c.rn == 1
+                )
+            ).all()
+        }
+
+        grouped: dict[uuid.UUID, list[FileInstance]] = {}
+        for instance in instances:
+            if instance.status != FileInstanceStatus.ACTIVE.value:
+                continue
+            grouped.setdefault(instance.content_id, []).append(instance)
+
+        decisions: dict[uuid.UUID, RoutingDecision] = {}
+        for content_id, grouped_instances in grouped.items():
+            ordered = sorted(
+                grouped_instances,
+                key=lambda item: (
+                    item.first_seen_at,
+                    item.absolute_path,
+                    str(item.file_instance_id),
+                ),
             )
-            .order_by(FileInstance.absolute_path.asc(), FileInstance.file_instance_id.asc())
-        )
-        if input_paths:
-            normalized = sorted({str(path.resolve(strict=False)) for path in input_paths})
-            if not normalized:
-                return []
-            stmt = stmt.where(FileInstance.absolute_path.in_(normalized))
-        return session.scalars(stmt).all()
+            canonical_instance_id = canonical_by_content.get(content_id)
+            if canonical_instance_id is None and ordered:
+                canonical_instance_id = ordered[0].file_instance_id
 
-    def _determine_base_root(self, input_paths: list[Path]) -> Path:
-        if not input_paths:
-            return Path.cwd()
-        roots = [str(self._infer_root_from_source(path.resolve(strict=False))) for path in input_paths]
-        return Path(os.path.commonpath(roots))
-
-    def _infer_root_from_source(self, source: Path) -> Path:
-        lower_parts = [part.lower() for part in source.parts]
-        for marker in ("media", "inbox"):
-            if marker in lower_parts:
-                idx = lower_parts.index(marker)
-                if idx > 0:
-                    return Path(*source.parts[:idx])
-        return source.parent
+            duplicate_index = 1
+            for instance in ordered:
+                if instance.file_instance_id == canonical_instance_id:
+                    decisions[instance.file_instance_id] = RoutingDecision(
+                        role=PlannedActionRole.CANONICAL.value,
+                        duplicate_index=None,
+                    )
+                else:
+                    decisions[instance.file_instance_id] = RoutingDecision(
+                        role=PlannedActionRole.DUPLICATE.value,
+                        duplicate_index=duplicate_index,
+                    )
+                    duplicate_index += 1
+        return decisions
 
     def _load_metadata_by_content_id(self, session: Session, content_id: uuid.UUID) -> dict[str, str]:
         cache_key = str(content_id)
@@ -530,56 +575,6 @@ class PlanningService:
         self._metadata_lookup_db_time_s += perf_counter() - t_db
         self._metadata_cache.set(cache_key, metadata)
         return metadata
-
-    def _resolve_destination_dir(
-        self,
-        *,
-        base_root: Path,
-        media_type: str,
-        taken_datetime: datetime,
-    ) -> Path:
-        year = taken_datetime.strftime("%Y")
-        month = taken_datetime.strftime("%m")
-        if media_type == "VID":
-            return base_root / "Media" / "Videos" / year / month
-        return base_root / "Media" / "Photos" / year / month
-
-    def _is_canonical_variant(self, filename: str, canonical_filename: str) -> bool:
-        if filename == canonical_filename:
-            return True
-        stem = Path(canonical_filename).stem
-        suffix = Path(canonical_filename).suffix
-        pattern = re.compile(rf"^{re.escape(stem)}_\d+{re.escape(suffix)}$")
-        return bool(pattern.fullmatch(filename))
-
-    def _resolve_planning_collision(
-        self,
-        source: Path,
-        destination: Path,
-        reserved_paths: set[str],
-    ) -> tuple[Path, bool]:
-        destination_key = str(destination.resolve(strict=False))
-        if source.resolve(strict=False) == destination.resolve(strict=False):
-            reserved_paths.add(destination_key)
-            return destination, False
-
-        if destination_key not in reserved_paths and not destination.exists():
-            reserved_paths.add(destination_key)
-            return destination, False
-
-        stem = destination.stem
-        suffix = destination.suffix
-        idx = 1
-        while True:
-            candidate = destination.with_name(f"{stem}_{idx}{suffix}")
-            candidate_key = str(candidate.resolve(strict=False))
-            if source.resolve(strict=False) == candidate.resolve(strict=False):
-                reserved_paths.add(candidate_key)
-                return candidate, False
-            if candidate_key not in reserved_paths and not candidate.exists():
-                reserved_paths.add(candidate_key)
-                return candidate, True
-            idx += 1
 
     def _get_existing_planned_action(
         self,
@@ -627,11 +622,13 @@ class PlanningService:
         session: Session,
         run: Run,
         instance: FileInstance,
-        base_root: Path,
+        *,
+        storage_roots: StorageRoots,
         reserved_paths: set[str],
+        routing_decision: RoutingDecision | None,
         required_metadata_codes: set[str],
         strict_missing_metadata: bool,
-    ) -> tuple[str, int, float]:
+    ) -> tuple[str, str, int, float]:
         source = Path(instance.absolute_path)
         source_path = str(source.resolve(strict=False))
         existing_for_file = self._get_existing_plan_for_file(
@@ -640,7 +637,7 @@ class PlanningService:
         if existing_for_file is not None:
             if existing_for_file.target_path:
                 reserved_paths.add(str(Path(existing_for_file.target_path).resolve(strict=False)))
-            return existing_for_file.action_type, 0, 0.0
+            return existing_for_file.action_type, existing_for_file.role, 0, 0.0
 
         metadata_map = self._load_metadata_by_content_id(session, instance.content_id)
         present_codes = {code.upper() for code in metadata_map.keys()}
@@ -666,17 +663,20 @@ class PlanningService:
                     "codes_extracted": ",".join(sorted(metadata_map.keys())),
                 },
             )
-            return "SKIPPED_MISSING_METADATA", len(missing_required), 0.0
+            return "SKIPPED_MISSING_METADATA", PlannedActionRole.CANONICAL.value, len(missing_required), 0.0
 
         owner = metadata_map.get("OWNER")
         context = metadata_map.get("CONTEXT")
         taken_dt_raw = metadata_map.get("TAKEN_DT")
         if not owner or not context or not taken_dt_raw:
-            return "SKIPPED_MISSING_METADATA", 0, 0.0
+            return "SKIPPED_MISSING_METADATA", PlannedActionRole.CANONICAL.value, 0, 0.0
 
         media_type = infer_media_type_from_extension(source)
         if media_type is None:
-            return "SKIPPED_UNSUPPORTED_MIME", 0, 0.0
+            return "SKIPPED_UNSUPPORTED_MIME", PlannedActionRole.CANONICAL.value, 0, 0.0
+
+        role = routing_decision.role if routing_decision is not None else PlannedActionRole.CANONICAL.value
+        duplicate_index = routing_decision.duplicate_index if routing_decision is not None else None
 
         taken_datetime = datetime.fromisoformat(taken_dt_raw)
         canonical_filename = generate_canonical_filename(
@@ -686,32 +686,35 @@ class PlanningService:
             owner=owner,
             context=context,
         )
-        destination_dir = self._resolve_destination_dir(
-            base_root=base_root,
-            media_type=media_type,
-            taken_datetime=taken_datetime,
-        )
-        if (
-            source.resolve(strict=False).parent == destination_dir.resolve(strict=False)
-            and self._is_canonical_variant(source.name, canonical_filename)
-        ):
-            planned_target_path = str(source.resolve(strict=False))
-            action_type = PlannedActionType.SKIP.value
-            reserved_paths.add(planned_target_path)
-        else:
-            desired_destination = destination_dir / canonical_filename
-            final_destination, had_collision = self._resolve_planning_collision(
-                source.resolve(strict=False),
-                desired_destination.resolve(strict=False),
-                reserved_paths,
+        if role == PlannedActionRole.DUPLICATE.value:
+            assert duplicate_index is not None
+            desired_destination = resolve_duplicate_path(
+                duplicate_root=storage_roots.duplicate_root,
+                media_type=media_type,
+                taken_datetime=taken_datetime,
+                canonical_filename=canonical_filename,
+                duplicate_index=duplicate_index,
             )
-            planned_target_path = str(final_destination.resolve(strict=False))
-            if source.resolve(strict=False) == final_destination.resolve(strict=False):
-                action_type = PlannedActionType.SKIP.value
-            elif had_collision:
-                action_type = PlannedActionType.COLLISION_RESOLVED.value
-            else:
-                action_type = PlannedActionType.RENAME.value
+        else:
+            desired_destination = resolve_canonical_path(
+                canonical_root=storage_roots.canonical_root,
+                media_type=media_type,
+                taken_datetime=taken_datetime,
+                canonical_filename=canonical_filename,
+            )
+
+        final_destination, had_collision = reserve_planned_path(
+            source.resolve(strict=False),
+            desired_destination.resolve(strict=False),
+            reserved_paths,
+        )
+        planned_target_path = str(final_destination.resolve(strict=False))
+        if source.resolve(strict=False) == final_destination.resolve(strict=False):
+            action_type = PlannedActionType.SKIP.value
+        elif role == PlannedActionRole.DUPLICATE.value or had_collision:
+            action_type = PlannedActionType.COLLISION_RESOLVED.value
+        else:
+            action_type = PlannedActionType.RENAME.value
 
         existing_plan = self._get_existing_planned_action(
             session,
@@ -727,6 +730,8 @@ class PlanningService:
                 run_id=run.id,
                 file_id=instance.file_instance_id,
                 action_type=action_type,
+                role=role,
+                duplicate_index=duplicate_index,
                 source_path=source_path,
                 target_path=planned_target_path,
             )
@@ -734,7 +739,7 @@ class PlanningService:
             t_flush = perf_counter()
             session.flush()
             persist_flush_duration_s = perf_counter() - t_flush
-        return action_type, 0, persist_flush_duration_s
+        return action_type, role, 0, persist_flush_duration_s
 
     def _record_planning_failure(self, run_id: uuid.UUID, code: str, message: str) -> None:
         with transactional_session(self._session_factory) as session:

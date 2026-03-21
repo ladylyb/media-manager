@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from alembic import command
@@ -98,6 +99,12 @@ def clean_tables(db_engine: Engine) -> None:
                 "RESTART IDENTITY CASCADE"
             )
         )
+
+
+@pytest.fixture(autouse=True)
+def storage_roots_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("MEDIA_CANONICAL_STORAGE_PATH", str(tmp_path.resolve()))
+    monkeypatch.setenv("MEDIA_DUPLICATE_STORAGE_PATH", str((tmp_path / "Duplicates").resolve()))
 
 
 @pytest.fixture

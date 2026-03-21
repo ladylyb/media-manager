@@ -174,15 +174,19 @@ class DuplicateFileItem:
 
     file_instance_id: str
     absolute_path: str
+    role: str
+    duplicate_index: int | None
     media_type: str
     is_image: bool
     thumbnail_url: str | None
 
-    def to_dict(self) -> dict[str, str | bool | None]:
+    def to_dict(self) -> dict[str, str | bool | int | None]:
         """Return a JSON-serializable mapping."""
         return {
             "file_instance_id": self.file_instance_id,
             "absolute_path": self.absolute_path,
+            "role": self.role,
+            "duplicate_index": self.duplicate_index,
             "media_type": self.media_type,
             "is_image": self.is_image,
             "thumbnail_url": self.thumbnail_url,
@@ -609,14 +613,23 @@ class OperatorConsoleReadService:
             instance_id_str = str(file_instance_id)
             media_type = infer_media_type_from_extension(Path(absolute_path)) or "OTHER"
             is_image = media_type == "IMG"
+            canonical_instance_id = latest_canonical_by_content.get(content_id)
+            existing_group = grouped.setdefault(content_id, [])
+            duplicate_index = None
+            role = "CANONICAL"
+            if canonical_instance_id is None or file_instance_id != canonical_instance_id:
+                role = "DUPLICATE"
+                duplicate_index = sum(1 for item in existing_group if item.role == "DUPLICATE") + 1
             file_item = DuplicateFileItem(
                 file_instance_id=instance_id_str,
                 absolute_path=absolute_path,
+                role=role,
+                duplicate_index=duplicate_index,
                 media_type=media_type,
                 is_image=is_image,
                 thumbnail_url=f"/api/thumbnail/{instance_id_str}" if is_image else None,
             )
-            grouped.setdefault(content_id, []).append(file_item)
+            existing_group.append(file_item)
             by_group_by_instance.setdefault(content_id, {})[instance_id_str] = file_item
 
         output: list[DuplicateGroupItem] = []

@@ -132,6 +132,10 @@ def test_get_duplicate_groups_orders_groups_and_files_deterministically(session_
     assert groups[0].files[2].media_type == "VID"
     assert groups[0].files[0].thumbnail_url == f"/api/thumbnail/{a1}"
     assert groups[0].files[2].thumbnail_url is None
+    assert groups[0].files[0].role == "CANONICAL"
+    assert groups[0].files[1].role == "DUPLICATE"
+    assert groups[0].files[1].duplicate_index == 1
+    assert groups[0].files[2].duplicate_index == 2
 
 
 def test_get_duplicate_groups_canonical_null_when_latest_assignment_not_active(session_factory) -> None:
