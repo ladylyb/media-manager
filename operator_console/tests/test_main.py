@@ -8,6 +8,7 @@ from uuid import UUID
 
 from fastapi.testclient import TestClient
 
+from media_manager.app.core.logging_buffer import LOG_BUFFER
 from media_manager.app.service_layer.errors import ServiceLayerException
 import operator_console.main as main_module
 from operator_console.main import (
@@ -22,6 +23,7 @@ def test_canonical_api_route_inventory_and_v1_removal() -> None:
     route_paths = {route.path for route in app.routes}
 
     expected_canonical_paths = {
+        "/logs",
         "/api/status",
         "/api/home",
         "/api/dashboard-summary",
@@ -57,6 +59,28 @@ def test_canonical_api_route_inventory_and_v1_removal() -> None:
     assert expected_canonical_paths.issubset(route_paths)
     assert "/api/v1/ledger/hash-audit" not in route_paths
     assert not any(path.startswith("/api/v2") for path in route_paths)
+
+
+def test_logs_endpoint_returns_recent_log_lines() -> None:
+    LOG_BUFFER.clear()
+    LOG_BUFFER.extend(["line-1", "line-2", "line-3"])
+    client = TestClient(app)
+
+    response = client.get("/logs")
+
+    assert response.status_code == 200
+    assert response.json() == ["line-1", "line-2", "line-3"]
+
+
+def test_logs_endpoint_respects_limit_with_newest_last_order() -> None:
+    LOG_BUFFER.clear()
+    LOG_BUFFER.extend(["line-1", "line-2", "line-3"])
+    client = TestClient(app)
+
+    response = client.get("/logs", params={"limit": 2})
+
+    assert response.status_code == 200
+    assert response.json() == ["line-2", "line-3"]
 
 
 class _FakeService:

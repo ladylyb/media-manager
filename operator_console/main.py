@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from media_manager.app.core.logging_buffer import get_buffered_logs
 from media_manager.app.observability import mount_metrics_endpoint
 from media_manager.app.persistence.base import create_db_engine, create_session_factory
 from media_manager.app.persistence.operator_console import OperatorConsoleReadService
@@ -549,6 +550,12 @@ def create_app() -> FastAPI:
         """Render canonical media detail page shell."""
         _ = file_id
         return _render_console_v2_shell()
+
+    @app.get("/logs")
+    def recent_logs(limit: int = Query(default=100)) -> JSONResponse:
+        """Support lightweight frontend polling of recent in-process logs."""
+        parsed_limit = max(1, min(1000, int(limit)))
+        return JSONResponse(content=get_buffered_logs(limit=parsed_limit))
 
     @app.get("/api/gallery/{file_id}")
     def canonical_gallery_detail(

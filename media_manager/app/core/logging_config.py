@@ -4,6 +4,7 @@ import logging
 import os
 
 from media_manager.app.core.config import load_environment
+from media_manager.app.core.logging_buffer import register_in_memory_log_handler
 
 _CONFIGURED = False
 
@@ -138,6 +139,8 @@ def configure_logging() -> None:
     )
     for handler in root_logger.handlers:
         handler.setFormatter(formatter)
+    # Mirror formatted logs into the in-process buffer without changing existing sinks.
+    register_in_memory_log_handler(formatter)
     _CONFIGURED = True
 
 
