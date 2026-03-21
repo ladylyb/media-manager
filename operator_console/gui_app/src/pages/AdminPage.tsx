@@ -36,6 +36,7 @@ import { DataTable } from "@/components/DataTable";
 import { ErrorAlert } from "@/components/ErrorAlert";
 import { JsonViewer } from "@/components/JsonViewer";
 import { MetricCard } from "@/components/MetricCard";
+import { LiveProgressPanel } from "@/components/progress/LiveProgressPanel";
 import { StatusBadge } from "@/components/StatusBadge";
 import { TopSurfaceHeader } from "@/components/layout/TopSurfaceHeader";
 import { Badge } from "@/components/ui/badge";
@@ -676,6 +677,8 @@ function ActivityTab() {
             <CardTitle className="text-xl">What happened in this job</CardTitle>
           </CardHeader>
           <CardContent>
+            {/* Activity is the main follow-up surface for running or failed work, so the live panel belongs at the top of this detail rail. */}
+            <LiveProgressPanel className="mb-4" />
             {selectedRun ? (
               <div className="space-y-4">
                 <div className="flex items-center justify-between gap-3">

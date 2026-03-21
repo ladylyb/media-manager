@@ -19,6 +19,7 @@ import { DirectoryPickerDialog } from "@/components/wizard/DirectoryPickerDialog
 import { WizardGuidancePanel } from "@/components/wizard/WizardGuidancePanel";
 import { ErrorAlert } from "@/components/ErrorAlert";
 import { JsonViewer } from "@/components/JsonViewer";
+import { LiveProgressPanel } from "@/components/progress/LiveProgressPanel";
 import { TopSurfaceHeader } from "@/components/layout/TopSurfaceHeader";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
@@ -400,6 +401,9 @@ export default function OperationsPage() {
           </Button>
         </div>
       </TopSurfaceHeader>
+
+      {/* Keep one shared live panel above the action sections so progress stays visible while users move between explicit operation controls. */}
+      <LiveProgressPanel />
 
       <div className="space-y-4">
         <ActionPanel

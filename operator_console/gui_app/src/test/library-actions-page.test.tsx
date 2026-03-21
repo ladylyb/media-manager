@@ -47,6 +47,10 @@ function renderPage() {
 
 describe("Import page", () => {
   beforeEach(() => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    } as Response);
     mocks.getDirectoryPickerCapability.mockResolvedValue({
       data: { enabled: true, roots: [{ label: "Incoming", path: "/media/incoming" }] },
     });
@@ -93,6 +97,7 @@ describe("Import page", () => {
     expect(screen.queryByText("Legacy Composite Run")).not.toBeInTheDocument();
     expect(screen.queryByText("Mutating")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open Organize" })).toBeInTheDocument();
+    expect(await screen.findByText("[ WAITING FOR LOGS ]")).toBeInTheDocument();
   });
 
   it("shows wizard-aligned guidance headings and keeps only one panel open", async () => {
