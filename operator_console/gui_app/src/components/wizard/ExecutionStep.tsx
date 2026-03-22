@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactNode, RefObject } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { ErrorAlert } from "@/components/ErrorAlert";
 import { OperationRiskLabel } from "@/components/OperationRiskLabel";
@@ -24,6 +24,7 @@ interface ExecutionStepProps {
   livePanel?: ReactNode;
   result?: ReactNode;
   footer?: ReactNode;
+  runButtonRef?: RefObject<HTMLButtonElement | null>;
 }
 
 export function ExecutionStep({
@@ -45,6 +46,7 @@ export function ExecutionStep({
   livePanel,
   result,
   footer,
+  runButtonRef,
 }: ExecutionStepProps) {
   return (
     <Card className="rounded-2xl">
@@ -80,14 +82,14 @@ export function ExecutionStep({
               <Button onClick={onContinue} disabled={continueDisabled || loading}>
                 {continueLabel}
               </Button>
-              <Button variant={runVariant} onClick={onRun} disabled={loading}>
+              <Button ref={runButtonRef} variant={runVariant} onClick={onRun} disabled={loading}>
                 {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {runLabel}
               </Button>
             </>
           ) : (
             <>
-              <Button variant={runVariant} onClick={onRun} disabled={loading}>
+              <Button ref={runButtonRef} variant={runVariant} onClick={onRun} disabled={loading}>
                 {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {runLabel}
               </Button>

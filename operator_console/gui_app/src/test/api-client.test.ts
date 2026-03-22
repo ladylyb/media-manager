@@ -94,6 +94,7 @@ describe("api client", () => {
     await expect(
       apiPost("/policy", {
         selected_policy: "FIRST_SEEN",
+        naming_strategy: "SHARED_CANONICAL_NAME",
         preferred_roots: [],
         recanonicalization_enabled: false,
         version: 1,

@@ -92,6 +92,7 @@ describe("api endpoints", () => {
       generated_at: "2026-03-14T00:00:00+00:00",
       data: {
         selected_policy: "FIRST_SEEN",
+        naming_strategy: "SHARED_CANONICAL_NAME",
         preferred_roots: ["/media"],
         recanonicalization_enabled: true,
         version: 7,
@@ -105,6 +106,7 @@ describe("api endpoints", () => {
       generated_at: "2026-03-14T00:00:00+00:00",
       data: {
         selected_policy: "PREFER_ROOT",
+        naming_strategy: "DUPLICATE_OWNS_DATE_STANDARDIZED",
         preferred_roots: ["/archive"],
         recanonicalization_enabled: false,
         version: 8,
@@ -114,6 +116,7 @@ describe("api endpoints", () => {
 
     await updatePolicy({
       selected_policy: "PREFER_ROOT",
+      naming_strategy: "DUPLICATE_OWNS_DATE_STANDARDIZED",
       preferred_roots: ["/archive"],
       recanonicalization_enabled: false,
     });
@@ -121,6 +124,7 @@ describe("api endpoints", () => {
     expect(apiGet).toHaveBeenCalledWith("/policy");
     expect(apiPost).toHaveBeenCalledWith("/policy", {
       selected_policy: "PREFER_ROOT",
+      naming_strategy: "DUPLICATE_OWNS_DATE_STANDARDIZED",
       preferred_roots: ["/archive"],
       recanonicalization_enabled: false,
       version: 7,

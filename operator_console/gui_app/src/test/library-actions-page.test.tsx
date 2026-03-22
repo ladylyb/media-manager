@@ -3,11 +3,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ApiClientError } from "@/lib/api/client";
 import OperationsPage from "@/pages/OperationsPage";
 
 const mocks = vi.hoisted(() => ({
   getDirectoryPickerListing: vi.fn(),
   getDirectoryPickerCapability: vi.fn(),
+  getPolicy: vi.fn(),
   getRuns: vi.fn(),
   invalidateReadsAfterOperation: vi.fn(),
   runApply: vi.fn(),
@@ -20,6 +22,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/api/endpoints", () => ({
   getDirectoryPickerListing: mocks.getDirectoryPickerListing,
   getDirectoryPickerCapability: mocks.getDirectoryPickerCapability,
+  getPolicy: mocks.getPolicy,
   getRuns: mocks.getRuns,
   invalidateReadsAfterOperation: mocks.invalidateReadsAfterOperation,
   runApply: mocks.runApply,
@@ -76,6 +79,29 @@ describe("Import page", () => {
             linked_run_id: "durable-run-1",
           },
         ],
+      },
+    });
+    mocks.getPolicy.mockResolvedValue({
+      data: {
+        canonical_priority: {
+          selected_policy: "FIRST_SEEN",
+          preferred_roots: [],
+        },
+        naming: {
+          strategy: "DUPLICATE_OWNS_DATE_STANDARDIZED",
+        },
+        recanonicalization: {
+          enabled: false,
+        },
+        metadata: {
+          version: 3,
+          updated_at: "2026-03-22T10:00:00Z",
+        },
+        tie_breaker_rules: {
+          policy_name: "default",
+          policy_version: 1,
+          effective_order: ["first_seen_at ASC", "file_instance_id ASC"],
+        },
       },
     });
     mocks.invalidateReadsAfterOperation.mockResolvedValue(undefined);
@@ -166,6 +192,138 @@ describe("Import page", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Show refresh guidance" }));
     expect(await screen.findByText("Refresh Discovery Guidance")).toBeInTheDocument();
+  });
+
+  it("shows recheck naming controls and sends them with manual plan requests", async () => {
+    mocks.runPlan.mockResolvedValue({
+      data: {
+        operation: "PLAN",
+        success: true,
+        summary: "Prepared plan.",
+        details: { run_id: "run-1" },
+        duration_ms: 42,
+      },
+    });
+
+    renderPage();
+
+    await screen.findByText("Recheck a Folder");
+    fireEvent.click(screen.getByRole("button", { name: /Recheck a Folder/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Browse Folders" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Use This Path" }));
+
+    expect(screen.getByLabelText("Owner")).toHaveValue("LL");
+    expect(screen.getByLabelText("Context")).toHaveValue("General");
+    expect(screen.getByText("Duplicate owns date (standardized)")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Owner"), { target: { value: "TripA" } });
+    fireEvent.change(screen.getByLabelText("Context"), { target: { value: "Family" } });
+    fireEvent.click(screen.getByRole("button", { name: "Prepare Plan" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+
+    await waitFor(() =>
+      expect(mocks.runPlan).toHaveBeenCalledWith({
+        folder_path: "/media/incoming",
+        strict_metadata: false,
+        owner: "TripA",
+        context: "Family",
+        naming_strategy: "DUPLICATE_OWNS_DATE_STANDARDIZED",
+        owner_context_override_confirmed: false,
+      }),
+    );
+  });
+
+  it("shows correction confirmation on recheck plan conflicts and retries with override", async () => {
+    mocks.runPlan
+      .mockRejectedValueOnce(
+        new ApiClientError("override required", 400, [
+          {
+            code: "OWNER_CONTEXT_OVERRIDE_REQUIRED",
+            message: "override required",
+            details: {
+              requested_owner: "TripB",
+              requested_context: "Family",
+              existing_owner: "LL",
+              existing_context: "General",
+              conflicting_group_count: 1,
+              sample_content_id: "content-1",
+            },
+          },
+        ]),
+      )
+      .mockResolvedValueOnce({
+        data: {
+          operation: "PLAN",
+          success: true,
+          summary: "Prepared plan.",
+          details: { run_id: "run-override" },
+          duration_ms: 42,
+        },
+      });
+
+    renderPage();
+
+    await screen.findByText("Recheck a Folder");
+    fireEvent.click(screen.getByRole("button", { name: /Recheck a Folder/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Browse Folders" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Use This Path" }));
+
+    fireEvent.change(screen.getByLabelText("Owner"), { target: { value: "TripB" } });
+    fireEvent.change(screen.getByLabelText("Context"), { target: { value: "Family" } });
+    fireEvent.click(screen.getByRole("button", { name: "Prepare Plan" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+
+    expect(await screen.findByText("Correction confirmation is required")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText(/Confirm owner\/context correction/));
+    fireEvent.click(screen.getByRole("button", { name: "Prepare Plan" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+
+    await waitFor(() =>
+      expect(mocks.runPlan).toHaveBeenLastCalledWith({
+        folder_path: "/media/incoming",
+        strict_metadata: false,
+        owner: "TripB",
+        context: "Family",
+        naming_strategy: "DUPLICATE_OWNS_DATE_STANDARDIZED",
+        owner_context_override_confirmed: true,
+      }),
+    );
+  });
+
+  it("closes the apply confirmation dialog immediately and keeps execution on the main panel", async () => {
+    let resolveApply: ((value: { data: Record<string, unknown> }) => void) | null = null;
+    mocks.runApply.mockReturnValue(
+      new Promise((resolve) => {
+        resolveApply = resolve;
+      }),
+    );
+
+    renderPage();
+
+    await screen.findByText("Continue a Saved Plan");
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Continue a Saved Plan/,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply Saved Work" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Apply Saved Work" })).toBeDisabled());
+    expect(screen.getByText("Apply started. You can monitor progress below while the main screen stays available.")).toBeInTheDocument();
+
+    resolveApply?.({
+      data: {
+        operation: "APPLY",
+        success: true,
+        summary: "Applied saved work.",
+        details: { run_id: "durable-run-1" },
+        duration_ms: 42,
+      },
+    });
   });
 
   it("applies saved work with a manually entered run id fallback", async () => {
