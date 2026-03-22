@@ -7,16 +7,68 @@ import { MediaGrid } from "@/components/media/MediaGrid";
 import { MediaPreviewModal } from "@/components/media/MediaPreviewModal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Pagination, PaginationContent, PaginationEllipsis, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
+import { Slider } from "@/components/ui/slider";
 import { getCanonical, getCanonicalTags } from "@/lib/api/endpoints";
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
 import type { CanonicalFile, PaginatedResponse, Tag } from "@/types";
-import { ArrowUpDown, ChevronLeft, ChevronRight, Images, Loader2, Search, X } from "lucide-react";
+import { ArrowUpDown, Grid2X2, Images, LayoutGrid, Loader2, Search, X } from "lucide-react";
 
 function getErrorMessage(err: unknown): string | null {
   if (!err) return null;
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+const DENSITY_PRESETS = [
+  {
+    key: "large",
+    label: "Large",
+    limit: 12,
+    gridClassName: "grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4",
+  },
+  {
+    key: "medium",
+    label: "Medium",
+    limit: 20,
+    gridClassName: "grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5",
+  },
+  {
+    key: "small",
+    label: "Small",
+    limit: 30,
+    gridClassName: "grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-6",
+  },
+  {
+    key: "compact",
+    label: "Compact",
+    limit: 42,
+    gridClassName: "grid grid-cols-3 gap-4 md:grid-cols-5 xl:grid-cols-7",
+  },
+] as const;
+
+type DensityKey = (typeof DENSITY_PRESETS)[number]["key"];
+
+function getDensityPreset(densityParam: string | null) {
+  return DENSITY_PRESETS.find((preset) => preset.key === densityParam) ?? DENSITY_PRESETS[1];
+}
+
+function getVisiblePages(currentPage: number, totalPages: number): Array<number | "ellipsis"> {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1);
+  }
+
+  const pages: Array<number | "ellipsis"> = [1];
+  if (currentPage > 3) pages.push("ellipsis");
+
+  const start = Math.max(2, currentPage - 1);
+  const end = Math.min(totalPages - 1, currentPage + 1);
+  for (let page = start; page <= end; page += 1) pages.push(page);
+
+  if (currentPage < totalPages - 2) pages.push("ellipsis");
+  pages.push(totalPages);
+  return pages;
 }
 
 export default function GalleryPage() {
@@ -28,7 +80,9 @@ export default function GalleryPage() {
   const selectedTags = tagsParam.split(",").filter(Boolean);
   const sortBy = searchParams.get("sort_by") || "created_at";
   const sortOrder = searchParams.get("sort_order") || "desc";
-  const page = Number(searchParams.get("page") || 1);
+  const page = Math.max(1, Number(searchParams.get("page") || 1));
+  const densityPreset = getDensityPreset(searchParams.get("density"));
+  const densityIndex = DENSITY_PRESETS.findIndex((preset) => preset.key === densityPreset.key);
 
   const updateParams = (updates: Record<string, string | undefined>) => {
     const next = new URLSearchParams(searchParams);
@@ -54,12 +108,12 @@ export default function GalleryPage() {
   const canonicalParams = useMemo(
     () => ({
       page,
-      limit: 30,
+      limit: densityPreset.limit,
       tags: tagsParam || undefined,
       sort_by: sortBy,
       sort_order: sortOrder,
     }),
-    [page, sortBy, sortOrder, tagsParam],
+    [densityPreset.limit, page, sortBy, sortOrder, tagsParam],
   );
 
   const tagsQuery = useQuery({
@@ -78,6 +132,9 @@ export default function GalleryPage() {
   const data = (galleryQuery.data as PaginatedResponse<CanonicalFile> | undefined) ?? null;
   const items = data?.items ?? [];
   const allTags = (tagsQuery.data as Tag[] | undefined) ?? [];
+  const totalCount = data?.total_count ?? 0;
+  const totalPages = Math.max(data?.total_pages ?? 1, 1);
+  const visiblePages = useMemo(() => getVisiblePages(page, totalPages), [page, totalPages]);
 
   useEffect(() => {
     if (!tagInput) {
@@ -114,6 +171,11 @@ export default function GalleryPage() {
           </div>
           <div className="rounded-2xl border border-border/70 bg-background/85 px-4 py-3 text-sm text-muted-foreground shadow-sm">
             Sorted by {sortBy.replace("_", " ")} in {sortOrder === "asc" ? "ascending" : "descending"} order
+          </div>
+          <div className="rounded-2xl border border-border/70 bg-background/85 px-4 py-3 text-sm text-muted-foreground shadow-sm">
+            {galleryQuery.isLoading && !data
+              ? "Loading gallery..."
+              : `${totalCount} item${totalCount === 1 ? "" : "s"} · Page ${page} of ${totalPages}`}
           </div>
         </div>
       </TopSurfaceHeader>
@@ -178,8 +240,30 @@ export default function GalleryPage() {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 self-start lg:self-auto">
+          <div className="flex flex-wrap items-center gap-3 self-start lg:self-auto">
             {galleryQuery.isFetching ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
+            <div className="flex items-center gap-2">
+              <Grid2X2 className="h-4 w-4 text-muted-foreground" />
+              <Slider
+                value={[densityIndex]}
+                onValueChange={([value]) => {
+                  const nextPreset = DENSITY_PRESETS[value as number];
+                  if (!nextPreset) return;
+                  updateParams({
+                    density: nextPreset.key === "medium" ? undefined : nextPreset.key,
+                    page: undefined,
+                  });
+                }}
+                min={0}
+                max={DENSITY_PRESETS.length - 1}
+                step={1}
+                className="w-24"
+              />
+              <LayoutGrid className="h-4 w-4 text-muted-foreground" />
+              <span className="min-w-14 text-right text-sm text-muted-foreground">
+                {densityPreset.label}
+              </span>
+            </div>
             <select
               value={sortBy}
               onChange={(event) => updateParams({ sort_by: event.target.value, page: "1" })}
@@ -210,6 +294,8 @@ export default function GalleryPage() {
       <MediaGrid
         files={items}
         loading={galleryQuery.isLoading && !data}
+        gridClassName={densityPreset.gridClassName}
+        skeletonCount={densityPreset.limit}
         emptyTitle="No media files"
         emptyDescription={
           selectedTags.length
@@ -220,44 +306,54 @@ export default function GalleryPage() {
         getDetailHref={(file) => `/gallery/${file.id}`}
       />
 
-      {data && data.total_pages > 1 && (
-        <div className="flex flex-col gap-3 rounded-2xl border bg-card/80 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-sm font-medium text-foreground">Library page {page}</p>
-            <p className="text-sm text-muted-foreground">
-              Showing {items.length} items on this page out of {data.total_pages} total pages.
-            </p>
-          </div>
-          <div className="flex items-center gap-2 self-end sm:self-auto">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() =>
-                updateParams({ page: String(Math.max(1, page - 1)) })
-              }
-              disabled={page === 1}
-            >
-              <ChevronLeft className="mr-1 h-4 w-4" />
-              Prev
-            </Button>
-            <span className="min-w-24 text-center text-xs text-muted-foreground">
-              Page {page} of {data.total_pages}
-            </span>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() =>
-                updateParams({ page: String(Math.min(data.total_pages, page + 1)) })
-              }
-              disabled={page === data.total_pages}
-            >
-              Next
-              <ChevronRight className="ml-1 h-4 w-4" />
-            </Button>
-          </div>
-        </div>
+      {data && totalPages > 1 && (
+        <Pagination className="justify-center">
+          <PaginationContent>
+            <PaginationItem>
+              <PaginationPrevious
+                href="#"
+                onClick={(event) => {
+                  event.preventDefault();
+                  if (page === 1) return;
+                  updateParams({ page: page - 1 <= 1 ? undefined : String(page - 1) });
+                }}
+                className={page === 1 ? "pointer-events-none opacity-50" : "cursor-pointer"}
+              />
+            </PaginationItem>
+            {visiblePages.map((pageNumber, index) =>
+              pageNumber === "ellipsis" ? (
+                <PaginationItem key={`ellipsis-${index}`}>
+                  <PaginationEllipsis />
+                </PaginationItem>
+              ) : (
+                <PaginationItem key={pageNumber}>
+                  <PaginationLink
+                    href="#"
+                    isActive={pageNumber === page}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      updateParams({ page: pageNumber === 1 ? undefined : String(pageNumber) });
+                    }}
+                    className="cursor-pointer"
+                  >
+                    {pageNumber}
+                  </PaginationLink>
+                </PaginationItem>
+              ),
+            )}
+            <PaginationItem>
+              <PaginationNext
+                href="#"
+                onClick={(event) => {
+                  event.preventDefault();
+                  if (page >= totalPages) return;
+                  updateParams({ page: String(page + 1) });
+                }}
+                className={page >= totalPages ? "pointer-events-none opacity-50" : "cursor-pointer"}
+              />
+            </PaginationItem>
+          </PaginationContent>
+        </Pagination>
       )}
 
       <MediaPreviewModal file={selectedFile} onClose={() => setSelectedFile(null)} />
