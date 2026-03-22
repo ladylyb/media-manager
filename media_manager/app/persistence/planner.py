@@ -679,7 +679,7 @@ class PlanningService:
 
         owner = metadata_map.get("OWNER") or run.owner
         context = metadata_map.get("CONTEXT") or run.context
-        taken_dt_raw = metadata_map.get("TAKEN_DT")
+        taken_dt_raw = metadata_map.get("CLASSIFICATION_DT") or metadata_map.get("TAKEN_DT")
         if not owner or not context or not taken_dt_raw:
             return "SKIPPED_MISSING_METADATA", PlannedActionRole.CANONICAL.value, 0, 0.0, 0.0
 
@@ -780,7 +780,7 @@ class PlanningService:
         except Exception:
             return None
         row_map = {row.code_type: row.decode_value for row in rows}
-        taken_dt_raw = row_map.get("TAKEN_DT")
+        taken_dt_raw = row_map.get("CLASSIFICATION_DT") or row_map.get("TAKEN_DT")
         if not taken_dt_raw:
             return None
         try:

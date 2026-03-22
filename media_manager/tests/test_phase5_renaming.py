@@ -31,6 +31,32 @@ def _snapshot(root: Path) -> dict[str, str]:
     return state
 
 
+def _metadata_rows_for(dt: datetime, *, legacy_taken_dt: datetime | None = None) -> list[metadata_extractor_module.MetadataItem]:
+    taken_dt = legacy_taken_dt or dt
+    return [
+        metadata_extractor_module.MetadataItem("OWNER", "LL"),
+        metadata_extractor_module.MetadataItem("CONTEXT", "General"),
+        metadata_extractor_module.MetadataItem("CLASSIFICATION_DT", dt.isoformat()),
+        metadata_extractor_module.MetadataItem("CLASSIFICATION_DT_SOURCE", "FS_MTIME"),
+        metadata_extractor_module.MetadataItem("CLASSIFICATION_DT_POLICY", "EARLIEST_TRUSTWORTHY_V1"),
+        metadata_extractor_module.MetadataItem("TAKEN_DT", taken_dt.isoformat()),
+        metadata_extractor_module.MetadataItem("TAKEN_DT_SOURCE", "filesystem"),
+        metadata_extractor_module.MetadataItem("FS_CTIME", taken_dt.isoformat()),
+        metadata_extractor_module.MetadataItem("FS_MTIME", dt.isoformat()),
+    ]
+
+
+def _patch_extract_file_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    rows: list[metadata_extractor_module.MetadataItem],
+) -> None:
+    monkeypatch.setattr(
+        metadata_extractor_module,
+        "extract_file_metadata",
+        lambda _path, _hash, **_kwargs: rows,
+    )
+
+
 def test_generate_canonical_filename_deterministic() -> None:
     taken = datetime(2024, 1, 11, 6, 7, 8, tzinfo=UTC)
     first = generate_canonical_filename("IMG", taken, ".jpg", owner="LL", context="General")
@@ -55,13 +81,7 @@ def test_plan_contains_canonical_full_target_path(
     tmp_path: Path, session_factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixed_dt = datetime(2024, 1, 11, 10, 11, 12, tzinfo=UTC)
-    monkeypatch.setattr(metadata_extractor_module, "extract_file_metadata", lambda _path, _hash: [
-        metadata_extractor_module.MetadataItem("OWNER", "LL"),
-        metadata_extractor_module.MetadataItem("CONTEXT", "General"),
-        metadata_extractor_module.MetadataItem("TAKEN_DT", fixed_dt.isoformat()),
-        metadata_extractor_module.MetadataItem("FS_CTIME", fixed_dt.isoformat()),
-        metadata_extractor_module.MetadataItem("FS_MTIME", fixed_dt.isoformat()),
-    ])
+    _patch_extract_file_metadata(monkeypatch, _metadata_rows_for(fixed_dt))
 
     source = _write_file(tmp_path / "dataset" / "inbox" / "photo_one.jpg", b"one")
     run = RunService(session_factory).create_run()
@@ -80,13 +100,7 @@ def test_collision_resolution_happens_in_plan(
     tmp_path: Path, session_factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixed_dt = datetime(2024, 1, 11, 10, 11, 12, tzinfo=UTC)
-    monkeypatch.setattr(metadata_extractor_module, "extract_file_metadata", lambda _path, _hash: [
-        metadata_extractor_module.MetadataItem("OWNER", "LL"),
-        metadata_extractor_module.MetadataItem("CONTEXT", "General"),
-        metadata_extractor_module.MetadataItem("TAKEN_DT", fixed_dt.isoformat()),
-        metadata_extractor_module.MetadataItem("FS_CTIME", fixed_dt.isoformat()),
-        metadata_extractor_module.MetadataItem("FS_MTIME", fixed_dt.isoformat()),
-    ])
+    _patch_extract_file_metadata(monkeypatch, _metadata_rows_for(fixed_dt))
 
     first = _write_file(tmp_path / "dataset" / "inbox" / "a.jpg", b"first")
     second = _write_file(tmp_path / "dataset" / "inbox" / "b.jpg", b"second")
@@ -108,13 +122,7 @@ def test_replan_is_deterministic_for_targets(
     tmp_path: Path, session_factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixed_dt = datetime(2024, 1, 11, 10, 11, 12, tzinfo=UTC)
-    monkeypatch.setattr(metadata_extractor_module, "extract_file_metadata", lambda _path, _hash: [
-        metadata_extractor_module.MetadataItem("OWNER", "LL"),
-        metadata_extractor_module.MetadataItem("CONTEXT", "General"),
-        metadata_extractor_module.MetadataItem("TAKEN_DT", fixed_dt.isoformat()),
-        metadata_extractor_module.MetadataItem("FS_CTIME", fixed_dt.isoformat()),
-        metadata_extractor_module.MetadataItem("FS_MTIME", fixed_dt.isoformat()),
-    ])
+    _patch_extract_file_metadata(monkeypatch, _metadata_rows_for(fixed_dt))
 
     first = _write_file(tmp_path / "dataset" / "inbox" / "a.jpg", b"first")
     second = _write_file(tmp_path / "dataset" / "inbox" / "b.jpg", b"second")
@@ -146,13 +154,7 @@ def test_apply_does_not_call_generate_canonical_filename(
     tmp_path: Path, session_factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixed_dt = datetime(2024, 1, 11, 10, 11, 12, tzinfo=UTC)
-    monkeypatch.setattr(metadata_extractor_module, "extract_file_metadata", lambda _path, _hash: [
-        metadata_extractor_module.MetadataItem("OWNER", "LL"),
-        metadata_extractor_module.MetadataItem("CONTEXT", "General"),
-        metadata_extractor_module.MetadataItem("TAKEN_DT", fixed_dt.isoformat()),
-        metadata_extractor_module.MetadataItem("FS_CTIME", fixed_dt.isoformat()),
-        metadata_extractor_module.MetadataItem("FS_MTIME", fixed_dt.isoformat()),
-    ])
+    _patch_extract_file_metadata(monkeypatch, _metadata_rows_for(fixed_dt))
 
     source = _write_file(tmp_path / "dataset" / "inbox" / "photo_one.jpg", b"one")
     run = RunService(session_factory).create_run()
@@ -175,13 +177,7 @@ def test_apply_executes_only_planned_paths(
     tmp_path: Path, session_factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixed_dt = datetime(2024, 1, 11, 10, 11, 12, tzinfo=UTC)
-    monkeypatch.setattr(metadata_extractor_module, "extract_file_metadata", lambda _path, _hash: [
-        metadata_extractor_module.MetadataItem("OWNER", "LL"),
-        metadata_extractor_module.MetadataItem("CONTEXT", "General"),
-        metadata_extractor_module.MetadataItem("TAKEN_DT", fixed_dt.isoformat()),
-        metadata_extractor_module.MetadataItem("FS_CTIME", fixed_dt.isoformat()),
-        metadata_extractor_module.MetadataItem("FS_MTIME", fixed_dt.isoformat()),
-    ])
+    _patch_extract_file_metadata(monkeypatch, _metadata_rows_for(fixed_dt))
 
     source = _write_file(tmp_path / "dataset" / "inbox" / "photo_one.jpg", b"one")
     run = RunService(session_factory).create_run()
@@ -208,13 +204,7 @@ def test_apply_logging_reflects_planned_action_types(
 
     monkeypatch.setattr(apply_module.logger, "info", _capture)
     fixed_dt = datetime(2024, 1, 11, 10, 11, 12, tzinfo=UTC)
-    monkeypatch.setattr(metadata_extractor_module, "extract_file_metadata", lambda _path, _hash: [
-        metadata_extractor_module.MetadataItem("OWNER", "LL"),
-        metadata_extractor_module.MetadataItem("CONTEXT", "General"),
-        metadata_extractor_module.MetadataItem("TAKEN_DT", fixed_dt.isoformat()),
-        metadata_extractor_module.MetadataItem("FS_CTIME", fixed_dt.isoformat()),
-        metadata_extractor_module.MetadataItem("FS_MTIME", fixed_dt.isoformat()),
-    ])
+    _patch_extract_file_metadata(monkeypatch, _metadata_rows_for(fixed_dt))
 
     first = _write_file(tmp_path / "dataset" / "inbox" / "a.jpg", b"first")
     second = _write_file(tmp_path / "dataset" / "inbox" / "b.jpg", b"second")
@@ -224,3 +214,51 @@ def test_apply_logging_reflects_planned_action_types(
 
     actions = {extra.get("action") for extra in calls if extra.get("phase") == "apply"}
     assert "RENAME" in actions or "COLLISION_RESOLVED" in actions
+
+
+def test_planner_prefers_classification_dt_over_legacy_taken_dt(
+    tmp_path: Path, session_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    classification_dt = datetime(2024, 12, 8, 0, 9, 23, 123000, tzinfo=UTC)
+    legacy_taken_dt = datetime(2026, 3, 22, 8, 23, 5, 870000, tzinfo=UTC)
+    _patch_extract_file_metadata(monkeypatch, _metadata_rows_for(classification_dt, legacy_taken_dt=legacy_taken_dt))
+
+    source = _write_file(tmp_path / "dataset" / "inbox" / "photo_one.jpg", b"one")
+    run = RunService(session_factory).create_run()
+    PlanningService(session_factory).plan_run(run.id, [source])
+
+    with session_factory() as session:
+        action = session.scalar(select(PlannedAction).where(PlannedAction.run_id == run.id))
+        assert action is not None
+        assert action.target_path is not None
+        assert "/2024/12/" in action.target_path
+        assert action.target_path.endswith("IMG_20241208_000923123_LL_General.jpg")
+
+
+def test_planner_falls_back_to_legacy_taken_dt_when_classification_dt_missing(
+    tmp_path: Path, session_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    legacy_taken_dt = datetime(2026, 3, 22, 8, 23, 5, 870000, tzinfo=UTC)
+    monkeypatch.setattr(
+        metadata_extractor_module,
+        "extract_file_metadata",
+        lambda _path, _hash, **_kwargs: [
+            metadata_extractor_module.MetadataItem("OWNER", "LL"),
+            metadata_extractor_module.MetadataItem("CONTEXT", "General"),
+            metadata_extractor_module.MetadataItem("TAKEN_DT", legacy_taken_dt.isoformat()),
+            metadata_extractor_module.MetadataItem("TAKEN_DT_SOURCE", "filesystem"),
+            metadata_extractor_module.MetadataItem("FS_CTIME", legacy_taken_dt.isoformat()),
+            metadata_extractor_module.MetadataItem("FS_MTIME", legacy_taken_dt.isoformat()),
+        ],
+    )
+
+    source = _write_file(tmp_path / "dataset" / "inbox" / "photo_one.jpg", b"one")
+    run = RunService(session_factory).create_run()
+    PlanningService(session_factory).plan_run(run.id, [source])
+
+    with session_factory() as session:
+        action = session.scalar(select(PlannedAction).where(PlannedAction.run_id == run.id))
+        assert action is not None
+        assert action.target_path is not None
+        assert "/2026/03/" in action.target_path
+        assert action.target_path.endswith("IMG_20260322_082305870_LL_General.jpg")
