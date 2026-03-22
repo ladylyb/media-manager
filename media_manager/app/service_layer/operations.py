@@ -9,6 +9,7 @@ from uuid import UUID
 
 from media_manager.app.canonical.context import CanonicalContext
 from media_manager.app.canonical.factory import build_canonical_policy
+from media_manager.app.core.naming import DEFAULT_CONTEXT, DEFAULT_OWNER, normalize_naming_strategy
 from media_manager.app.persistence.apply import ApplyService
 from media_manager.app.persistence.canonicalization import RecomputeMode, recompute_canonical_assignments
 from media_manager.app.persistence.duplicate_reviews import DuplicateReviewService
@@ -124,19 +125,47 @@ class OperationServices:
             self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))
             raise
 
-    def plan(self, *, folder_path: str, strict_metadata: bool) -> dict[str, object]:
+    def plan(
+        self,
+        *,
+        folder_path: str,
+        strict_metadata: bool,
+        owner: str = DEFAULT_OWNER,
+        context: str = DEFAULT_CONTEXT,
+        naming_strategy: str = "SHARED_CANONICAL_NAME",
+        owner_context_override_confirmed: bool = False,
+    ) -> dict[str, object]:
         folder = normalize_and_resolve_directory(folder_path)
+        normalized_strategy = normalize_naming_strategy(naming_strategy)
         run_log = self._op_runs().start(
             operation_type=OperationRunType.PLAN,
-            context={"folder_path": str(folder), "strict_metadata": bool(strict_metadata)},
+            context={
+                "folder_path": str(folder),
+                "strict_metadata": bool(strict_metadata),
+                "owner": owner,
+                "context": context,
+                "naming_strategy": normalized_strategy,
+                "owner_context_override_confirmed": bool(owner_context_override_confirmed),
+            },
         )
         ingest = IngestService(self.session_factory)
         run_service = RunService(self.session_factory)
         planner = PlanningService(self.session_factory)
         try:
             files = ingest.collect_files(folder)
-            ingest.ingest_paths(files, authoritative_root=folder)
-            run = run_service.create_run()
+            ingest.ingest_paths(
+                files,
+                authoritative_root=folder,
+                owner=owner,
+                context=context,
+                owner_context_override_confirmed=owner_context_override_confirmed,
+            )
+            run = run_service.create_run(
+                owner=owner,
+                context=context,
+                naming_strategy=normalized_strategy,
+                owner_context_override_confirmed=owner_context_override_confirmed,
+            )
             self._op_runs().link_run(UUID(run_log.operation_run_id), linked_run_id=run.id)
             summary = planner.plan_run(run.id, files, ingest_if_needed=False, strict_missing_metadata=strict_metadata)
             self._op_runs().complete(UUID(run_log.operation_run_id))
@@ -146,6 +175,9 @@ class OperationServices:
                 "operation_run_id": run_log.operation_run_id,
                 "run_id": str(run.id),
                 "strict_metadata": strict_metadata,
+                "owner": owner,
+                "context": context,
+                "naming_strategy": normalized_strategy,
                 "summary": summary.to_dict(),
             }
         except Exception as exc:
@@ -231,14 +263,41 @@ class OperationServices:
     def operator_run(self, *, folder_path: str, policy_name: str, dry_run: bool) -> dict[str, object]:
         return self.run(folder_path=folder_path, policy_name=policy_name, dry_run=dry_run)
 
-    def run(self, *, folder_path: str, policy_name: str, dry_run: bool) -> dict[str, object]:
+    def run(
+        self,
+        *,
+        folder_path: str,
+        policy_name: str,
+        dry_run: bool,
+        owner: str = DEFAULT_OWNER,
+        context: str = DEFAULT_CONTEXT,
+        naming_strategy: str = "SHARED_CANONICAL_NAME",
+        owner_context_override_confirmed: bool = False,
+    ) -> dict[str, object]:
         folder = normalize_and_resolve_directory(folder_path)
+        normalized_strategy = normalize_naming_strategy(naming_strategy)
         run_log = self._op_runs().start(
             operation_type=OperationRunType.OPERATOR_RUN,
-            context={"folder_path": str(folder), "policy_name": policy_name, "dry_run": bool(dry_run)},
+            context={
+                "folder_path": str(folder),
+                "policy_name": policy_name,
+                "dry_run": bool(dry_run),
+                "owner": owner,
+                "context": context,
+                "naming_strategy": normalized_strategy,
+                "owner_context_override_confirmed": bool(owner_context_override_confirmed),
+            },
         )
         try:
-            result = self._run_composite(folder=folder, policy_name=policy_name, dry_run=dry_run)
+            result = self._run_composite(
+                folder=folder,
+                policy_name=policy_name,
+                dry_run=dry_run,
+                owner=owner,
+                context=context,
+                naming_strategy=normalized_strategy,
+                owner_context_override_confirmed=owner_context_override_confirmed,
+            )
             linked_run_id = result.get("run_id")
             if isinstance(linked_run_id, str):
                 try:
@@ -252,7 +311,17 @@ class OperationServices:
             self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))
             raise
 
-    def _run_composite(self, *, folder: Path, policy_name: str, dry_run: bool) -> dict[str, object]:
+    def _run_composite(
+        self,
+        *,
+        folder: Path,
+        policy_name: str,
+        dry_run: bool,
+        owner: str,
+        context: str,
+        naming_strategy: str,
+        owner_context_override_confirmed: bool,
+    ) -> dict[str, object]:
         ingest_service = IngestService(self.session_factory)
         files = IngestService.collect_files(folder)
         if dry_run:
@@ -263,8 +332,18 @@ class OperationServices:
             }
 
         policy = build_canonical_policy(policy_name)
-        ingest_summary = ingest_service.ingest_paths(files)
-        run = RunService(self.session_factory).create_run()
+        ingest_summary = ingest_service.ingest_paths(
+            files,
+            owner=owner,
+            context=context,
+            owner_context_override_confirmed=owner_context_override_confirmed,
+        )
+        run = RunService(self.session_factory).create_run(
+            owner=owner,
+            context=context,
+            naming_strategy=naming_strategy,
+            owner_context_override_confirmed=owner_context_override_confirmed,
+        )
         recompute_summary = recompute_canonical_assignments(
             self.session_factory,
             policy=policy,
@@ -302,6 +381,9 @@ class OperationServices:
                 },
                 "dry_run": dry_run,
                 "policy_name": policy_name.strip().upper(),
+                "owner": owner,
+                "context": context,
+                "naming_strategy": naming_strategy,
             },
             "duplicates_found": plan_summary.duplicate_actions,
             "canonical_changes": recompute_summary.changed_count,
@@ -324,6 +406,7 @@ class OperationServices:
                     "mutates_state": True,
                     "supports_dry_run": False,
                     "defaults": {"strict_metadata": False},
+                    "optional_fields": ["owner", "context", "naming_strategy", "owner_context_override_confirmed"],
                     "required_fields": ["folder_path"],
                 },
                 {
@@ -355,7 +438,12 @@ class OperationServices:
                     "label": "Composite Run (Compatibility)",
                     "mutates_state": True,
                     "supports_dry_run": True,
-                    "defaults": {"dry_run": True},
+                    "defaults": {
+                        "dry_run": True,
+                        "owner": DEFAULT_OWNER,
+                        "context": DEFAULT_CONTEXT,
+                        "naming_strategy": "SHARED_CANONICAL_NAME",
+                    },
                     "required_fields": ["folder_path", "policy_name"],
                 },
             ]
@@ -368,6 +456,7 @@ class OperationServices:
         self,
         *,
         selected_policy: str,
+        naming_strategy: str,
         preferred_roots: tuple[str, ...],
         recanonicalization_enabled: bool,
         version: int,
@@ -375,6 +464,7 @@ class OperationServices:
         result = PolicySettingsService(self.session_factory).update_settings(
             UpdatePolicySettingsCommand(
                 selected_policy=selected_policy,
+                naming_strategy=naming_strategy,
                 preferred_roots=preferred_roots,
                 recanonicalization_enabled=recanonicalization_enabled,
                 version=version,

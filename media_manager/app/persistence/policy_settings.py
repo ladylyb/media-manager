@@ -11,9 +11,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from media_manager.app.canonical.factory import build_canonical_policy, resolve_default_policy_name
+from media_manager.app.core.naming import normalize_naming_strategy
 from media_manager.app.core.errors import PolicySettingsValidationError, PolicySettingsVersionConflictError
 from media_manager.app.persistence.base import transactional_session
-from media_manager.app.persistence.models import OperatorPolicySetting
+from media_manager.app.persistence.models import NamingStrategyDB, OperatorPolicySetting
 
 _POLICY_ROW_ID = 1
 
@@ -23,6 +24,7 @@ class PolicySettingsSnapshot:
     """Deterministic snapshot for operator policy settings."""
 
     selected_policy: str
+    naming_strategy: str
     preferred_roots: tuple[str, ...]
     recanonicalization_enabled: bool
     updated_at: datetime
@@ -68,6 +70,9 @@ class PolicySettingsSnapshot:
                 "selected_policy": self.selected_policy,
                 "preferred_roots": list(self.preferred_roots),
             },
+            "naming": {
+                "strategy": self.naming_strategy,
+            },
             "tie_breaker_rules": self.tie_breaker_rules(),
             "recanonicalization": {
                 "enabled": self.recanonicalization_enabled,
@@ -84,6 +89,7 @@ class UpdatePolicySettingsCommand:
     """Validated command object for operator policy updates."""
 
     selected_policy: str
+    naming_strategy: str
     preferred_roots: tuple[str, ...]
     recanonicalization_enabled: bool
     version: int
@@ -122,6 +128,7 @@ class PolicySettingsService:
                 row = OperatorPolicySetting(
                     id=_POLICY_ROW_ID,
                     selected_policy=validated.selected_policy,
+                    naming_strategy=validated.naming_strategy,
                     preferred_roots_json=self._serialize_roots(validated.preferred_roots),
                     recanonicalization_enabled=validated.recanonicalization_enabled,
                     version=1,
@@ -137,6 +144,7 @@ class PolicySettingsService:
                 )
 
             row.selected_policy = validated.selected_policy
+            row.naming_strategy = validated.naming_strategy
             row.preferred_roots_json = self._serialize_roots(validated.preferred_roots)
             row.recanonicalization_enabled = validated.recanonicalization_enabled
             row.version += 1
@@ -161,6 +169,7 @@ class PolicySettingsService:
         normalized_roots = self._normalize_roots(command.preferred_roots)
         return UpdatePolicySettingsCommand(
             selected_policy=selected_policy,
+            naming_strategy=self._validate_naming_strategy(command.naming_strategy),
             preferred_roots=normalized_roots,
             recanonicalization_enabled=bool(command.recanonicalization_enabled),
             version=int(command.version),
@@ -169,6 +178,11 @@ class PolicySettingsService:
     def _snapshot_from_row(self, row: OperatorPolicySetting) -> PolicySettingsSnapshot:
         return PolicySettingsSnapshot(
             selected_policy=row.selected_policy.strip().upper(),
+            naming_strategy=(
+                row.naming_strategy.value
+                if isinstance(row.naming_strategy, NamingStrategyDB)
+                else str(row.naming_strategy).strip().upper()
+            ),
             preferred_roots=self._deserialize_roots(row.preferred_roots_json),
             recanonicalization_enabled=bool(row.recanonicalization_enabled),
             updated_at=row.updated_at,
@@ -182,11 +196,18 @@ class PolicySettingsService:
         normalized = self._normalize_roots(preferred_roots)
         return PolicySettingsSnapshot(
             selected_policy=selected_policy,
+            naming_strategy=NamingStrategyDB.SHARED_CANONICAL_NAME.value,
             preferred_roots=normalized,
             recanonicalization_enabled=False,
             updated_at=datetime.fromtimestamp(0, tz=timezone.utc),
             version=0,
         )
+
+    def _validate_naming_strategy(self, raw: str) -> str:
+        try:
+            return normalize_naming_strategy(raw)
+        except ValueError as exc:
+            raise PolicySettingsValidationError(str(exc)) from exc
 
     def _normalize_roots(self, preferred_roots: tuple[str, ...]) -> tuple[str, ...]:
         values: set[str] = set()

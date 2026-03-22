@@ -126,15 +126,16 @@ def test_plan_returns_run_and_summary(tmp_path: Path, monkeypatch: pytest.Monkey
         def collect_files(self, root: Path) -> list[Path]:
             return [root / "a.jpg"]
 
-        def ingest_paths(self, _files: list[Path], *, authoritative_root: Path | None = None):
-            _ = authoritative_root
+        def ingest_paths(self, _files: list[Path], *, authoritative_root: Path | None = None, **kwargs):
+            _ = authoritative_root, kwargs
             return SimpleNamespace()
 
     class _FakeRunService:
         def __init__(self, _session_factory) -> None:
             pass
 
-        def create_run(self):
+        def create_run(self, **kwargs):
+            _ = kwargs
             return SimpleNamespace(id=run_id)
 
     class _FakePlanner:
@@ -282,15 +283,17 @@ def test_run_execution_flows_through_service_layer_and_links_run(tmp_path: Path,
             assert root == dataset
             return [target]
 
-        def ingest_paths(self, files: list[Path]) -> IngestSummary:
+        def ingest_paths(self, files: list[Path], **kwargs) -> IngestSummary:
             assert files == [target]
+            _ = kwargs
             return IngestSummary(1, 1, 1, 0, 1, 0.1)
 
     class _FakeRunService:
         def __init__(self, _session_factory) -> None:
             pass
 
-        def create_run(self):
+        def create_run(self, **kwargs):
+            _ = kwargs
             return SimpleNamespace(id=run_id)
 
     class _FakePlanner:
@@ -457,15 +460,17 @@ def test_plan_accepts_wrapped_quotes_path(tmp_path: Path, monkeypatch: pytest.Mo
             assert root == dataset
             return [root / "a.jpg"]
 
-        def ingest_paths(self, _files: list[Path], *, authoritative_root: Path | None = None):
+        def ingest_paths(self, _files: list[Path], *, authoritative_root: Path | None = None, **kwargs):
             assert authoritative_root == dataset
+            _ = kwargs
             return SimpleNamespace()
 
     class _FakeRunService:
         def __init__(self, _session_factory) -> None:
             pass
 
-        def create_run(self):
+        def create_run(self, **kwargs):
+            _ = kwargs
             return SimpleNamespace(id=uuid4())
 
     class _FakePlanner:

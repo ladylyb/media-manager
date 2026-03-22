@@ -25,3 +25,5 @@ curl -X POST http://127.0.0.1:8000/api/ingest \
 
 - Ingest can be run independently before `plan`.
 - `plan` also performs ingest by default for its input set.
+- The wizard/plan flow can now supply run-level `owner` and `context` values that become naming inputs for new content.
+- Existing duplicate-backed content keeps its stored `owner/context` unless the operator explicitly confirms an override.

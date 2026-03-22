@@ -14,6 +14,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from media_manager.app.core.date_extraction import filename_has_date
+from media_manager.app.core.naming import DEFAULT_CONTEXT, DEFAULT_OWNER
 from media_manager.app.core.hashing import sha256_file
 from media_manager.app.core.logging_config import get_logger
 from media_manager.app.persistence.models import FileContent, MediaMetadata, MetadataCode
@@ -159,15 +160,21 @@ def taken_dt_source_rank(source: str | None) -> int:
     return _TAKEN_DT_SOURCE_RANK.get((source or "unknown").strip().lower(), _TAKEN_DT_SOURCE_RANK["unknown"])
 
 
-def extract_file_metadata(path: Path, file_hash: str) -> list[MetadataItem]:
+def extract_file_metadata(
+    path: Path,
+    file_hash: str,
+    *,
+    owner: str = DEFAULT_OWNER,
+    context: str = DEFAULT_CONTEXT,
+) -> list[MetadataItem]:
     _ = file_hash  # hash is part of extraction context and logging identity.
     stat = path.stat()
     ctime = datetime.fromtimestamp(float(stat.st_ctime), tz=UTC).isoformat()
     mtime = datetime.fromtimestamp(float(stat.st_mtime), tz=UTC).isoformat()
 
     rows: dict[str, str] = {
-        "OWNER": "LL",
-        "CONTEXT": "General",
+        "OWNER": owner,
+        "CONTEXT": context,
         "FS_CTIME": ctime,
         "FS_MTIME": mtime,
     }
@@ -435,4 +442,3 @@ def pre_extract_for_paths(
         collect_batch_metrics=True,
     )
     return results
-

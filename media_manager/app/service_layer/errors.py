@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from media_manager.app.core.errors import (
     MediaManagerError,
+    OwnerContextOverrideRequiredError,
     PolicySettingsValidationError,
     PolicySettingsVersionConflictError,
 )
@@ -31,6 +32,16 @@ def map_exception(exc: Exception) -> ServiceLayerException:
         return ServiceLayerException(code="VALIDATION_ERROR", message=str(exc), http_status=400)
     if isinstance(exc, PolicySettingsVersionConflictError):
         return ServiceLayerException(code="STATE_CONFLICT", message=str(exc), http_status=400)
+    if isinstance(exc, OwnerContextOverrideRequiredError):
+        return ServiceLayerException(
+            code="OWNER_CONTEXT_OVERRIDE_REQUIRED",
+            message=(
+                "This batch matches existing content with different saved owner/context values. "
+                "Confirm the override to correct the existing content group and corresponding canonical item."
+            ),
+            http_status=400,
+            details=exc.details,
+        )
     if isinstance(exc, ValueError):
         return ServiceLayerException(code="VALIDATION_ERROR", message=str(exc), http_status=400)
     if isinstance(exc, MediaManagerError):

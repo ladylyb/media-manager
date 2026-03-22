@@ -39,7 +39,8 @@ def test_trigger_run_dry_run_skips_apply(tmp_path: Path, monkeypatch: pytest.Mon
         def collect_files(_root: Path) -> list[Path]:
             return [root / "a.jpg"]
 
-        def ingest_paths(self, _files: list[Path]) -> IngestSummary:
+        def ingest_paths(self, _files: list[Path], **kwargs) -> IngestSummary:
+            _ = kwargs
             raise AssertionError("ingest_paths must not run for dry-run validation mode")
 
         def validate_paths(self, _files: list[Path], *, authoritative_root: Path | None = None):
@@ -78,7 +79,8 @@ def test_trigger_run_dry_run_skips_apply(tmp_path: Path, monkeypatch: pytest.Mon
         def __init__(self, _session_factory) -> None:
             raise AssertionError("RunService must not be constructed for dry-run validation mode")
 
-        def create_run(self) -> _RunObj:
+        def create_run(self, **kwargs) -> _RunObj:
+            _ = kwargs
             return _RunObj(id=uuid.UUID("11111111-1111-1111-1111-111111111111"))
 
     class FakePlanningService:
@@ -123,14 +125,16 @@ def test_trigger_run_full_run_invokes_apply(tmp_path: Path, monkeypatch: pytest.
         def collect_files(_root: Path) -> list[Path]:
             return []
 
-        def ingest_paths(self, _files: list[Path]) -> IngestSummary:
+        def ingest_paths(self, _files: list[Path], **kwargs) -> IngestSummary:
+            _ = kwargs
             return IngestSummary(0, 0, 0, 0, 0, 0.0)
 
     class FakeRunService:
         def __init__(self, _session_factory) -> None:
             pass
 
-        def create_run(self) -> _RunObj:
+        def create_run(self, **kwargs) -> _RunObj:
+            _ = kwargs
             return _RunObj(id=uuid.UUID("22222222-2222-2222-2222-222222222222"))
 
     class FakePlanningService:
@@ -243,14 +247,16 @@ def test_trigger_result_shape_stable_across_repeated_calls(tmp_path: Path, monke
         def collect_files(_root: Path) -> list[Path]:
             return []
 
-        def ingest_paths(self, _files: list[Path]) -> IngestSummary:
+        def ingest_paths(self, _files: list[Path], **kwargs) -> IngestSummary:
+            _ = kwargs
             return IngestSummary(0, 0, 0, 0, 0, 0.0)
 
     class FakeRunService:
         def __init__(self, _session_factory) -> None:
             pass
 
-        def create_run(self) -> _RunObj:
+        def create_run(self, **kwargs) -> _RunObj:
+            _ = kwargs
             run_counter["count"] += 1
             return _RunObj(id=uuid.uuid5(uuid.NAMESPACE_DNS, f"run-{run_counter['count']}"))
 
@@ -294,7 +300,16 @@ def test_trigger_result_shape_stable_across_repeated_calls(tmp_path: Path, monke
 
     assert set(first.keys()) == {"mode", "run_id", "summary_metrics", "duplicates_found", "canonical_changes"}
     assert set(second.keys()) == set(first.keys())
-    assert set(first["summary_metrics"].keys()) == {"ingest", "plan", "apply", "dry_run", "policy_name"}
+    assert set(first["summary_metrics"].keys()) == {
+        "ingest",
+        "plan",
+        "apply",
+        "dry_run",
+        "policy_name",
+        "owner",
+        "context",
+        "naming_strategy",
+    }
     assert set(second["summary_metrics"].keys()) == set(first["summary_metrics"].keys())
     assert first["duplicates_found"] == second["duplicates_found"] == 1
     assert first["canonical_changes"] == second["canonical_changes"] == 2
