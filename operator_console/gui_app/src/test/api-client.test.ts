@@ -62,7 +62,16 @@ describe("api client", () => {
         ok: false,
         status: 400,
         json: async () => ({
-          errors: [{ message: "folder_path must not be empty." }],
+          errors: [
+            {
+              code: "OWNER_CONTEXT_OVERRIDE_REQUIRED",
+              message: "folder_path must not be empty.",
+              details: {
+                existing_owner: "LL",
+                existing_context: "General",
+              },
+            },
+          ],
         }),
       }),
     );
@@ -71,6 +80,16 @@ describe("api client", () => {
       name: "ApiClientError",
       message: "folder_path must not be empty.",
       status: 400,
+      errors: [
+        {
+          code: "OWNER_CONTEXT_OVERRIDE_REQUIRED",
+          message: "folder_path must not be empty.",
+          details: {
+            existing_owner: "LL",
+            existing_context: "General",
+          },
+        },
+      ],
     });
   });
 

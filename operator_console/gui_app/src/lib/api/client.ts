@@ -16,11 +16,15 @@ export class ApiClientError extends Error {
 async function parseEnvelope<T>(response: Response): Promise<ApiEnvelope<T>> {
   if (!response.ok) {
     let msg = `HTTP ${response.status}`;
+    let errors: { code?: string; message: string; details?: Record<string, unknown> }[] | undefined;
     try {
       const body = await response.json();
-      if (body?.errors?.[0]?.message) msg = body.errors[0].message;
+      if (Array.isArray(body?.errors)) {
+        errors = body.errors;
+      }
+      if (errors?.[0]?.message) msg = errors[0].message;
     } catch {}
-    throw new ApiClientError(msg, response.status);
+    throw new ApiClientError(msg, response.status, errors);
   }
 
   const envelope = (await response.json()) as ApiEnvelope<T>;
