@@ -3,7 +3,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   ChevronDown,
-  ChevronUp,
   CheckSquare,
   Copy,
   FolderOpen,
@@ -18,6 +17,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { ExpandableSummaryPanel } from "@/components/ExpandableSummaryPanel";
 import { ErrorAlert } from "@/components/ErrorAlert";
 import { LiveProgressPanel } from "@/components/progress/LiveProgressPanel";
 import { JsonViewer } from "@/components/JsonViewer";
@@ -58,6 +58,14 @@ import {
 import { ApiClientError } from "@/lib/api/client";
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
+import {
+  DEFAULT_CONTEXT,
+  DEFAULT_NAMING_STRATEGY,
+  DEFAULT_OWNER,
+  formatNamingStrategy,
+  getNamingInputValidation,
+  NAMING_STRATEGY_OPTIONS,
+} from "@/lib/namingInputs";
 import { executionStepGuidance, type StepGuidanceSection } from "@/lib/workflow/executionStepGuidance";
 import { cn } from "@/lib/utils";
 import type {
@@ -139,32 +147,6 @@ const EXECUTION_TO_INVALIDATION: Record<ExecutionStepId, OperationInvalidationTa
   canonical: "canonicalRecompute",
   tag: "tagEnrichment",
 };
-
-const DEFAULT_OWNER = "LL";
-const DEFAULT_CONTEXT = "General";
-const DEFAULT_NAMING_STRATEGY = "SHARED_CANONICAL_NAME";
-
-const namingStrategyOptions = [
-  {
-    value: DEFAULT_NAMING_STRATEGY,
-    label: "Shared canonical name",
-    description: "Duplicates share the canonical family name and keep grouping obvious on disk.",
-  },
-  {
-    value: "DUPLICATE_OWNS_DATE_STANDARDIZED",
-    label: "Duplicate owns date (standardized)",
-    description: "Duplicates still get standardized names, but their own date evidence can drive the date portion.",
-  },
-  {
-    value: "PRESERVE_DUPLICATE_ORIGINAL_NAME",
-    label: "Preserve duplicate original name",
-    description: "Duplicates keep their original filename while the canonical item stays standardized.",
-  },
-] as const;
-
-function formatNamingStrategy(value: string) {
-  return namingStrategyOptions.find((option) => option.value === value)?.label ?? value;
-}
 
 function asOverrideConflictDetails(value: unknown): OverrideConflictDetails | null {
   if (!value || typeof value !== "object") return null;
@@ -697,6 +679,21 @@ export default function PipelineWizard() {
       return;
     }
 
+    if (stepId === "plan") {
+      const validation = getNamingInputValidation(
+        wizardState.steps.plan.input.owner,
+        wizardState.steps.plan.input.context,
+      );
+      if (!validation.isValid) {
+        if (validation.ownerError) {
+          document.getElementById("plan-owner")?.focus();
+        } else if (validation.contextError) {
+          document.getElementById("plan-context")?.focus();
+        }
+        return;
+      }
+    }
+
     setWizardState((current) => ({
       ...current,
       steps: {
@@ -808,6 +805,10 @@ export default function PipelineWizard() {
   const ingestResult = wizardState.steps.ingest.result;
   const ingestPayload = ingestResult ? asRecord(ingestResult.summary ?? ingestResult.report ?? ingestResult) : {};
   const planResult = wizardState.steps.plan.result;
+  const planInputValidation = getNamingInputValidation(
+    wizardState.steps.plan.input.owner,
+    wizardState.steps.plan.input.context,
+  );
   const planSummary = planResult ? asRecord(planResult.summary) : {};
   const applyResult = wizardState.steps.apply.result;
   const applySummary = applyResult ? asRecord(applyResult.summary) : {};
@@ -1508,6 +1509,7 @@ export default function PipelineWizard() {
           onRun={() => runExecutionStep("plan")}
           onContinue={goToNextStep}
           runLabel={state.status === "completed" ? "Run Again" : "Create Plan"}
+          runDisabled={!planInputValidation.isValid}
           runVariant={state.status === "completed" ? "outline" : "default"}
           preferContinue={state.status === "completed"}
           continueLabel="Continue to Duplicate Review"
@@ -1521,83 +1523,105 @@ export default function PipelineWizard() {
           }
           result={renderResultConsole("plan")}
         >
-          <div className="space-y-4 rounded-xl border bg-muted/15 p-4">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                Planning This Folder
-              </p>
-              <p className="mt-3 break-all rounded-lg border bg-background px-3 py-2 font-mono text-sm">
-                {state.input.folder_path || "--"}
-              </p>
-              <p className="mt-3 text-sm text-muted-foreground">
-                This path was carried forward from the completed Ingest step so the wizard can prepare the next stage automatically.
-              </p>
-            </div>
-
-            <div className="grid gap-4 lg:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="plan-owner">Owner</Label>
-                <Input
-                  id="plan-owner"
-                  value={state.input.owner}
-                  onChange={(event) => updateStepInput("plan", { owner: event.target.value })}
-                  placeholder={DEFAULT_OWNER}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Used for new content in this batch unless the system finds existing duplicate-backed content with saved values.
+          <div className="space-y-4">
+            <ExpandableSummaryPanel
+              title="Planning This Folder"
+              description="This path was carried forward from the completed Ingest step so the wizard can prepare the next stage automatically."
+              defaultOpen
+              summary={
+                <div className="space-y-2">
+                  <p className="break-all font-mono text-xs text-muted-foreground">{state.input.folder_path || "--"}</p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <p>Owner: {state.input.owner || DEFAULT_OWNER}</p>
+                    <p>Context: {state.input.context || DEFAULT_CONTEXT}</p>
+                    <p className="sm:col-span-2">
+                      Naming strategy: {formatNamingStrategy(state.input.naming_strategy)}
+                    </p>
+                  </div>
+                </div>
+              }
+            >
+              <div className="space-y-4">
+                <p className="break-all rounded-lg border bg-background px-3 py-2 font-mono text-sm">
+                  {state.input.folder_path || "--"}
                 </p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="plan-context">Context</Label>
-                <Input
-                  id="plan-context"
-                  value={state.input.context}
-                  onChange={(event) => updateStepInput("plan", { context: event.target.value })}
-                  placeholder={DEFAULT_CONTEXT}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Batch-specific context helps keep standardized filenames distinct across different sets of images.
-                </p>
-              </div>
-            </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="plan-naming-strategy">Naming strategy</Label>
-              <Select
-                value={state.input.naming_strategy}
-                onValueChange={(value) => updateStepInput("plan", { naming_strategy: value })}
-              >
-                <SelectTrigger id="plan-naming-strategy">
-                  <SelectValue placeholder="Choose a naming strategy" />
-                </SelectTrigger>
-                <SelectContent>
-                  {namingStrategyOptions.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                {namingStrategyOptions.find((option) => option.value === state.input.naming_strategy)?.description}
-              </p>
-              {policyQuery.error ? (
-                <p className="text-xs text-muted-foreground">
-                  Default naming rule could not be loaded: {parseError(policyQuery.error)}
-                </p>
-              ) : null}
-            </div>
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="plan-owner">Owner</Label>
+                    <Input
+                      id="plan-owner"
+                      value={state.input.owner}
+                      onChange={(event) => updateStepInput("plan", { owner: event.target.value })}
+                      placeholder={DEFAULT_OWNER}
+                      aria-invalid={Boolean(planInputValidation.ownerError)}
+                      className={cn(planInputValidation.ownerError && "border-destructive focus-visible:ring-destructive")}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Used for new content in this batch unless the system finds existing duplicate-backed content with saved values. Use letters, numbers, and underscores only.
+                    </p>
+                    {planInputValidation.ownerError ? (
+                      <p className="text-sm text-destructive">{planInputValidation.ownerError}</p>
+                    ) : null}
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="plan-context">Context</Label>
+                    <Input
+                      id="plan-context"
+                      value={state.input.context}
+                      onChange={(event) => updateStepInput("plan", { context: event.target.value })}
+                      placeholder={DEFAULT_CONTEXT}
+                      aria-invalid={Boolean(planInputValidation.contextError)}
+                      className={cn(planInputValidation.contextError && "border-destructive focus-visible:ring-destructive")}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Batch-specific context helps keep standardized filenames distinct across different sets of images. Use letters, numbers, and underscores only, up to 20 characters.
+                    </p>
+                    {planInputValidation.contextError ? (
+                      <p className="text-sm text-destructive">{planInputValidation.contextError}</p>
+                    ) : null}
+                  </div>
+                </div>
 
-            <div className="rounded-lg border border-dashed bg-background/70 p-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                Planning Inputs
-              </p>
-              <div className="mt-3 grid gap-2 text-sm text-foreground/90 sm:grid-cols-2">
-                <p>Owner: {state.input.owner || DEFAULT_OWNER}</p>
-                <p>Context: {state.input.context || DEFAULT_CONTEXT}</p>
-                <p className="sm:col-span-2">Naming strategy: {formatNamingStrategy(state.input.naming_strategy)}</p>
+                <div className="space-y-2">
+                  <Label htmlFor="plan-naming-strategy">Naming strategy</Label>
+                  <Select
+                    value={state.input.naming_strategy}
+                    onValueChange={(value) => updateStepInput("plan", { naming_strategy: value })}
+                  >
+                    <SelectTrigger id="plan-naming-strategy">
+                      <SelectValue placeholder="Choose a naming strategy" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {NAMING_STRATEGY_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    {NAMING_STRATEGY_OPTIONS.find((option) => option.value === state.input.naming_strategy)?.description}
+                  </p>
+                  {policyQuery.error ? (
+                    <p className="text-xs text-muted-foreground">
+                      Default naming rule could not be loaded: {parseError(policyQuery.error)}
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="rounded-lg border border-dashed bg-background/70 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                    Planning Inputs
+                  </p>
+                  <div className="mt-3 grid gap-2 text-sm text-foreground/90 sm:grid-cols-2">
+                    <p>Owner: {state.input.owner || DEFAULT_OWNER}</p>
+                    <p>Context: {state.input.context || DEFAULT_CONTEXT}</p>
+                    <p className="sm:col-span-2">Naming strategy: {formatNamingStrategy(state.input.naming_strategy)}</p>
+                  </div>
+                </div>
               </div>
-            </div>
+            </ExpandableSummaryPanel>
 
             {planOverrideConflict ? (
               <div className="space-y-3 rounded-xl border border-amber-300 bg-amber-50/80 p-4">
@@ -1655,7 +1679,13 @@ export default function PipelineWizard() {
             ) : null}
           </div>
 
-          <CollapsibleSection title="Show previous step details" defaultOpen={false} tone="context">
+          <CollapsibleSection
+            title="Previous Step Details"
+            description="A quick recap of what the completed ingest step discovered before planning starts."
+            summary="Review the ingest counts and plain-English meaning that will feed this plan."
+            defaultOpen={false}
+            tone="context"
+          >
             <div className="space-y-4 rounded-xl border border-primary/15 bg-primary/[0.04] p-4">
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary/80">
@@ -1666,7 +1696,12 @@ export default function PipelineWizard() {
               <MetricGrid items={ingestSnapshot.metrics} />
             </div>
           </CollapsibleSection>
-          <CollapsibleSection title="Show naming inputs summary" defaultOpen={false}>
+          <CollapsibleSection
+            title="Naming Inputs Summary"
+            description="These are the batch naming inputs that will shape saved filenames and any duplicate-triggered correction flow."
+            summary={`Owner ${state.input.owner || DEFAULT_OWNER}, context ${state.input.context || DEFAULT_CONTEXT}, ${formatNamingStrategy(state.input.naming_strategy)}.`}
+            defaultOpen={false}
+          >
             <RestPointSummaryCard
               title="Plan Naming Inputs"
               lines={buildPlanConfigurationSummary()}
@@ -2327,40 +2362,33 @@ function MetricGrid({ items }: { items: Array<{ label: string; value: string | n
 
 function CollapsibleSection({
   title,
+  description,
+  summary,
   defaultOpen = false,
   tone = "default",
   children,
 }: {
   title: string;
+  description?: string;
+  summary?: string;
   defaultOpen?: boolean;
   tone?: "default" | "context";
   children: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
-
   return (
-    <div className="space-y-3">
-      <div className="flex justify-start">
-        <Button type="button" variant="outline" size="sm" onClick={() => setOpen((current) => !current)}>
-          {open ? (
-            <>
-              <ChevronUp className="mr-2 h-4 w-4" />
-              Hide section
-            </>
-          ) : (
-            <>
-              <ChevronDown className="mr-2 h-4 w-4" />
-              {title}
-            </>
-          )}
-        </Button>
+    <ExpandableSummaryPanel
+      title={title}
+      description={description}
+      summary={summary ?? "Expand to review the supporting detail for this step."}
+      defaultOpen={defaultOpen}
+      className={tone === "context" ? "border-primary/15 bg-primary/[0.04]" : undefined}
+      openClassName={tone === "context" ? "border-primary/20 bg-primary/[0.05]" : undefined}
+      closedClassName={tone === "context" ? "border-primary/15 bg-primary/[0.04]" : undefined}
+    >
+      <div className={tone === "context" ? "rounded-xl border border-border/60 bg-muted/[0.08] p-4" : ""}>
+        {children}
       </div>
-      {open && (
-        <div className={tone === "context" ? "rounded-xl border border-border/60 bg-muted/[0.08] p-4" : ""}>
-          {children}
-        </div>
-      )}
-    </div>
+    </ExpandableSummaryPanel>
   );
 }
 
