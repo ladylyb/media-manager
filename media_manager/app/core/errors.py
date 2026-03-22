@@ -72,6 +72,18 @@ class ApplyTargetOccupiedError(MediaManagerError):
         super().__init__(f"Apply target path already occupied unexpectedly: {target_path}")
 
 
+class ApplyTargetParentInvalidError(MediaManagerError):
+    """Raised when apply cannot create the target parent path deterministically."""
+
+    def __init__(self, target_parent_path: str, *, conflicting_path: str | None = None) -> None:
+        detail = (
+            f" existing non-directory path: {conflicting_path}"
+            if conflicting_path is not None
+            else " target parent path could not be created"
+        )
+        super().__init__(f"Apply target parent path invalid: {target_parent_path};{detail}")
+
+
 class CanonicalPolicyException(MediaManagerError):
     """Raised when canonical policy selection cannot deterministically resolve an instance."""
 

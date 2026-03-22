@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from media_manager.app.core.errors import (
     ApplyIntegrityException,
     ApplyStateError,
+    ApplyTargetParentInvalidError,
     ApplyTargetOccupiedError,
     CanonicalUnreadableError,
     RunNotFoundError,
@@ -490,7 +491,18 @@ class ApplyService:
                 planned_action_id=action.id,
             )
 
-        destination.parent.mkdir(parents=True, exist_ok=True)
+        parent_path_error = self._ensure_target_parent(run_id, destination)
+        if parent_path_error is not None:
+            return ActionOutcome(
+                result="FAILED",
+                source_path=str(source_resolved),
+                target_path=str(destination_resolved),
+                error_message=str(parent_path_error),
+                collision_detected=False,
+                collision_resolved=False,
+                file_instance_id=action.file_id,
+                planned_action_id=action.id,
+            )
         collision_detected = destination.exists()
         if collision_detected:
             self._record_target_occupied_event(run_id, str(destination_resolved))
@@ -537,6 +549,33 @@ class ApplyService:
         target = Path(outcome.target_path)
         source = Path(outcome.source_path)
         return target.exists() and target.is_file() and not source.exists()
+
+    def _ensure_target_parent(self, run_id: uuid.UUID, destination: Path) -> ApplyTargetParentInvalidError | None:
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            return None
+        except OSError:
+            conflicting_path = self._first_existing_non_directory(destination.parent)
+            target_parent_path = str(destination.parent)
+            conflicting_path_str = str(conflicting_path) if conflicting_path is not None else None
+            self._record_target_parent_invalid_event(
+                run_id,
+                target_parent_path=target_parent_path,
+                conflicting_path=conflicting_path_str,
+            )
+            return ApplyTargetParentInvalidError(
+                target_parent_path,
+                conflicting_path=conflicting_path_str,
+            )
+
+    def _first_existing_non_directory(self, path: Path) -> Path | None:
+        current = path
+        while True:
+            if current.exists():
+                return None if current.is_dir() else current
+            if current.parent == current:
+                return None
+            current = current.parent
 
     def _persist_applied_action(self, audit_run_id: uuid.UUID, action: PlannedAction, outcome: ActionOutcome) -> None:
         with transactional_session(self._session_factory) as session:
@@ -719,6 +758,26 @@ class ApplyService:
                     phase=FailurePhase.APPLY,
                     error_code="TARGET_PATH_OCCUPIED",
                     error_message=target_path,
+                )
+            )
+
+    def _record_target_parent_invalid_event(
+        self, run_id: uuid.UUID, target_parent_path: str, conflicting_path: str | None
+    ) -> None:
+        with transactional_session(self._session_factory) as session:
+            run = session.scalar(select(Run).where(Run.id == run_id).with_for_update())
+            if run is None:
+                return
+            session.add(
+                FailureEvent(
+                    run_id=run_id,
+                    phase=FailurePhase.APPLY,
+                    error_code="TARGET_PARENT_PATH_INVALID",
+                    error_message=(
+                        target_parent_path
+                        if conflicting_path is None
+                        else f"{target_parent_path} :: conflicting_path={conflicting_path}"
+                    ),
                 )
             )
 

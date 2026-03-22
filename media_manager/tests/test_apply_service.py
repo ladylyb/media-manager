@@ -128,3 +128,31 @@ def test_apply_service_writes_audit_items(tmp_path: Path, session_factory) -> No
         items = session.scalars(select(ApplyAuditItem).where(ApplyAuditItem.run_id == audit_run.id)).all()
         assert len(items) >= 1
         assert all(item.result in {"APPLIED", "SKIPPED", "FAILED"} for item in items)
+
+
+def test_apply_service_records_invalid_target_parent_path_failure(tmp_path: Path, session_factory) -> None:
+    run_id = _create_planned_run_with_actions(tmp_path, session_factory)
+
+    photos_dir = tmp_path / "Media" / "Photos"
+    for child in sorted(photos_dir.rglob("*"), reverse=True):
+        if child.is_file():
+            child.unlink()
+        elif child.is_dir():
+            child.rmdir()
+    photos_dir.rmdir()
+    photos_dir.write_bytes(b"not-a-directory")
+
+    service = ApplyService(session_factory)
+
+    with pytest.raises(RuntimeError, match="Apply target parent path invalid"):
+        service.apply_run(run_id)
+
+    with session_factory() as session:
+        run = session.scalar(select(Run).where(Run.id == run_id))
+        assert run is not None
+        assert run.state == RunStateDB.FAILED
+
+        failures = session.scalars(select(FailureEvent).where(FailureEvent.run_id == run_id)).all()
+        error_codes = {failure.error_code for failure in failures}
+        assert "TARGET_PARENT_PATH_INVALID" in error_codes
+        assert "APPLY_FAILED" in error_codes
