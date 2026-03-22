@@ -3,6 +3,9 @@ export interface Policy {
     selected_policy: string;
     preferred_roots: string[];
   };
+  naming: {
+    strategy: string;
+  };
   tie_breaker_rules: {
     effective_order: string[];
     policy_name: string;
@@ -19,6 +22,7 @@ export interface Policy {
 
 export interface PolicyUpdate {
   selected_policy: string;
+  naming_strategy: string;
   preferred_roots: string[];
   recanonicalization_enabled: boolean;
   version: number;

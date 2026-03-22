@@ -27,12 +27,21 @@ function mapPolicy(payload: Record<string, unknown>): Policy {
     }
   ) as Record<string, unknown>;
 
+  const naming = (
+    payload.naming ?? {
+      strategy: payload.naming_strategy,
+    }
+  ) as Record<string, unknown>;
+
   return {
     canonical_priority: {
       selected_policy: String(canonicalPriority.selected_policy ?? "FIRST_SEEN"),
       preferred_roots: Array.isArray(canonicalPriority.preferred_roots)
         ? canonicalPriority.preferred_roots.map(String)
         : [],
+    },
+    naming: {
+      strategy: String(naming.strategy ?? "SHARED_CANONICAL_NAME"),
     },
     tie_breaker_rules: {
       effective_order: Array.isArray(tieBreakerRules.effective_order)
@@ -63,6 +72,7 @@ export const updatePolicy = async (policy: Partial<PolicyUpdate>) => {
   const current = await getPolicy();
   const payload = {
     selected_policy: policy.selected_policy ?? current.data.canonical_priority.selected_policy,
+    naming_strategy: policy.naming_strategy ?? current.data.naming.strategy,
     preferred_roots: policy.preferred_roots ?? current.data.canonical_priority.preferred_roots,
     recanonicalization_enabled:
       policy.recanonicalization_enabled ?? current.data.recanonicalization.enabled,

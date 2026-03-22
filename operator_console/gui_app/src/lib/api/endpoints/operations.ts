@@ -18,18 +18,40 @@ export const runWizardIngest = async (params: { folder_path?: string; dry_run?: 
     dry_run: Boolean(params.dry_run),
   });
 
-export const runPlan = async (params?: { folder_path?: string; strict_metadata?: boolean }) => {
+export const runPlan = async (params?: {
+  folder_path?: string;
+  strict_metadata?: boolean;
+  owner?: string;
+  context?: string;
+  naming_strategy?: string;
+  owner_context_override_confirmed?: boolean;
+}) => {
   const envelope = await apiPost<Record<string, unknown>>("/plan", {
     folder_path: params?.folder_path ?? "",
     strict_metadata: Boolean(params?.strict_metadata),
+    owner: params?.owner ?? "LL",
+    context: params?.context ?? "General",
+    naming_strategy: params?.naming_strategy ?? "SHARED_CANONICAL_NAME",
+    owner_context_override_confirmed: Boolean(params?.owner_context_override_confirmed),
   });
   return withData(envelope, mapOperationResult(envelope.data, { fallbackOperation: "PLAN" }));
 };
 
-export const runWizardPlan = async (params?: { folder_path?: string; strict_metadata?: boolean }) =>
+export const runWizardPlan = async (params?: {
+  folder_path?: string;
+  strict_metadata?: boolean;
+  owner?: string;
+  context?: string;
+  naming_strategy?: string;
+  owner_context_override_confirmed?: boolean;
+}) =>
   apiPost<Record<string, unknown>>("/plan", {
     folder_path: params?.folder_path ?? "",
     strict_metadata: Boolean(params?.strict_metadata),
+    owner: params?.owner ?? "LL",
+    context: params?.context ?? "General",
+    naming_strategy: params?.naming_strategy ?? "SHARED_CANONICAL_NAME",
+    owner_context_override_confirmed: Boolean(params?.owner_context_override_confirmed),
   });
 
 export const runApply = async (params?: { run_id?: string; collision_mode?: string }) => {

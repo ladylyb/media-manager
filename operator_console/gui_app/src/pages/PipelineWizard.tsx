@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -24,6 +24,7 @@ import { JsonViewer } from "@/components/JsonViewer";
 import { TopSurfaceHeader } from "@/components/layout/TopSurfaceHeader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -33,6 +34,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CheckpointStep } from "@/components/wizard/CheckpointStep";
 import { DirectoryPickerDialog } from "@/components/wizard/DirectoryPickerDialog";
 import { ExecutionStep } from "@/components/wizard/ExecutionStep";
@@ -44,6 +46,7 @@ import {
   getCanonical,
   getDirectoryPickerCapability,
   getDuplicates,
+  getPolicy,
   invalidateReadsAfterOperation,
   runWizardApply,
   runWizardCanonicalRecompute,
@@ -52,6 +55,7 @@ import {
   runWizardTagEnrichment,
   type OperationInvalidationTarget,
 } from "@/lib/api/endpoints";
+import { ApiClientError } from "@/lib/api/client";
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
 import { executionStepGuidance, type StepGuidanceSection } from "@/lib/workflow/executionStepGuidance";
@@ -61,6 +65,7 @@ import type {
   DirectoryPickerCapability,
   DuplicateGroup,
   PaginatedResponse,
+  Policy,
 } from "@/types";
 import type { ProgressOperationKind, ProgressOperationStatus } from "@/types/logs";
 
@@ -90,12 +95,29 @@ interface WizardState {
   currentStepId: StepId;
   steps: {
     ingest: StepState<{ folder_path: string }>;
-    plan: StepState<{ folder_path: string; strict_metadata: boolean }>;
+    plan: StepState<{
+      folder_path: string;
+      strict_metadata: boolean;
+      owner: string;
+      context: string;
+      naming_strategy: string;
+      owner_context_override_confirmed: boolean;
+    }>;
     apply: StepState<{ run_id: string; collision_mode: string }>;
     canonical: StepState<{ policy_name: string; dry_run: boolean; preferred_roots_csv: string }>;
     tag: StepState<{ all: boolean; canonical_id: string; batch_size: number; source: string }>;
   };
 }
+
+type OverrideConflictDetails = {
+  requested_owner: string;
+  requested_context: string;
+  existing_owner: string;
+  existing_context: string;
+  conflicting_group_count: number;
+  sample_content_id?: string;
+  sample_paths?: string[];
+};
 
 const STEP_ORDER: StepId[] = [
   "ingest",
@@ -118,6 +140,49 @@ const EXECUTION_TO_INVALIDATION: Record<ExecutionStepId, OperationInvalidationTa
   tag: "tagEnrichment",
 };
 
+const DEFAULT_OWNER = "LL";
+const DEFAULT_CONTEXT = "General";
+const DEFAULT_NAMING_STRATEGY = "SHARED_CANONICAL_NAME";
+
+const namingStrategyOptions = [
+  {
+    value: DEFAULT_NAMING_STRATEGY,
+    label: "Shared canonical name",
+    description: "Duplicates share the canonical family name and keep grouping obvious on disk.",
+  },
+  {
+    value: "DUPLICATE_OWNS_DATE_STANDARDIZED",
+    label: "Duplicate owns date (standardized)",
+    description: "Duplicates still get standardized names, but their own date evidence can drive the date portion.",
+  },
+  {
+    value: "PRESERVE_DUPLICATE_ORIGINAL_NAME",
+    label: "Preserve duplicate original name",
+    description: "Duplicates keep their original filename while the canonical item stays standardized.",
+  },
+] as const;
+
+function formatNamingStrategy(value: string) {
+  return namingStrategyOptions.find((option) => option.value === value)?.label ?? value;
+}
+
+function asOverrideConflictDetails(value: unknown): OverrideConflictDetails | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  return {
+    requested_owner: typeof record.requested_owner === "string" ? record.requested_owner : DEFAULT_OWNER,
+    requested_context: typeof record.requested_context === "string" ? record.requested_context : DEFAULT_CONTEXT,
+    existing_owner: typeof record.existing_owner === "string" ? record.existing_owner : DEFAULT_OWNER,
+    existing_context: typeof record.existing_context === "string" ? record.existing_context : DEFAULT_CONTEXT,
+    conflicting_group_count:
+      typeof record.conflicting_group_count === "number" ? record.conflicting_group_count : 1,
+    sample_content_id: typeof record.sample_content_id === "string" ? record.sample_content_id : undefined,
+    sample_paths: Array.isArray(record.sample_paths)
+      ? record.sample_paths.filter((item): item is string => typeof item === "string")
+      : undefined,
+  };
+}
+
 const INITIAL_STATE: WizardState = {
   currentStepId: "ingest",
   steps: {
@@ -134,6 +199,10 @@ const INITIAL_STATE: WizardState = {
       input: {
         folder_path: "",
         strict_metadata: false,
+        owner: DEFAULT_OWNER,
+        context: DEFAULT_CONTEXT,
+        naming_strategy: DEFAULT_NAMING_STRATEGY,
+        owner_context_override_confirmed: false,
       },
       result: null,
       error: null,
@@ -433,7 +502,14 @@ export default function PipelineWizard() {
   const [pickerTarget, setPickerTarget] = useState<"ingest" | "plan" | null>(null);
   const [confirmAbortOpen, setConfirmAbortOpen] = useState(false);
   const [ingestFolderValidationError, setIngestFolderValidationError] = useState<string | null>(null);
+  const [planOverrideConflict, setPlanOverrideConflict] = useState<OverrideConflictDetails | null>(null);
   const ingestFolderInputRef = useRef<HTMLInputElement | null>(null);
+  const applyRunButtonRef = useRef<HTMLButtonElement | null>(null);
+  const canonicalRunButtonRef = useRef<HTMLButtonElement | null>(null);
+  const tagRunButtonRef = useRef<HTMLButtonElement | null>(null);
+  const applySurfaceRef = useRef<HTMLDivElement | null>(null);
+  const canonicalSurfaceRef = useRef<HTMLDivElement | null>(null);
+  const tagSurfaceRef = useRef<HTMLDivElement | null>(null);
   const requestedFolderPath = searchParams.get("folder_path")?.trim() ?? "";
 
   const currentStepId = wizardState.currentStepId;
@@ -458,6 +534,14 @@ export default function PipelineWizard() {
     queryFn: async () => (await getDirectoryPickerCapability()).data,
     staleTime: queryOptions.directoryPicker.staleTime,
   });
+
+  const policyQuery = useQuery({
+    queryKey: queryKeys.policy,
+    queryFn: async () => (await getPolicy()).data,
+    staleTime: queryOptions.policy.staleTime,
+  });
+
+  const policy = (policyQuery.data as Policy | undefined) ?? null;
 
   const progressItems = useMemo<WizardProgressItem[]>(
     () =>
@@ -518,6 +602,34 @@ export default function PipelineWizard() {
     setIngestFolderValidationError(null);
   }, [requestedFolderPath]);
 
+  useEffect(() => {
+    if (!policy) return;
+
+    setWizardState((current) => {
+      const currentPlan = current.steps.plan.input;
+      const shouldHydrateNaming = currentPlan.naming_strategy === DEFAULT_NAMING_STRATEGY;
+      const nextNamingStrategy = shouldHydrateNaming ? policy.naming.strategy : currentPlan.naming_strategy;
+
+      if (nextNamingStrategy === currentPlan.naming_strategy) {
+        return current;
+      }
+
+      return {
+        ...current,
+        steps: {
+          ...current.steps,
+          plan: {
+            ...current.steps.plan,
+            input: {
+              ...current.steps.plan.input,
+              naming_strategy: nextNamingStrategy,
+            },
+          },
+        },
+      };
+    });
+  }, [policy]);
+
   const goToNextStep = () => {
     const next = nextStepId(wizardState.currentStepId);
     if (next && canVisitStep(wizardState, next)) {
@@ -534,6 +646,9 @@ export default function PipelineWizard() {
     stepId: T,
     patch: Partial<WizardState["steps"][T]["input"]>,
   ) => {
+    if (stepId === "plan") {
+      setPlanOverrideConflict(null);
+    }
     setWizardState((current) => ({
       ...current,
       steps: {
@@ -542,6 +657,10 @@ export default function PipelineWizard() {
           ...current.steps[stepId],
           input: {
             ...current.steps[stepId].input,
+            ...(stepId === "plan" &&
+            ("owner" in patch || "context" in patch || "naming_strategy" in patch)
+              ? { owner_context_override_confirmed: false }
+              : {}),
             ...patch,
           },
         },
@@ -554,6 +673,21 @@ export default function PipelineWizard() {
     if (folderPath.trim()) {
       setIngestFolderValidationError(null);
     }
+  };
+
+  const restoreFocusToMainSurface = (targetRef: RefObject<HTMLElement | null>) => {
+    window.setTimeout(() => {
+      targetRef.current?.focus();
+    }, 0);
+  };
+
+  const confirmAndRunStep = (
+    stepId: Extract<ExecutionStepId, "apply" | "canonical" | "tag">,
+    targetRef: RefObject<HTMLElement | null>,
+  ) => {
+    setConfirmingStep(null);
+    restoreFocusToMainSurface(targetRef);
+    void runExecutionStep(stepId);
   };
 
   const runExecutionStep = async (stepId: ExecutionStepId) => {
@@ -585,9 +719,15 @@ export default function PipelineWizard() {
         });
         payload = response.data;
       } else if (stepId === "plan") {
+        setPlanOverrideConflict(null);
         const response = await runWizardPlan({
           folder_path: wizardState.steps.plan.input.folder_path,
-          strict_metadata: false,
+          strict_metadata: wizardState.steps.plan.input.strict_metadata,
+          owner: wizardState.steps.plan.input.owner,
+          context: wizardState.steps.plan.input.context,
+          naming_strategy: wizardState.steps.plan.input.naming_strategy,
+          owner_context_override_confirmed:
+            wizardState.steps.plan.input.owner_context_override_confirmed,
         });
         payload = response.data;
       } else if (stepId === "apply") {
@@ -640,6 +780,15 @@ export default function PipelineWizard() {
         return nextState;
       });
     } catch (err) {
+      if (stepId === "plan" && err instanceof ApiClientError) {
+        const overrideError = err.errors?.find(
+          (item) => item.code === "OWNER_CONTEXT_OVERRIDE_REQUIRED",
+        );
+        const details = asOverrideConflictDetails(overrideError?.details);
+        if (details) {
+          setPlanOverrideConflict(details);
+        }
+      }
       setWizardState((current) => ({
         ...current,
         steps: {
@@ -766,6 +915,18 @@ export default function PipelineWizard() {
       ]),
       planningMeaning,
     };
+  };
+
+  const buildPlanConfigurationSummary = () => {
+    const planInput = wizardState.steps.plan.input;
+    return [
+      `Owner: ${planInput.owner}`,
+      `Context: ${planInput.context}`,
+      `Naming strategy: ${formatNamingStrategy(planInput.naming_strategy)}`,
+      planInput.owner_context_override_confirmed
+        ? "Owner/context correction override was confirmed for duplicate-backed existing content."
+        : "No owner/context correction override was confirmed for this plan run.",
+    ];
   };
 
   const buildReviewDuplicatesSummary = () => {
@@ -1015,6 +1176,7 @@ export default function PipelineWizard() {
 
     if (stepId === "plan") {
       const runId = asString(state.result.run_id);
+      const planInput = wizardState.steps.plan.input;
       return (
         <WizardResultConsole
           title="Plan Result"
@@ -1028,6 +1190,18 @@ export default function PipelineWizard() {
                     helperText: "Apply will use this automatically.",
                     copyable: true,
                   },
+                  {
+                    label: "Owner / Context",
+                    value: `${planInput.owner} / ${planInput.context}`,
+                    helperText: "These batch values directly affect planned naming.",
+                  },
+                  {
+                    label: "Naming strategy",
+                    value: formatNamingStrategy(planInput.naming_strategy),
+                    helperText: planInput.owner_context_override_confirmed
+                      ? "This plan includes a confirmed corrective owner/context override."
+                      : "This plan used the current batch naming strategy without a corrective override.",
+                  },
                 ]
               : []
           }
@@ -1039,10 +1213,14 @@ export default function PipelineWizard() {
           summaryLines={[
             "Plan prepared the system's proposed next actions for the folder you just ingested.",
             ...(runId ? ["The plan was saved and is ready for Apply."] : []),
+            ...buildPlanConfigurationSummary(),
             "No files were moved or renamed in this step.",
           ]}
           nextStepHint="If this looks right, continue to Review Duplicate Groups. Apply will use this run ID automatically."
-          payload={state.result}
+          payload={{
+            ...state.result,
+            plan_inputs: planInput,
+          }}
           technicalDetailsMode="modal"
         />
       );
@@ -1343,16 +1521,138 @@ export default function PipelineWizard() {
           }
           result={renderResultConsole("plan")}
         >
-          <div className="rounded-xl border bg-muted/15 p-4">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-              Planning This Folder
-            </p>
-            <p className="mt-3 break-all rounded-lg border bg-background px-3 py-2 font-mono text-sm">
-              {state.input.folder_path || "--"}
-            </p>
-            <p className="mt-3 text-sm text-muted-foreground">
-              This path was carried forward from the completed Ingest step so the wizard can prepare the next stage automatically.
-            </p>
+          <div className="space-y-4 rounded-xl border bg-muted/15 p-4">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                Planning This Folder
+              </p>
+              <p className="mt-3 break-all rounded-lg border bg-background px-3 py-2 font-mono text-sm">
+                {state.input.folder_path || "--"}
+              </p>
+              <p className="mt-3 text-sm text-muted-foreground">
+                This path was carried forward from the completed Ingest step so the wizard can prepare the next stage automatically.
+              </p>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="plan-owner">Owner</Label>
+                <Input
+                  id="plan-owner"
+                  value={state.input.owner}
+                  onChange={(event) => updateStepInput("plan", { owner: event.target.value })}
+                  placeholder={DEFAULT_OWNER}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Used for new content in this batch unless the system finds existing duplicate-backed content with saved values.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="plan-context">Context</Label>
+                <Input
+                  id="plan-context"
+                  value={state.input.context}
+                  onChange={(event) => updateStepInput("plan", { context: event.target.value })}
+                  placeholder={DEFAULT_CONTEXT}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Batch-specific context helps keep standardized filenames distinct across different sets of images.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="plan-naming-strategy">Naming strategy</Label>
+              <Select
+                value={state.input.naming_strategy}
+                onValueChange={(value) => updateStepInput("plan", { naming_strategy: value })}
+              >
+                <SelectTrigger id="plan-naming-strategy">
+                  <SelectValue placeholder="Choose a naming strategy" />
+                </SelectTrigger>
+                <SelectContent>
+                  {namingStrategyOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {namingStrategyOptions.find((option) => option.value === state.input.naming_strategy)?.description}
+              </p>
+              {policyQuery.error ? (
+                <p className="text-xs text-muted-foreground">
+                  Default naming rule could not be loaded: {parseError(policyQuery.error)}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="rounded-lg border border-dashed bg-background/70 p-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                Planning Inputs
+              </p>
+              <div className="mt-3 grid gap-2 text-sm text-foreground/90 sm:grid-cols-2">
+                <p>Owner: {state.input.owner || DEFAULT_OWNER}</p>
+                <p>Context: {state.input.context || DEFAULT_CONTEXT}</p>
+                <p className="sm:col-span-2">Naming strategy: {formatNamingStrategy(state.input.naming_strategy)}</p>
+              </div>
+            </div>
+
+            {planOverrideConflict ? (
+              <div className="space-y-3 rounded-xl border border-amber-300 bg-amber-50/80 p-4">
+                <div>
+                  <p className="text-sm font-semibold text-amber-950">Owner/context correction requires confirmation</p>
+                  <p className="mt-1 text-sm leading-6 text-amber-900/90">
+                    This batch matches existing duplicate-backed content that already belongs to{" "}
+                    <span className="font-medium">
+                      {planOverrideConflict.existing_owner} / {planOverrideConflict.existing_context}
+                    </span>
+                    . If you continue with an override, the system will correct that existing content group and the corresponding canonical item too.
+                  </p>
+                </div>
+                <div className="grid gap-2 text-sm text-amber-950 sm:grid-cols-2">
+                  <p>Requested batch values: {planOverrideConflict.requested_owner} / {planOverrideConflict.requested_context}</p>
+                  <p>Existing saved values: {planOverrideConflict.existing_owner} / {planOverrideConflict.existing_context}</p>
+                  <p>Conflicting groups: {planOverrideConflict.conflicting_group_count}</p>
+                  {planOverrideConflict.sample_content_id ? (
+                    <p className="break-all">Example content group: {planOverrideConflict.sample_content_id}</p>
+                  ) : null}
+                </div>
+                {planOverrideConflict.sample_paths?.length ? (
+                  <div className="rounded-lg border border-amber-200 bg-white/70 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-900/80">
+                      Example matching paths
+                    </p>
+                    <div className="mt-2 space-y-1">
+                      {planOverrideConflict.sample_paths.map((path) => (
+                        <p key={path} className="break-all font-mono text-xs text-amber-950">
+                          {path}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-white/70 p-3">
+                  <Checkbox
+                    id="plan-owner-context-override"
+                    checked={state.input.owner_context_override_confirmed}
+                    onCheckedChange={(checked) =>
+                      updateStepInput("plan", { owner_context_override_confirmed: Boolean(checked) })
+                    }
+                    className="mt-0.5"
+                  />
+                  <div className="space-y-1">
+                    <Label htmlFor="plan-owner-context-override" className="text-sm font-medium text-amber-950">
+                      Confirm owner/context correction for the existing duplicate-backed group
+                    </Label>
+                    <p className="text-xs leading-5 text-amber-900/90">
+                      This is a corrective change. The next planning attempt will use your requested values and can lead to canonical and duplicate rename changes.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </div>
 
           <CollapsibleSection title="Show previous step details" defaultOpen={false} tone="context">
@@ -1365,6 +1665,13 @@ export default function PipelineWizard() {
               </div>
               <MetricGrid items={ingestSnapshot.metrics} />
             </div>
+          </CollapsibleSection>
+          <CollapsibleSection title="Show naming inputs summary" defaultOpen={false}>
+            <RestPointSummaryCard
+              title="Plan Naming Inputs"
+              lines={buildPlanConfigurationSummary()}
+              description="These batch inputs directly affect the saved plan's proposed filenames and any duplicate-triggered correction flow."
+            />
           </CollapsibleSection>
         </ExecutionStep>
       );
@@ -1391,6 +1698,12 @@ export default function PipelineWizard() {
               lines={duplicateSummary.whatPlanningFound}
               sectionLabel="What Planning Found"
               description="This step is informational. It gives you a plain-English summary of the duplicate picture before the wizard continues."
+            />
+            <RestPointSummaryCard
+              title="Naming Inputs Used For This Plan"
+              lines={buildPlanConfigurationSummary()}
+              sectionLabel="Plan Configuration"
+              description="These are the batch naming inputs that shaped the saved plan you are about to apply."
             />
             <CollapsibleSection title="Show key numbers" defaultOpen={false}>
               <MetricGrid
@@ -1459,8 +1772,9 @@ export default function PipelineWizard() {
             />
           }
           result={renderResultConsole("apply")}
+          runButtonRef={applyRunButtonRef}
         >
-          <div className="rounded-xl border bg-muted/15 p-4">
+          <div ref={applySurfaceRef} tabIndex={-1} className="rounded-xl border bg-muted/15 p-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
             <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
               Applying This Plan
             </p>
@@ -1470,6 +1784,11 @@ export default function PipelineWizard() {
             <p className="mt-3 text-sm text-muted-foreground">
               This saved plan reference was carried forward from the previous Plan step. In the wizard, Apply uses the default guided collision handling automatically.
             </p>
+            {state.status === "running" ? (
+              <p className="mt-3 text-sm font-medium text-foreground">
+                Apply started. You can monitor progress below while the wizard stays available.
+              </p>
+            ) : null}
           </div>
 
           <CollapsibleSection title="Show more about this step" defaultOpen={false} tone="context">
@@ -1560,8 +1879,9 @@ export default function PipelineWizard() {
             />
           }
           result={renderResultConsole("canonical")}
+          runButtonRef={canonicalRunButtonRef}
         >
-          <div className="rounded-xl border bg-muted/15 p-4">
+          <div ref={canonicalSurfaceRef} tabIndex={-1} className="rounded-xl border bg-muted/15 p-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
             <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
               Using The Updated Post-Apply State
             </p>
@@ -1571,6 +1891,11 @@ export default function PipelineWizard() {
             <p className="mt-3 text-sm text-muted-foreground">
               The wizard uses its default guided policy here and keeps the more advanced canonical options on the Operations page.
             </p>
+            {state.status === "running" ? (
+              <p className="mt-3 text-sm font-medium text-foreground">
+                Canonical recompute started. You can watch progress below without leaving this screen.
+              </p>
+            ) : null}
           </div>
 
           <CollapsibleSection title="Show more about this step" defaultOpen={false} tone="context">
@@ -1750,6 +2075,18 @@ export default function PipelineWizard() {
             />
           }
           result={renderResultConsole("tag")}
+          runButtonRef={tagRunButtonRef}
+          footer={
+            state.status === "running" ? (
+              <p
+                ref={tagSurfaceRef}
+                tabIndex={-1}
+                className="text-sm font-medium text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                Tag enrichment started. You can monitor progress below while the wizard remains available.
+              </p>
+            ) : undefined
+          }
         />
       );
     }
@@ -1792,6 +2129,13 @@ export default function PipelineWizard() {
                 value: tagStatus === "SKIPPED" ? "Skipped" : tagProcessed,
               },
             ])}
+          />
+        </CollapsibleSection>
+        <CollapsibleSection title="Show naming inputs used" defaultOpen={false}>
+          <RestPointSummaryCard
+            title="Batch Naming Inputs"
+            lines={buildPlanConfigurationSummary()}
+            description="These are the owner, context, and naming settings this guided run actually used when the plan was created."
           />
         </CollapsibleSection>
         <Card className="border-border/70 bg-muted/[0.16]">
@@ -1845,6 +2189,14 @@ export default function PipelineWizard() {
             apply: applyResult ?? {},
             canonical: canonicalResult ?? {},
             tag: tagResult ?? {},
+            plan_inputs: wizardState.steps.plan.input,
+            naming_summary: {
+              owner: wizardState.steps.plan.input.owner,
+              context: wizardState.steps.plan.input.context,
+              naming_strategy: wizardState.steps.plan.input.naming_strategy,
+              owner_context_override_confirmed:
+                wizardState.steps.plan.input.owner_context_override_confirmed,
+            },
           }}
         />
       </CheckpointStep>
@@ -1908,8 +2260,7 @@ export default function PipelineWizard() {
             : "This step starts making the saved plan real. Files and records may now be changed based on the plan you just reviewed."
         }
         destructive
-        onConfirm={() => runExecutionStep("apply")}
-        loading={wizardState.steps.apply.status === "running"}
+        onConfirm={() => confirmAndRunStep("apply", applySurfaceRef)}
       />
       <ConfirmDialog
         open={confirmingStep === "canonical"}
@@ -1921,8 +2272,7 @@ export default function PipelineWizard() {
             : "This step chooses which file should be treated as the main version going forward. Later views and enrichment will use that chosen version."
         }
         destructive
-        onConfirm={() => runExecutionStep("canonical")}
-        loading={wizardState.steps.canonical.status === "running"}
+        onConfirm={() => confirmAndRunStep("canonical", canonicalSurfaceRef)}
       />
       <ConfirmDialog
         open={confirmingStep === "tag"}
@@ -1934,8 +2284,7 @@ export default function PipelineWizard() {
             : "This step adds or refreshes searchable tags and metadata for the chosen media items. It does not move files or change the chosen versions you already reviewed."
         }
         destructive
-        onConfirm={() => runExecutionStep("tag")}
-        loading={wizardState.steps.tag.status === "running"}
+        onConfirm={() => confirmAndRunStep("tag", tagSurfaceRef)}
       />
       <DirectoryPickerDialog
         open={pickerTarget !== null}

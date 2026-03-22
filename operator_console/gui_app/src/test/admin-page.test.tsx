@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -118,6 +118,9 @@ describe("Admin page", () => {
           selected_policy: "FIRST_SEEN",
           preferred_roots: [],
         },
+        naming: {
+          strategy: "SHARED_CANONICAL_NAME",
+        },
         recanonicalization: {
           enabled: false,
         },
@@ -151,7 +154,50 @@ describe("Admin page", () => {
 
     expect(await screen.findByRole("tab", { name: "Library Rules" })).toBeInTheDocument();
     expect(await screen.findByText("How should the app choose the main version?")).toBeInTheDocument();
+    expect(screen.getByText("How should filenames be built after the main version is chosen?")).toBeInTheDocument();
+    expect(screen.getByText("Default naming")).toBeInTheDocument();
     expect(screen.getByText("Preferred folders")).toBeInTheDocument();
     expect(screen.getByText("Change state")).toBeInTheDocument();
+  });
+
+  it("saves naming strategy changes as default library rules", async () => {
+    mocks.updatePolicy.mockResolvedValue({
+      data: {
+        canonical_priority: {
+          selected_policy: "FIRST_SEEN",
+          preferred_roots: [],
+        },
+        naming: {
+          strategy: "DUPLICATE_OWNS_DATE_STANDARDIZED",
+        },
+        recanonicalization: {
+          enabled: false,
+        },
+        metadata: {
+          version: 4,
+          updated_at: "2026-03-22T10:00:00Z",
+        },
+        tie_breaker_rules: {
+          policy_name: "default",
+          policy_version: 1,
+          effective_order: ["first_seen_at ASC", "file_instance_id ASC"],
+        },
+      },
+    });
+
+    renderLibraryRulesPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /Duplicate owns date \(standardized\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Save library rules/i }));
+
+    await waitFor(() =>
+      expect(mocks.updatePolicy).toHaveBeenCalledWith({
+        selected_policy: "FIRST_SEEN",
+        naming_strategy: "DUPLICATE_OWNS_DATE_STANDARDIZED",
+        preferred_roots: [],
+        recanonicalization_enabled: false,
+        version: 3,
+      }),
+    );
   });
 });
