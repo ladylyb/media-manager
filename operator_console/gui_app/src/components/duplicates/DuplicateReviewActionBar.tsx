@@ -12,6 +12,8 @@ interface DuplicateReviewActionBarProps {
   onMark: (mark: ReviewMark) => void;
   onNext: () => void;
   onPrev: () => void;
+  sticky?: boolean;
+  showShortcutHint?: boolean;
 }
 
 function ActionChoice({
@@ -53,9 +55,16 @@ export function DuplicateReviewActionBar({
   onMark,
   onNext,
   onPrev,
+  sticky = true,
+  showShortcutHint = true,
 }: DuplicateReviewActionBarProps) {
   return (
-    <div className="sticky bottom-4 z-10 rounded-[24px] border border-border/70 bg-card/95 p-4 shadow-lg backdrop-blur">
+    <div
+      className={cn(
+        "rounded-[24px] border border-border/70 bg-card/95 p-4 backdrop-blur",
+        sticky ? "sticky bottom-4 z-10 shadow-lg" : "shadow-sm",
+      )}
+    >
       <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <div className="flex flex-wrap items-center gap-2">
           <Button type="button" variant="outline" onClick={onPrev} disabled={!hasPrev}>
@@ -66,7 +75,7 @@ export function DuplicateReviewActionBar({
             Next
             <ArrowRight className="h-4 w-4" />
           </Button>
-          <span className="ml-1 text-xs text-muted-foreground">1 / 2 / 3 to mark</span>
+          {showShortcutHint ? <span className="ml-1 text-xs text-muted-foreground">1 / 2 / 3 to mark</span> : null}
         </div>
         <div className="flex flex-wrap gap-2">
           <ActionChoice
