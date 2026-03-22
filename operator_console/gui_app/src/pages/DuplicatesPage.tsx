@@ -379,6 +379,17 @@ export default function DuplicatesPage() {
             <CardContent className="space-y-6 p-4 sm:p-5">
               {selected && selectedCanonical ? (
                 <>
+                  <DuplicateReviewActionBar
+                    activeMark={currentReviewMark(selected)}
+                    hasPrev={selectedIndex > 0}
+                    hasNext={selectedIndex >= 0 && selectedIndex < filteredGroups.length - 1}
+                    onMark={applyReviewMark}
+                    onNext={() => moveSelection(1)}
+                    onPrev={() => moveSelection(-1)}
+                    sticky={false}
+                    showShortcutHint={false}
+                  />
+
                   <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
                     <DuplicateFocusCard
                       badge="Main"

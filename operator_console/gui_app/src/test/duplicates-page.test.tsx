@@ -108,7 +108,7 @@ describe("DuplicatesPage", () => {
 
     expect((await screen.findAllByText("alpha-main.jpg")).length).toBeGreaterThan(0);
 
-    fireEvent.click(screen.getByRole("button", { name: "Mark as looks right" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Mark as looks right" })[0]);
 
     await waitFor(() => expect(screen.getByText("2 of 3")).toBeInTheDocument());
   });
@@ -117,7 +117,7 @@ describe("DuplicatesPage", () => {
     renderPage();
 
     expect((await screen.findAllByText("alpha-main.jpg")).length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("button", { name: "Mark as looks right" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Mark as looks right" })[0]);
 
     await waitFor(() => expect(screen.getByText("2 of 3")).toBeInTheDocument());
 
@@ -145,5 +145,15 @@ describe("DuplicatesPage", () => {
 
     await waitFor(() => expect(screen.getByText("2 of 3")).toBeInTheDocument());
     document.body.removeChild(input);
+  });
+
+  it("renders review controls both above and below the comparison stage", async () => {
+    renderPage();
+
+    expect(await screen.findByText("1 of 3")).toBeInTheDocument();
+
+    expect(screen.getAllByRole("button", { name: "Mark as looks right" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Mark as needs review" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Mark as not sure" })).toHaveLength(2);
   });
 });
