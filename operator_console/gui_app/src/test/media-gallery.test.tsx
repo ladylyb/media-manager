@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { MediaCard } from "@/components/media/MediaCard";
+import { MediaGrid } from "@/components/media/MediaGrid";
 import { mapCanonicalItems } from "@/lib/api/mappers/media";
 
 describe("canonical media mapping", () => {
@@ -63,5 +64,29 @@ describe("MediaCard", () => {
     fireEvent.error(screen.getByAltText("fallback.mov"));
 
     expect(screen.getByText("Video preview unavailable")).toBeTruthy();
+  });
+});
+
+describe("MediaGrid", () => {
+  it("accepts a caller-provided grid layout class for density variations", () => {
+    const { container } = render(
+      <MediaGrid
+        files={[
+          {
+            id: "image-1",
+            filename: "first.jpg",
+            file_type: "image",
+            media_url: "/media/image-1",
+            poster_url: null,
+            matched_tags: [],
+            top_confidence_score: null,
+            sort_tag_name: null,
+          },
+        ]}
+        gridClassName="grid grid-cols-3 xl:grid-cols-7 gap-4"
+      />,
+    );
+
+    expect(container.firstElementChild?.className).toContain("xl:grid-cols-7");
   });
 });

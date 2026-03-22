@@ -11,6 +11,8 @@ interface MediaGridProps {
   emptyDescription?: string;
   onPreview?: (file: CanonicalFile) => void;
   getDetailHref?: (file: CanonicalFile) => string;
+  gridClassName?: string;
+  skeletonCount?: number;
 }
 
 export function MediaGrid({
@@ -20,11 +22,13 @@ export function MediaGrid({
   emptyDescription = "Run an ingest to populate the gallery",
   onPreview,
   getDetailHref,
+  gridClassName = "grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5",
+  skeletonCount = 10,
 }: MediaGridProps) {
   if (loading) {
     return (
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
-        {Array.from({ length: 10 }).map((_, index) => (
+      <div className={gridClassName}>
+        {Array.from({ length: skeletonCount }).map((_, index) => (
           <div key={index} className="overflow-hidden rounded-2xl border bg-card shadow-sm">
             <Skeleton className="aspect-[4/5] w-full" />
             <div className="space-y-2 p-3">
@@ -49,7 +53,7 @@ export function MediaGrid({
   }
 
   return (
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
+    <div className={gridClassName}>
       {files.map((file) => (
         <MediaCard
           key={file.id}
