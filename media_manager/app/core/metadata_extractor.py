@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import perf_counter
 
@@ -27,6 +27,21 @@ _FILENAME_DT_RE = re.compile(
     r"(?:[T _-]?(?P<h>[01]\d|2[0-3])(?P<min>[0-5]\d)(?P<s>[0-5]\d))?"
 )
 _TAKEN_DT_SOURCE_RANK = {"metadata": 0, "filename": 1, "filesystem": 2, "unknown": 3}
+_CLASSIFICATION_DT_POLICY = "EARLIEST_TRUSTWORTHY_V1"
+_MIN_VALID_DT = datetime(1990, 1, 1, tzinfo=UTC)
+_FUTURE_TOLERANCE = timedelta(days=1)
+_HIGH_TRUST_CODES = {"EXIF_DT_ORIGINAL", "EXIF_DT_DIGITIZED"}
+_MEDIUM_TRUST_CODES = {"EXIF_DT_IMAGE", "FILENAME_DT", "FS_MTIME", "FS_BIRTHTIME"}
+_LOW_TRUST_CODES = {"FS_CTIME"}
+_SOURCE_CATEGORY_BY_CODE = {
+    "EXIF_DT_ORIGINAL": "metadata",
+    "EXIF_DT_DIGITIZED": "metadata",
+    "EXIF_DT_IMAGE": "metadata",
+    "FILENAME_DT": "filename",
+    "FS_MTIME": "filesystem",
+    "FS_BIRTHTIME": "filesystem",
+    "FS_CTIME": "filesystem",
+}
 
 
 @dataclass(frozen=True)
@@ -41,6 +56,11 @@ class ExtractResult:
     content_id: uuid.UUID
     codes_extracted: list[str]
     defaults_used: list[str]
+    classification_dt: str | None = None
+    classification_dt_source: str | None = None
+    classification_dt_policy: str | None = None
+    timestamp_candidates: tuple[str, ...] = ()
+    rejected_timestamp_candidates: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -63,6 +83,15 @@ class PreExtractMetrics:
         if self.duration_total_s <= 0:
             return 0.0
         return self.files_processed / self.duration_total_s
+
+
+@dataclass(frozen=True)
+class ClassificationSelection:
+    classification_dt: datetime | None
+    classification_source: str | None
+    taken_dt_source: str
+    rejected_sources: tuple[str, ...]
+    candidate_sources: tuple[str, ...]
 
 
 def _parse_exif_datetime(value: str | None) -> datetime | None:
@@ -91,11 +120,15 @@ def _extract_optional_exif(path: Path) -> dict[str, str]:
         return {}
 
     result: dict[str, str] = {}
-    for tag_code in (36867, 36868, 306):  # DateTimeOriginal, DateTimeDigitized, DateTime
+    exif_dt_fields = (
+        ("EXIF_DT_ORIGINAL", 36867),
+        ("EXIF_DT_DIGITIZED", 36868),
+        ("EXIF_DT_IMAGE", 306),
+    )
+    for code_type, tag_code in exif_dt_fields:
         parsed = _parse_exif_datetime(exif.get(tag_code))
         if parsed is not None:
-            result["TAKEN_DT"] = parsed.astimezone(UTC).isoformat()
-            break
+            result[code_type] = parsed.astimezone(UTC).isoformat()
 
     camera_model = exif.get(272)
     if camera_model:
@@ -124,6 +157,10 @@ def _parse_taken_dt_value(value: str) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
+def _read_file_stat(path: Path) -> object:
+    return path.stat()
+
+
 def _extract_filename_datetime(path: Path) -> datetime | None:
     match = _FILENAME_DT_RE.search(path.name)
     if match is None:
@@ -140,24 +177,81 @@ def _extract_filename_datetime(path: Path) -> datetime | None:
         return None
 
 
-def _resolve_taken_datetime(path: Path, exif_values: dict[str, str], stat: object) -> tuple[datetime, str]:
-    taken_dt_raw = exif_values.get("TAKEN_DT")
-    if taken_dt_raw:
-        parsed = _parse_taken_dt_value(taken_dt_raw)
-        if parsed is not None:
-            return parsed, "metadata"
+def _extract_timestamp_candidates(path: Path, exif_values: dict[str, str], stat: object) -> dict[str, str]:
+    candidates: dict[str, str] = {}
+
+    for code_type in ("EXIF_DT_ORIGINAL", "EXIF_DT_DIGITIZED", "EXIF_DT_IMAGE"):
+        value = exif_values.get(code_type)
+        if value:
+            candidates[code_type] = value
 
     if filename_has_date(path.name):
         filename_dt = _extract_filename_datetime(path)
         if filename_dt is not None:
-            return filename_dt, "filename"
+            candidates["FILENAME_DT"] = filename_dt.isoformat()
 
-    ctime = datetime.fromtimestamp(float(stat.st_ctime), tz=UTC)
-    return ctime, "filesystem"
+    mtime = getattr(stat, "st_mtime", None)
+    if mtime is not None:
+        candidates["FS_MTIME"] = datetime.fromtimestamp(float(mtime), tz=UTC).isoformat()
+
+    ctime = getattr(stat, "st_ctime", None)
+    if ctime is not None:
+        candidates["FS_CTIME"] = datetime.fromtimestamp(float(ctime), tz=UTC).isoformat()
+
+    birthtime = getattr(stat, "st_birthtime", None)
+    if birthtime is not None:
+        candidates["FS_BIRTHTIME"] = datetime.fromtimestamp(float(birthtime), tz=UTC).isoformat()
+
+    return candidates
+
+
+def _select_classification_datetime(
+    candidates: dict[str, str],
+    *,
+    extracted_at: datetime,
+) -> ClassificationSelection:
+    valid_candidates: list[tuple[str, datetime]] = []
+    rejected_sources: list[str] = []
+
+    for source, raw_value in candidates.items():
+        parsed = _parse_taken_dt_value(raw_value)
+        if parsed is None:
+            rejected_sources.append(source)
+            continue
+        parsed_utc = parsed.astimezone(UTC)
+        if parsed_utc < _MIN_VALID_DT or parsed_utc > extracted_at + _FUTURE_TOLERANCE:
+            rejected_sources.append(source)
+            continue
+        valid_candidates.append((source, parsed_utc))
+
+    trusted_candidates = [
+        (source, value) for source, value in valid_candidates if source in _HIGH_TRUST_CODES | _MEDIUM_TRUST_CODES
+    ]
+    selected_pool = trusted_candidates or [(source, value) for source, value in valid_candidates if source in _LOW_TRUST_CODES]
+    if not selected_pool:
+        return ClassificationSelection(
+            classification_dt=None,
+            classification_source=None,
+            taken_dt_source="unknown",
+            rejected_sources=tuple(sorted(rejected_sources)),
+            candidate_sources=tuple(sorted(candidates.keys())),
+        )
+
+    selected_source, selected_dt = min(selected_pool, key=lambda item: (item[1], item[0]))
+    return ClassificationSelection(
+        classification_dt=selected_dt,
+        classification_source=selected_source,
+        taken_dt_source=_SOURCE_CATEGORY_BY_CODE.get(selected_source, "unknown"),
+        rejected_sources=tuple(sorted(rejected_sources)),
+        candidate_sources=tuple(sorted(candidates.keys())),
+    )
 
 
 def taken_dt_source_rank(source: str | None) -> int:
-    return _TAKEN_DT_SOURCE_RANK.get((source or "unknown").strip().lower(), _TAKEN_DT_SOURCE_RANK["unknown"])
+    normalized = (source or "unknown").strip().upper()
+    if normalized in _SOURCE_CATEGORY_BY_CODE:
+        normalized = _SOURCE_CATEGORY_BY_CODE[normalized].upper()
+    return _TAKEN_DT_SOURCE_RANK.get(normalized.lower(), _TAKEN_DT_SOURCE_RANK["unknown"])
 
 
 def extract_file_metadata(
@@ -168,9 +262,10 @@ def extract_file_metadata(
     context: str = DEFAULT_CONTEXT,
 ) -> list[MetadataItem]:
     _ = file_hash  # hash is part of extraction context and logging identity.
-    stat = path.stat()
+    stat = _read_file_stat(path)
     ctime = datetime.fromtimestamp(float(stat.st_ctime), tz=UTC).isoformat()
     mtime = datetime.fromtimestamp(float(stat.st_mtime), tz=UTC).isoformat()
+    extracted_at = datetime.now(UTC)
 
     rows: dict[str, str] = {
         "OWNER": owner,
@@ -178,11 +273,24 @@ def extract_file_metadata(
         "FS_CTIME": ctime,
         "FS_MTIME": mtime,
     }
+    birthtime = getattr(stat, "st_birthtime", None)
+    if birthtime is not None:
+        rows["FS_BIRTHTIME"] = datetime.fromtimestamp(float(birthtime), tz=UTC).isoformat()
+
     exif_values = _extract_optional_exif(path)
     rows.update(exif_values)
-    taken_dt, taken_dt_source = _resolve_taken_datetime(path, exif_values, stat)
-    rows["TAKEN_DT"] = taken_dt.isoformat()
-    rows["TAKEN_DT_SOURCE"] = taken_dt_source
+    timestamp_candidates = _extract_timestamp_candidates(path, exif_values, stat)
+    rows.update(timestamp_candidates)
+    selection = _select_classification_datetime(timestamp_candidates, extracted_at=extracted_at)
+    rows["CLASSIFICATION_DT_POLICY"] = _CLASSIFICATION_DT_POLICY
+    rows["CLASSIFICATION_DT_SOURCE"] = selection.classification_source or "unknown"
+    if selection.rejected_sources:
+        rows["CLASSIFICATION_DT_REJECTED_SOURCES"] = ",".join(selection.rejected_sources)
+    if selection.classification_dt is not None:
+        classification_dt = selection.classification_dt.isoformat()
+        rows["CLASSIFICATION_DT"] = classification_dt
+        rows["TAKEN_DT"] = classification_dt
+    rows["TAKEN_DT_SOURCE"] = selection.taken_dt_source
 
     return [MetadataItem(code_type=code_type, decode_value=decode_value) for code_type, decode_value in rows.items()]
 
@@ -289,6 +397,46 @@ def upsert_metadata_bulk(
             content_id=content_id,
             codes_extracted=sorted(item.code_type for item in rows),
             defaults_used=defaults_used,
+            classification_dt=next((item.decode_value for item in rows if item.code_type == "CLASSIFICATION_DT"), None),
+            classification_dt_source=next(
+                (item.decode_value for item in rows if item.code_type == "CLASSIFICATION_DT_SOURCE"),
+                None,
+            ),
+            classification_dt_policy=next(
+                (item.decode_value for item in rows if item.code_type == "CLASSIFICATION_DT_POLICY"),
+                None,
+            ),
+            timestamp_candidates=tuple(
+                sorted(
+                    item.code_type
+                    for item in rows
+                    if item.code_type
+                    in {
+                        "EXIF_DT_ORIGINAL",
+                        "EXIF_DT_DIGITIZED",
+                        "EXIF_DT_IMAGE",
+                        "FILENAME_DT",
+                        "FS_MTIME",
+                        "FS_CTIME",
+                        "FS_BIRTHTIME",
+                    }
+                )
+            ),
+            rejected_timestamp_candidates=tuple(
+                sorted(
+                    filter(
+                        None,
+                        next(
+                            (
+                                item.decode_value.split(",")
+                                for item in rows
+                                if item.code_type == "CLASSIFICATION_DT_REJECTED_SOURCES"
+                            ),
+                            [],
+                        ),
+                    )
+                )
+            ),
         )
 
     total_duration = perf_counter() - t_start
@@ -395,6 +543,11 @@ def pre_extract_for_paths_with_metrics(
             content_id=result.content_id,
             codes_extracted=result.codes_extracted,
             defaults_used=result.defaults_used,
+            classification_dt=result.classification_dt,
+            classification_dt_source=result.classification_dt_source,
+            classification_dt_policy=result.classification_dt_policy,
+            timestamp_candidates=result.timestamp_candidates,
+            rejected_timestamp_candidates=result.rejected_timestamp_candidates,
         )
         action = "DEFAULT_USED" if result.defaults_used else "EXTRACTED"
         message = "Metadata defaults used" if action == "DEFAULT_USED" else "Metadata extracted"
@@ -406,6 +559,13 @@ def pre_extract_for_paths_with_metrics(
                 "file_hash": file_hash,
                 "action": action,
                 "codes_extracted": ",".join(result.codes_extracted),
+                "source": result.classification_dt_source or "-",
+                "summary": (
+                    f"classification_dt={result.classification_dt or '-'} "
+                    f"policy={result.classification_dt_policy or '-'} "
+                    f"candidates={','.join(result.timestamp_candidates) or '-'} "
+                    f"rejected={','.join(result.rejected_timestamp_candidates) or '-'}"
+                ),
             },
         )
 
