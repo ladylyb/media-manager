@@ -117,7 +117,9 @@ def test_canonical_path_resolution_and_duplicates(tmp_path: Path) -> None:
         / "VID_20240203_010203_LL_General_DUP_2.mp4"
     )
     assert duplicate_filename("IMG_20240203_010203_LL_General.jpg", 3) == "IMG_20240203_010203_LL_General_DUP_3.jpg"
+    assert duplicate_filename("IMG_20240203_010203_LL_General_DUP_1.jpg", 3) == "IMG_20240203_010203_LL_General_DUP_3.jpg"
     assert collision_filename("IMG_20240203_010203_LL_General.jpg", 3) == "IMG_20240203_010203_LL_General_C03.jpg"
+    assert collision_filename("IMG_20240203_010203_LL_General_C01.jpg", 3) == "IMG_20240203_010203_LL_General_C03.jpg"
 
 
 def test_mime_detection_classifies_photo_video(tmp_path: Path) -> None:
@@ -156,6 +158,26 @@ def test_reserve_planned_path_by_key_preserves_collision_suffix_order(tmp_path: 
     assert reserved == desired.with_name("IMG_20240203_DUP_2.jpg")
 
 
+def test_reserve_planned_path_by_key_normalizes_existing_duplicate_suffix_before_collision_increment(
+    tmp_path: Path,
+) -> None:
+    desired = (
+        tmp_path / "duplicates" / "Media" / "Photos" / "2024" / "08" / "IMG_20240829_200647_GGS_FEM_INSPO_DUP_1.jpg"
+    ).resolve(strict=False)
+    source = (tmp_path / "inbox" / "source.jpg").resolve(strict=False)
+    reserved_paths: set[str] = {str(desired), str(desired.with_name("IMG_20240829_200647_GGS_FEM_INSPO_DUP_2.jpg"))}
+
+    reserved, had_collision = reserve_planned_path_by_key(
+        source_key=str(source),
+        desired_path=desired,
+        desired_key=str(desired),
+        reserved_paths=reserved_paths,
+    )
+
+    assert had_collision is True
+    assert reserved == desired.with_name("IMG_20240829_200647_GGS_FEM_INSPO_DUP_3.jpg")
+
+
 def test_reserve_planned_path_by_key_keeps_source_equals_destination_as_noop(tmp_path: Path) -> None:
     source = (tmp_path / "Media" / "Photos" / "2024" / "02" / "IMG_20240203.jpg").resolve(strict=False)
     reserved_paths: set[str] = set()
@@ -187,3 +209,22 @@ def test_reserve_planned_path_by_key_supports_canonical_collision_suffixes(tmp_p
 
     assert had_collision is True
     assert reserved == desired.with_name("IMG_20240203_C02.jpg")
+
+
+def test_reserve_planned_path_by_key_normalizes_existing_canonical_collision_suffix_before_increment(
+    tmp_path: Path,
+) -> None:
+    desired = (tmp_path / "canonical" / "Media" / "Photos" / "2024" / "02" / "IMG_20240203_C01.jpg").resolve(strict=False)
+    source = (tmp_path / "inbox" / "source.jpg").resolve(strict=False)
+    reserved_paths: set[str] = {str(desired), str(desired.with_name("IMG_20240203_C02.jpg"))}
+
+    reserved, had_collision = reserve_planned_path_by_key(
+        source_key=str(source),
+        desired_path=desired,
+        desired_key=str(desired),
+        reserved_paths=reserved_paths,
+        collision_marker="C",
+    )
+
+    assert had_collision is True
+    assert reserved == desired.with_name("IMG_20240203_C03.jpg")
