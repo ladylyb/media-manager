@@ -145,6 +145,12 @@ class BenchmarkRunType(StrEnum):
     DISCOVERY = "DISCOVERY"
 
 
+class NamingStrategyDB(StrEnum):
+    SHARED_CANONICAL_NAME = "SHARED_CANONICAL_NAME"
+    DUPLICATE_OWNS_DATE_STANDARDIZED = "DUPLICATE_OWNS_DATE_STANDARDIZED"
+    PRESERVE_DUPLICATE_ORIGINAL_NAME = "PRESERVE_DUPLICATE_ORIGINAL_NAME"
+
+
 class Run(Base):
     __tablename__ = "runs"
 
@@ -161,6 +167,19 @@ class Run(Base):
         DateTime(timezone=True), nullable=False, default=utc_now
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    owner: Mapped[str] = mapped_column(Text, nullable=False, default="LL", server_default=text("'LL'"))
+    context: Mapped[str] = mapped_column(Text, nullable=False, default="General", server_default=text("'General'"))
+    naming_strategy: Mapped[NamingStrategyDB] = mapped_column(
+        Enum(NamingStrategyDB, name="naming_strategy", native_enum=True),
+        nullable=False,
+        default=NamingStrategyDB.SHARED_CANONICAL_NAME,
+        server_default=text("'SHARED_CANONICAL_NAME'"),
+    )
+    owner_context_override_confirmed: Mapped[bool] = mapped_column(
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
 
     failure_events: Mapped[list[FailureEvent]] = relationship(
         back_populates="run",
@@ -934,6 +953,12 @@ class OperatorPolicySetting(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, nullable=False)
     selected_policy: Mapped[str] = mapped_column(Text, nullable=False)
+    naming_strategy: Mapped[NamingStrategyDB] = mapped_column(
+        Enum(NamingStrategyDB, name="naming_strategy", native_enum=True),
+        nullable=False,
+        default=NamingStrategyDB.SHARED_CANONICAL_NAME,
+        server_default=text("'SHARED_CANONICAL_NAME'"),
+    )
     preferred_roots_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default=text("'[]'"))
     recanonicalization_enabled: Mapped[bool] = mapped_column(
         nullable=False,

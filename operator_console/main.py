@@ -110,6 +110,7 @@ class PolicyUpdatePayload(BaseModel):
     """Structured update payload for operator policy settings."""
 
     selected_policy: str
+    naming_strategy: str = "SHARED_CANONICAL_NAME"
     preferred_roots: list[str] = Field(default_factory=list)
     recanonicalization_enabled: bool
     version: int
@@ -121,6 +122,10 @@ class RunTriggerPayload(BaseModel):
     folder_path: str
     policy_name: str
     dry_run: bool = False
+    owner: str = "LL"
+    context: str = "General"
+    naming_strategy: str = "SHARED_CANONICAL_NAME"
+    owner_context_override_confirmed: bool = False
 
 
 class MediaFileValidatePayload(BaseModel):
@@ -175,6 +180,10 @@ class PlanPayload(BaseModel):
 
     folder_path: str
     strict_metadata: bool = False
+    owner: str = "LL"
+    context: str = "General"
+    naming_strategy: str = "SHARED_CANONICAL_NAME"
+    owner_context_override_confirmed: bool = False
 
 
 class ApplyPayload(BaseModel):
@@ -958,6 +967,7 @@ def create_app() -> FastAPI:
             "policy-set",
             lambda: services.policy_set(
                 selected_policy=payload.selected_policy,
+                naming_strategy=payload.naming_strategy,
                 preferred_roots=tuple(payload.preferred_roots),
                 recanonicalization_enabled=payload.recanonicalization_enabled,
                 version=payload.version,
@@ -975,6 +985,10 @@ def create_app() -> FastAPI:
                 folder_path=payload.folder_path,
                 policy_name=payload.policy_name,
                 dry_run=payload.dry_run,
+                owner=payload.owner,
+                context=payload.context,
+                naming_strategy=payload.naming_strategy,
+                owner_context_override_confirmed=payload.owner_context_override_confirmed,
             ),
         )
 
@@ -995,7 +1009,14 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         return _execute_mutation(
             "plan",
-            lambda: services.plan(folder_path=payload.folder_path, strict_metadata=payload.strict_metadata),
+            lambda: services.plan(
+                folder_path=payload.folder_path,
+                strict_metadata=payload.strict_metadata,
+                owner=payload.owner,
+                context=payload.context,
+                naming_strategy=payload.naming_strategy,
+                owner_context_override_confirmed=payload.owner_context_override_confirmed,
+            ),
         )
 
     @app.post("/api/apply")

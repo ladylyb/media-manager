@@ -50,15 +50,16 @@ def test_plan_failure_marks_operation_run_failed(tmp_path: Path, session_factory
         def collect_files(self, root: Path) -> list[Path]:
             return [root / "a.jpg"]
 
-        def ingest_paths(self, _files: list[Path], *, authoritative_root: Path | None = None):
-            _ = authoritative_root
+        def ingest_paths(self, _files: list[Path], *, authoritative_root: Path | None = None, **kwargs):
+            _ = authoritative_root, kwargs
             return SimpleNamespace()
 
     class _FakeRunService:
         def __init__(self, _session_factory) -> None:
             pass
 
-        def create_run(self):
+        def create_run(self, **kwargs):
+            _ = kwargs
             return SimpleNamespace(id=None)
 
     class _FailPlanner:

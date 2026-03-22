@@ -18,6 +18,7 @@ from media_manager.app.core.errors import MissingRequiredMetadataError, Planning
 from media_manager.app.core.filenames import generate_canonical_filename, infer_media_type_from_extension
 from media_manager.app.core.logging_config import get_logger
 from media_manager.app.core.metadata_cache import MetadataCache
+from media_manager.app.core.metadata_extractor import extract_file_metadata
 from media_manager.app.core.path_resolver import (
     reserve_planned_path_by_key,
     resolve_canonical_path,
@@ -37,6 +38,7 @@ from media_manager.app.persistence.models import (
     FileInstanceStatus,
     MediaMetadata,
     MetadataCode,
+    NamingStrategyDB,
     PlannedAction,
     PlannedActionRole,
     PlannedActionType,
@@ -675,8 +677,8 @@ class PlanningService:
             )
             return "SKIPPED_MISSING_METADATA", PlannedActionRole.CANONICAL.value, len(missing_required), 0.0, 0.0
 
-        owner = metadata_map.get("OWNER")
-        context = metadata_map.get("CONTEXT")
+        owner = metadata_map.get("OWNER") or run.owner
+        context = metadata_map.get("CONTEXT") or run.context
         taken_dt_raw = metadata_map.get("TAKEN_DT")
         if not owner or not context or not taken_dt_raw:
             return "SKIPPED_MISSING_METADATA", PlannedActionRole.CANONICAL.value, 0, 0.0, 0.0
@@ -689,6 +691,11 @@ class PlanningService:
         duplicate_index = routing_decision.duplicate_index if routing_decision is not None else None
 
         taken_datetime = datetime.fromisoformat(taken_dt_raw)
+        duplicate_taken_datetime = taken_datetime
+        if role == PlannedActionRole.DUPLICATE.value and run.naming_strategy == NamingStrategyDB.DUPLICATE_OWNS_DATE_STANDARDIZED:
+            duplicate_dt_raw = self._instance_taken_dt(source, owner=owner, context=context)
+            if duplicate_dt_raw is not None:
+                duplicate_taken_datetime = duplicate_dt_raw
         canonical_filename = generate_canonical_filename(
             media_type=media_type,
             taken_datetime=taken_datetime,
@@ -698,11 +705,22 @@ class PlanningService:
         )
         if role == PlannedActionRole.DUPLICATE.value:
             assert duplicate_index is not None
+            duplicate_filename = canonical_filename
+            if run.naming_strategy == NamingStrategyDB.DUPLICATE_OWNS_DATE_STANDARDIZED:
+                duplicate_filename = generate_canonical_filename(
+                    media_type=media_type,
+                    taken_datetime=duplicate_taken_datetime,
+                    extension=source.suffix,
+                    owner=owner,
+                    context=context,
+                )
+            elif run.naming_strategy == NamingStrategyDB.PRESERVE_DUPLICATE_ORIGINAL_NAME:
+                duplicate_filename = source.name
             desired_destination = resolve_duplicate_path(
                 duplicate_root=storage_roots.duplicate_root,
                 media_type=media_type,
-                taken_datetime=taken_datetime,
-                canonical_filename=canonical_filename,
+                taken_datetime=duplicate_taken_datetime,
+                canonical_filename=duplicate_filename,
                 duplicate_index=duplicate_index,
             )
         else:
@@ -755,6 +773,20 @@ class PlanningService:
                 plan
             )
         return action_type, role, 0, persist_flush_duration_s, path_reservation_duration_s
+
+    def _instance_taken_dt(self, source: Path, *, owner: str, context: str) -> datetime | None:
+        try:
+            rows = extract_file_metadata(source, file_hash="", owner=owner, context=context)
+        except Exception:
+            return None
+        row_map = {row.code_type: row.decode_value for row in rows}
+        taken_dt_raw = row_map.get("TAKEN_DT")
+        if not taken_dt_raw:
+            return None
+        try:
+            return datetime.fromisoformat(taken_dt_raw)
+        except ValueError:
+            return None
 
     def _record_planning_failure(self, run_id: uuid.UUID, code: str, message: str) -> None:
         with transactional_session(self._session_factory) as session:

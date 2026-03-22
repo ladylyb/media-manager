@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from media_manager.app.core.naming import DEFAULT_CONTEXT, DEFAULT_OWNER, normalize_naming_strategy
 from media_manager.app.core.errors import (
     InvalidRunTransitionError,
     RunNotFoundError,
@@ -24,7 +25,7 @@ from media_manager.app.core.errors import (
 )
 from media_manager.app.core.state_machine import RunState, validate_transition
 from media_manager.app.persistence.base import transactional_session
-from media_manager.app.persistence.models import FailureEvent, FailurePhase, Run, RunStateDB
+from media_manager.app.persistence.models import FailureEvent, FailurePhase, NamingStrategyDB, Run, RunStateDB
 
 
 def _now_utc() -> datetime:
@@ -38,6 +39,10 @@ class RunSnapshot:
     created_at: datetime
     updated_at: datetime
     version: int
+    owner: str
+    context: str
+    naming_strategy: str
+    owner_context_override_confirmed: bool
 
 
 def _to_snapshot(run: Run) -> RunSnapshot:
@@ -47,6 +52,10 @@ def _to_snapshot(run: Run) -> RunSnapshot:
         created_at=run.created_at,
         updated_at=run.updated_at,
         version=run.version,
+        owner=run.owner,
+        context=run.context,
+        naming_strategy=run.naming_strategy.value,
+        owner_context_override_confirmed=run.owner_context_override_confirmed,
     )
 
 
@@ -56,9 +65,25 @@ class RunService:
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
 
-    def create_run(self) -> RunSnapshot:
+    def create_run(
+        self,
+        *,
+        owner: str = DEFAULT_OWNER,
+        context: str = DEFAULT_CONTEXT,
+        naming_strategy: str = NamingStrategyDB.SHARED_CANONICAL_NAME.value,
+        owner_context_override_confirmed: bool = False,
+    ) -> RunSnapshot:
         with transactional_session(self._session_factory) as session:
-            run = Run(state=RunStateDB.CREATED, created_at=_now_utc(), updated_at=_now_utc(), version=1)
+            run = Run(
+                state=RunStateDB.CREATED,
+                created_at=_now_utc(),
+                updated_at=_now_utc(),
+                version=1,
+                owner=owner.strip() or DEFAULT_OWNER,
+                context=context.strip() or DEFAULT_CONTEXT,
+                naming_strategy=NamingStrategyDB(normalize_naming_strategy(naming_strategy)),
+                owner_context_override_confirmed=bool(owner_context_override_confirmed),
+            )
             session.add(run)
             session.flush()
             return _to_snapshot(run)

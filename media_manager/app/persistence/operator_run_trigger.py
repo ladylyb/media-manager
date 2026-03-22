@@ -7,6 +7,7 @@ from pathlib import Path
 
 from media_manager.app.canonical.context import CanonicalContext
 from media_manager.app.canonical.factory import build_canonical_policy
+from media_manager.app.core.naming import DEFAULT_CONTEXT, DEFAULT_OWNER
 from media_manager.app.core.errors import MediaManagerError
 from media_manager.app.persistence.apply import ApplyService, ApplySummary
 from media_manager.app.persistence.canonicalization import RecomputeMode, recompute_canonical_assignments
@@ -22,6 +23,10 @@ class RunTriggerCommand:
     folder_path: str
     policy_name: str
     dry_run: bool
+    owner: str = DEFAULT_OWNER
+    context: str = DEFAULT_CONTEXT
+    naming_strategy: str = "SHARED_CANONICAL_NAME"
+    owner_context_override_confirmed: bool = False
 
 
 @dataclass(frozen=True)
@@ -82,9 +87,19 @@ class OperatorRunTriggerService:
         run_service = RunService(self._session_factory)
         planner = PlanningService(self._session_factory)
         apply_service = ApplyService(self._session_factory)
-        ingest_summary = ingest_service.ingest_paths(files)
+        ingest_summary = ingest_service.ingest_paths(
+            files,
+            owner=command.owner,
+            context=command.context,
+            owner_context_override_confirmed=command.owner_context_override_confirmed,
+        )
 
-        run = run_service.create_run()
+        run = run_service.create_run(
+            owner=command.owner,
+            context=command.context,
+            naming_strategy=command.naming_strategy,
+            owner_context_override_confirmed=command.owner_context_override_confirmed,
+        )
         recompute_mode = RecomputeMode.APPLY
         recompute_summary = recompute_canonical_assignments(
             self._session_factory,
@@ -151,6 +166,9 @@ class OperatorRunTriggerService:
             "apply": apply_payload,
             "dry_run": command.dry_run,
             "policy_name": policy_name_or_upper(command.policy_name),
+            "owner": command.owner,
+            "context": command.context,
+            "naming_strategy": command.naming_strategy,
         }
 
 

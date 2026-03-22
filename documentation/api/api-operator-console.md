@@ -387,11 +387,37 @@ When `dry_run=false`, behavior remains execution-oriented and returns:
 {
   "mode": "EXECUTION",
   "run_id": "...",
-  "summary_metrics": { "...": "..." },
+  "summary_metrics": {
+    "policy_name": "FIRST_SEEN",
+    "owner": "TripA",
+    "context": "Family",
+    "naming_strategy": "DUPLICATE_OWNS_DATE_STANDARDIZED"
+  },
   "duplicates_found": 0,
   "canonical_changes": 0
 }
 ```
+
+`POST /api/plan` and `POST /api/run` accept these additional request fields:
+
+- `owner` optional string, default `LL`
+- `context` optional string, default `General`
+- `naming_strategy` optional string:
+  - `SHARED_CANONICAL_NAME`
+  - `DUPLICATE_OWNS_DATE_STANDARDIZED`
+  - `PRESERVE_DUPLICATE_ORIGINAL_NAME`
+- `owner_context_override_confirmed` optional boolean, default `false`
+
+Naming behavior notes:
+
+- `SHARED_CANONICAL_NAME` keeps current behavior: duplicates inherit the canonical base name plus `_DUP_n`.
+- `DUPLICATE_OWNS_DATE_STANDARDIZED` keeps standardized duplicate names but allows the duplicate's own date evidence to drive its date portion and duplicate folder.
+- `PRESERVE_DUPLICATE_ORIGINAL_NAME` keeps the duplicate's original filename stem and only appends duplicate suffixing as needed.
+
+Owner/context conflict note:
+
+- when incoming files match existing duplicate-backed content, stored `OWNER` and `CONTEXT` remain authoritative unless `owner_context_override_confirmed=true`
+- confirmed override applies to the whole matched content group, including the canonical item
 
 ## Validation and Error Semantics
 

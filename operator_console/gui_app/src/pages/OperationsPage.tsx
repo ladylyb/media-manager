@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -24,8 +24,10 @@ import { TopSurfaceHeader } from "@/components/layout/TopSurfaceHeader";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -35,6 +37,7 @@ import {
 } from "@/components/ui/select";
 import {
   getDirectoryPickerCapability,
+  getPolicy,
   getRuns,
   invalidateReadsAfterOperation,
   runApply,
@@ -43,11 +46,12 @@ import {
   runPlan,
   runTagEnrichment,
 } from "@/lib/api/endpoints";
+import { ApiClientError } from "@/lib/api/client";
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
 import { executionStepGuidance } from "@/lib/workflow/executionStepGuidance";
 import { cn } from "@/lib/utils";
-import type { OperationResult, PaginatedResponse, Run } from "@/types";
+import type { OperationResult, PaginatedResponse, Policy, Run } from "@/types";
 import type { ProgressOperationKind, ProgressOperationStatus } from "@/types/logs";
 
 type ExecuteState = {
@@ -58,12 +62,53 @@ type ExecuteState = {
 
 type ConfirmingAction = "recheck-ingest" | "recheck-plan" | "apply" | "canonical" | "tag";
 type PanelId = "start" | "continue" | "recheck" | "canonical" | "tag";
+type OverrideConflictDetails = {
+  requested_owner: string;
+  requested_context: string;
+  existing_owner: string;
+  existing_context: string;
+  conflicting_group_count: number;
+  sample_content_id?: string;
+  sample_paths?: string[];
+};
 
 const INITIAL_EXECUTE_STATE: ExecuteState = {
   loading: false,
   error: null,
   result: null,
 };
+
+const DEFAULT_OWNER = "LL";
+const DEFAULT_CONTEXT = "General";
+const DEFAULT_NAMING_STRATEGY = "SHARED_CANONICAL_NAME";
+const namingStrategyOptions = [
+  { value: DEFAULT_NAMING_STRATEGY, label: "Shared canonical name" },
+  { value: "DUPLICATE_OWNS_DATE_STANDARDIZED", label: "Duplicate owns date (standardized)" },
+  { value: "PRESERVE_DUPLICATE_ORIGINAL_NAME", label: "Preserve duplicate original name" },
+] as const;
+
+function formatNamingStrategy(value: string) {
+  return namingStrategyOptions.find((option) => option.value === value)?.label ?? value;
+}
+
+function asOverrideConflictDetails(value: unknown): OverrideConflictDetails | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  return {
+    requested_owner: typeof record.requested_owner === "string" ? record.requested_owner : DEFAULT_OWNER,
+    requested_context:
+      typeof record.requested_context === "string" ? record.requested_context : DEFAULT_CONTEXT,
+    existing_owner: typeof record.existing_owner === "string" ? record.existing_owner : DEFAULT_OWNER,
+    existing_context:
+      typeof record.existing_context === "string" ? record.existing_context : DEFAULT_CONTEXT,
+    conflicting_group_count:
+      typeof record.conflicting_group_count === "number" ? record.conflicting_group_count : 1,
+    sample_content_id: typeof record.sample_content_id === "string" ? record.sample_content_id : undefined,
+    sample_paths: Array.isArray(record.sample_paths)
+      ? record.sample_paths.filter((item): item is string => typeof item === "string")
+      : undefined,
+  };
+}
 
 function parseError(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -215,10 +260,19 @@ export default function OperationsPage() {
   const [manualRunId, setManualRunId] = useState("");
   const [showManualRunId, setShowManualRunId] = useState(false);
   const [activeProgressKind, setActiveProgressKind] = useState<ProgressOperationKind>(null);
+  const recheckPanelRef = useRef<HTMLDivElement | null>(null);
+  const applyPanelRef = useRef<HTMLDivElement | null>(null);
+  const canonicalPanelRef = useRef<HTMLDivElement | null>(null);
+  const tagPanelRef = useRef<HTMLDivElement | null>(null);
   const [recheckState, setRecheckState] = useState<{ ingest: ExecuteState; plan: ExecuteState }>({
     ingest: INITIAL_EXECUTE_STATE,
     plan: INITIAL_EXECUTE_STATE,
   });
+  const [recheckOwner, setRecheckOwner] = useState(DEFAULT_OWNER);
+  const [recheckContext, setRecheckContext] = useState(DEFAULT_CONTEXT);
+  const [recheckNamingStrategy, setRecheckNamingStrategy] = useState(DEFAULT_NAMING_STRATEGY);
+  const [recheckOverrideConfirmed, setRecheckOverrideConfirmed] = useState(false);
+  const [recheckOverrideConflict, setRecheckOverrideConflict] = useState<OverrideConflictDetails | null>(null);
   const [applyState, setApplyState] = useState<ExecuteState>(INITIAL_EXECUTE_STATE);
   const [canonicalState, setCanonicalState] = useState<ExecuteState>(INITIAL_EXECUTE_STATE);
   const [tagState, setTagState] = useState<ExecuteState>(INITIAL_EXECUTE_STATE);
@@ -235,6 +289,14 @@ export default function OperationsPage() {
     staleTime: queryOptions.runs.staleTime,
   });
 
+  const policyQuery = useQuery({
+    queryKey: queryKeys.policy,
+    queryFn: async () => (await getPolicy()).data,
+    staleTime: queryOptions.policy.staleTime,
+  });
+
+  const policy = (policyQuery.data as Policy | undefined) ?? null;
+
   const runs = ((runsQuery.data as PaginatedResponse<Run> | undefined)?.items ?? []).filter(
     (run) => run.status === "COMPLETED",
   );
@@ -248,6 +310,13 @@ export default function OperationsPage() {
     if (showManualRunId || selectedPlanRunId || recentPlanRuns.length === 0) return;
     setSelectedPlanRunId(recentPlanRuns[0].operation_run_id);
   }, [recentPlanRuns, selectedPlanRunId, showManualRunId]);
+
+  useEffect(() => {
+    if (!policy) return;
+    setRecheckNamingStrategy((current) =>
+      current === DEFAULT_NAMING_STRATEGY ? policy.naming.strategy : current,
+    );
+  }, [policy]);
 
   const selectedPlan = recentPlanRuns.find((run) => run.operation_run_id === selectedPlanRunId) ?? null;
   // PLAN history entries are useful for selection and audit context, but apply must target the
@@ -321,6 +390,21 @@ export default function OperationsPage() {
     setOpenPanel((current) => (current === panelId ? null : panelId));
   };
 
+  const restoreFocusToMainSurface = (targetRef: RefObject<HTMLElement | null>) => {
+    window.setTimeout(() => {
+      targetRef.current?.focus();
+    }, 0);
+  };
+
+  const confirmAndRunAction = (
+    targetRef: RefObject<HTMLElement | null>,
+    runner: () => Promise<void>,
+  ) => {
+    setConfirmingAction(null);
+    restoreFocusToMainSurface(targetRef);
+    void runner();
+  };
+
   const executeRecheck = async (mode: "ingest" | "plan") => {
     const folderPath = recheckFolderPath.trim();
     if (!folderPath) {
@@ -339,18 +423,37 @@ export default function OperationsPage() {
       [mode]: { loading: true, error: null, result: null },
     }));
     setActiveProgressKind(mode);
+    if (mode === "plan") {
+      setRecheckOverrideConflict(null);
+    }
 
     try {
       const response =
         mode === "ingest"
           ? await runIngest({ folder_path: folderPath, dry_run: true })
-          : await runPlan({ folder_path: folderPath, strict_metadata: false });
+          : await runPlan({
+              folder_path: folderPath,
+              strict_metadata: false,
+              owner: recheckOwner,
+              context: recheckContext,
+              naming_strategy: recheckNamingStrategy,
+              owner_context_override_confirmed: recheckOverrideConfirmed,
+            });
       setRecheckState((current) => ({
         ...current,
         [mode]: { loading: false, error: null, result: response.data },
       }));
       await invalidateReadsAfterOperation(queryClient, mode === "ingest" ? "ingest" : "plan");
     } catch (err) {
+      if (mode === "plan" && err instanceof ApiClientError) {
+        const overrideError = err.errors?.find(
+          (item) => item.code === "OWNER_CONTEXT_OVERRIDE_REQUIRED",
+        );
+        const details = asOverrideConflictDetails(overrideError?.details);
+        if (details) {
+          setRecheckOverrideConflict(details);
+        }
+      }
       setRecheckState((current) => ({
         ...current,
         [mode]: { loading: false, error: parseError(err), result: null },
@@ -527,7 +630,11 @@ export default function OperationsPage() {
             className="border-emerald-100 bg-emerald-50/55"
             panelClassName="bg-background/90 shadow-none"
           />
-          <div className="space-y-4 rounded-2xl border bg-background/75 p-4">
+          <div
+            ref={applyPanelRef}
+            tabIndex={-1}
+            className="space-y-4 rounded-2xl border bg-background/75 p-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
             <div className="space-y-2">
               <label className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
                 Recent Saved Plans
@@ -635,6 +742,11 @@ export default function OperationsPage() {
                 <Link to="/admin?tab=activity">Review Your Latest Job</Link>
               </Button>
             </div>
+            {applyState.loading ? (
+              <p className="text-sm font-medium text-foreground">
+                Apply started. You can monitor progress below while the main screen stays available.
+              </p>
+            ) : null}
           </div>
           <ResultPanel
             state={applyState}
@@ -677,13 +789,118 @@ export default function OperationsPage() {
               panelClassName="bg-background/90 shadow-none"
             />
           </div>
-          <div className="space-y-4 rounded-2xl border bg-background/75 p-4">
+          <div
+            ref={recheckPanelRef}
+            tabIndex={-1}
+            className="space-y-4 rounded-2xl border bg-background/75 p-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
               Folder to Recheck
             </p>
             <p className="break-all rounded-xl border border-dashed bg-muted/25 px-3 py-3 font-mono text-sm">
               {recheckFolderPath || "Choose a server folder to validate or plan again."}
             </p>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="recheck-owner">Owner</Label>
+                <Input
+                  id="recheck-owner"
+                  value={recheckOwner}
+                  onChange={(event) => {
+                    setRecheckOwner(event.target.value);
+                    setRecheckOverrideConfirmed(false);
+                    setRecheckOverrideConflict(null);
+                  }}
+                  placeholder={DEFAULT_OWNER}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="recheck-context">Context</Label>
+                <Input
+                  id="recheck-context"
+                  value={recheckContext}
+                  onChange={(event) => {
+                    setRecheckContext(event.target.value);
+                    setRecheckOverrideConfirmed(false);
+                    setRecheckOverrideConflict(null);
+                  }}
+                  placeholder={DEFAULT_CONTEXT}
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="recheck-naming-strategy">Naming strategy</Label>
+              <Select
+                value={recheckNamingStrategy}
+                onValueChange={(value) => {
+                  setRecheckNamingStrategy(value);
+                  setRecheckOverrideConfirmed(false);
+                  setRecheckOverrideConflict(null);
+                }}
+              >
+                <SelectTrigger id="recheck-naming-strategy">
+                  <SelectValue placeholder="Choose a naming strategy" />
+                </SelectTrigger>
+                <SelectContent>
+                  {namingStrategyOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Manual planning here uses the same naming settings as the wizard, so the advanced page can reproduce batch behavior exactly.
+              </p>
+              {policyQuery.error ? (
+                <p className="text-xs text-muted-foreground">
+                  Default naming rule could not be loaded: {parseError(policyQuery.error)}
+                </p>
+              ) : null}
+            </div>
+            <div className="rounded-xl border border-dashed bg-muted/15 p-3 text-sm text-foreground/90">
+              <p>Owner: {recheckOwner || DEFAULT_OWNER}</p>
+              <p>Context: {recheckContext || DEFAULT_CONTEXT}</p>
+              <p>Naming strategy: {formatNamingStrategy(recheckNamingStrategy)}</p>
+            </div>
+            {recheckOverrideConflict ? (
+              <div className="space-y-3 rounded-xl border border-amber-300 bg-amber-50/80 p-4">
+                <div>
+                  <p className="text-sm font-semibold text-amber-950">Correction confirmation is required</p>
+                  <p className="mt-1 text-sm leading-6 text-amber-900/90">
+                    The folder you are planning matches existing duplicate-backed content saved as{" "}
+                    <span className="font-medium">
+                      {recheckOverrideConflict.existing_owner} / {recheckOverrideConflict.existing_context}
+                    </span>
+                    . Confirming the correction will affect the matched content group and its canonical item too.
+                  </p>
+                </div>
+                <div className="grid gap-2 text-sm text-amber-950 sm:grid-cols-2">
+                  <p>Requested: {recheckOverrideConflict.requested_owner} / {recheckOverrideConflict.requested_context}</p>
+                  <p>Existing: {recheckOverrideConflict.existing_owner} / {recheckOverrideConflict.existing_context}</p>
+                  <p>Conflicting groups: {recheckOverrideConflict.conflicting_group_count}</p>
+                  {recheckOverrideConflict.sample_content_id ? (
+                    <p className="break-all">Example content group: {recheckOverrideConflict.sample_content_id}</p>
+                  ) : null}
+                </div>
+                <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-white/70 p-3">
+                  <Checkbox
+                    id="recheck-override"
+                    checked={recheckOverrideConfirmed}
+                    onCheckedChange={(checked) => setRecheckOverrideConfirmed(Boolean(checked))}
+                    className="mt-0.5"
+                  />
+                  <div className="space-y-1">
+                    <Label htmlFor="recheck-override" className="text-sm font-medium text-amber-950">
+                      Confirm owner/context correction for this duplicate-backed content
+                    </Label>
+                    <p className="text-xs leading-5 text-amber-900/90">
+                      The next planning attempt will use your requested values and may lead to canonical and duplicate renames.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             <div className="flex flex-wrap gap-3">
               <Button
                 type="button"
@@ -712,6 +929,11 @@ export default function OperationsPage() {
                 Prepare Plan
               </Button>
             </div>
+            {recheckState.ingest.loading || recheckState.plan.loading ? (
+              <p className="text-sm font-medium text-foreground">
+                Confirmation is complete. You can stay on this page and monitor progress in the shared panel below.
+              </p>
+            ) : null}
           </div>
           <ResultPanel
             state={recheckState.ingest}
@@ -745,7 +967,11 @@ export default function OperationsPage() {
             className="border-emerald-100 bg-emerald-50/55"
             panelClassName="bg-background/90 shadow-none"
           />
-          <div className="flex flex-wrap gap-3 rounded-2xl border bg-background/75 p-4">
+          <div
+            ref={canonicalPanelRef}
+            tabIndex={-1}
+            className="flex flex-wrap gap-3 rounded-2xl border bg-background/75 p-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
             <Button
               type="button"
               onClick={() => setConfirmingAction("canonical")}
@@ -757,6 +983,11 @@ export default function OperationsPage() {
             <Button asChild type="button" variant="outline">
               <Link to="/duplicates">Open Duplicate Review</Link>
             </Button>
+            {canonicalState.loading ? (
+              <p className="text-sm font-medium text-foreground">
+                Canonical refresh started. The main panel stays available while progress updates below.
+              </p>
+            ) : null}
           </div>
           <ResultPanel
             state={canonicalState}
@@ -786,7 +1017,11 @@ export default function OperationsPage() {
             className="border-emerald-100 bg-emerald-50/55"
             panelClassName="bg-background/90 shadow-none"
           />
-          <div className="flex flex-wrap gap-3 rounded-2xl border bg-background/75 p-4">
+          <div
+            ref={tagPanelRef}
+            tabIndex={-1}
+            className="flex flex-wrap gap-3 rounded-2xl border bg-background/75 p-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
             <Button
               type="button"
               onClick={() => setConfirmingAction("tag")}
@@ -798,6 +1033,11 @@ export default function OperationsPage() {
             <Button asChild type="button" variant="outline">
               <Link to="/gallery">Open Library</Link>
             </Button>
+            {tagState.loading ? (
+              <p className="text-sm font-medium text-foreground">
+                Enrichment started. You can keep reviewing the page while progress continues below.
+              </p>
+            ) : null}
           </div>
           <ResultPanel
             state={tagState}
@@ -812,8 +1052,7 @@ export default function OperationsPage() {
         title="Refresh Discovery?"
         description="This rechecks the chosen folder and refreshes the system's visible discovery state for it."
         destructive
-        onConfirm={() => executeRecheck("ingest")}
-        loading={recheckState.ingest.loading}
+        onConfirm={() => confirmAndRunAction(recheckPanelRef, () => executeRecheck("ingest"))}
       />
       <ConfirmDialog
         open={confirmingAction === "recheck-plan"}
@@ -821,8 +1060,7 @@ export default function OperationsPage() {
         title="Prepare Plan?"
         description="This creates a fresh planning result for the chosen folder so you can review or apply it later."
         destructive
-        onConfirm={() => executeRecheck("plan")}
-        loading={recheckState.plan.loading}
+        onConfirm={() => confirmAndRunAction(recheckPanelRef, () => executeRecheck("plan"))}
       />
       <ConfirmDialog
         open={confirmingAction === "apply"}
@@ -830,16 +1068,14 @@ export default function OperationsPage() {
         title="Apply Saved Work?"
         description="This uses the selected saved plan run and is the first step here that can carry out real file and ledger changes."
         destructive
-        onConfirm={executeApply}
-        loading={applyState.loading}
+        onConfirm={() => confirmAndRunAction(applyPanelRef, executeApply)}
       />
       <ConfirmDialog
         open={confirmingAction === "canonical"}
         onOpenChange={(open) => setConfirmingAction(open ? "canonical" : null)}
         title="Preview Library Decision Refresh?"
         description="This runs the existing canonical refresh preview so you can inspect how current policy choices would look."
-        onConfirm={executeCanonicalRefresh}
-        loading={canonicalState.loading}
+        onConfirm={() => confirmAndRunAction(canonicalPanelRef, executeCanonicalRefresh)}
       />
       <ConfirmDialog
         open={confirmingAction === "tag"}
@@ -847,8 +1083,7 @@ export default function OperationsPage() {
         title="Add Searchable Details?"
         description="This starts background enrichment on the current canonical set using the existing tag enrichment endpoint."
         destructive
-        onConfirm={executeTagEnrichment}
-        loading={tagState.loading}
+        onConfirm={() => confirmAndRunAction(tagPanelRef, executeTagEnrichment)}
       />
 
       <DirectoryPickerDialog

@@ -88,6 +88,36 @@ def test_ingest_duplicate_with_stronger_filename_evidence_upgrades_taken_dt_sour
         assert rows["TAKEN_DT"] == "2024-02-14T23:59:59+00:00"
 
 
+def test_owner_context_override_does_not_downgrade_taken_dt_source(tmp_path: Path, session_factory) -> None:
+    ingest = IngestService(session_factory)
+    canonical = _write_file(tmp_path / "IMG_20240214_235959.jpg", b"same")
+    duplicate = _write_file(tmp_path / "copy.jpg", b"same")
+
+    ingest.ingest_paths([canonical], owner="LL", context="General")
+    ingest.ingest_paths(
+        [duplicate],
+        owner="TripA",
+        context="Family",
+        owner_context_override_confirmed=True,
+    )
+
+    with session_factory() as session:
+        content = session.scalar(select(FileContent))
+        assert content is not None
+        rows = {
+            code_type: value
+            for code_type, value in session.execute(
+                select(MetadataCode.code_type, MediaMetadata.decode_value)
+                .join(MediaMetadata, MediaMetadata.code_id == MetadataCode.id)
+                .where(MediaMetadata.content_id == content.content_id)
+            ).all()
+        }
+        assert rows["OWNER"] == "TripA"
+        assert rows["CONTEXT"] == "Family"
+        assert rows["TAKEN_DT_SOURCE"] == "filename"
+        assert rows["TAKEN_DT"] == "2024-02-14T23:59:59+00:00"
+
+
 def test_ingest_same_digest_batch_creates_single_content_and_counts_duplicates(tmp_path: Path, session_factory) -> None:
     ingest = IngestService(session_factory)
     first = _write_file(tmp_path / "first.jpg", b"same")
@@ -345,9 +375,15 @@ def test_ingest_bulk_metadata_upsert_only_targets_new_content(tmp_path: Path, se
     real_extract = metadata_extractor.extract_file_metadata
     real_bulk = metadata_extractor.upsert_metadata_bulk
 
-    def _capture_extract(path: Path, file_hash: str) -> list[metadata_extractor.MetadataItem]:
+    def _capture_extract(
+        path: Path,
+        file_hash: str,
+        *,
+        owner: str = "LL",
+        context: str = "General",
+    ) -> list[metadata_extractor.MetadataItem]:
         extracted_paths.append(str(path.resolve(strict=False)))
-        return real_extract(path, file_hash)
+        return real_extract(path, file_hash, owner=owner, context=context)
 
     def _capture_bulk(session, metadata_by_content, *args, **kwargs):  # type: ignore[no-untyped-def]
         bulk_calls.append(dict(metadata_by_content))
@@ -360,7 +396,10 @@ def test_ingest_bulk_metadata_upsert_only_targets_new_content(tmp_path: Path, se
 
     assert summary.new_contents == 1
     assert summary.duplicates_detected == 1
-    assert extracted_paths == [str(new_file.resolve(strict=False))]
+    assert set(extracted_paths) == {
+        str(existing.resolve(strict=False)),
+        str(new_file.resolve(strict=False)),
+    }
     assert len(bulk_calls) == 1
     assert len(bulk_calls[0]) == 1
     assert len(next(iter(bulk_calls[0].values()))) > 0

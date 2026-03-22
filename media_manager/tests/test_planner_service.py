@@ -76,6 +76,49 @@ def test_planner_generates_actions_for_canonical_and_duplicate_instances(tmp_pat
         assert any(a.role == PlannedActionRole.DUPLICATE.value for a in actions)
 
 
+def test_planner_duplicate_owns_date_strategy_uses_duplicate_filename_date(tmp_path: Path, session_factory) -> None:
+    run_service = RunService(session_factory)
+    planner = PlanningService(session_factory)
+    ingest = IngestService(session_factory)
+
+    canonical_path = _write_file(tmp_path / "inbox" / "holiday photo.jpg", b"same-content")
+    duplicate_path = _write_file(tmp_path / "inbox" / "IMG_20260317_122454.jpg", b"same-content")
+
+    ingest.ingest_paths([canonical_path, duplicate_path], owner="Trip", context="BatchA")
+    run = run_service.create_run(
+        owner="Trip",
+        context="BatchA",
+        naming_strategy="DUPLICATE_OWNS_DATE_STANDARDIZED",
+    )
+    planner.plan_run(run.id, [canonical_path, duplicate_path], ingest_if_needed=False)
+
+    with session_factory() as session:
+        actions = session.scalars(select(PlannedAction).where(PlannedAction.run_id == run.id)).all()
+        duplicate_action = next(action for action in actions if action.role == PlannedActionRole.DUPLICATE.value)
+        assert "Duplicates/Media/Photos/2026/03/" in duplicate_action.target_path
+        assert duplicate_action.target_path.endswith("IMG_20260317_122454_Trip_BatchA_DUP_1.jpg")
+
+
+def test_ingest_uses_run_owner_context_for_new_content(tmp_path: Path, session_factory) -> None:
+    ingest = IngestService(session_factory)
+    path = _write_file(tmp_path / "set" / "one.jpg", b"one")
+
+    ingest.ingest_paths([path], owner="TripA", context="Family")
+
+    with session_factory() as session:
+        content_id = session.scalar(select(FileInstance.content_id).where(FileInstance.absolute_path == str(path.resolve())))
+        assert content_id is not None
+        rows = session.execute(
+            select(MetadataCode.code_type, MediaMetadata.decode_value)
+            .select_from(MediaMetadata)
+            .join(MetadataCode, MediaMetadata.code_id == MetadataCode.id)
+            .where(MediaMetadata.content_id == content_id, MetadataCode.code_type.in_(("OWNER", "CONTEXT")))
+        ).all()
+        metadata = {code_type: value for code_type, value in rows}
+        assert metadata["OWNER"] == "TripA"
+        assert metadata["CONTEXT"] == "Family"
+
+
 def test_planner_does_not_hash_when_planning_from_db_only(
     tmp_path: Path, session_factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:

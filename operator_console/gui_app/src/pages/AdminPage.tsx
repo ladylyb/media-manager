@@ -262,6 +262,30 @@ const policyOptions = [
   },
 ];
 
+const namingStrategyOptions = [
+  {
+    value: "SHARED_CANONICAL_NAME",
+    title: "Shared canonical name",
+    description:
+      "Keep duplicate families visually grouped by reusing the canonical base name and adding a duplicate suffix.",
+    helper: "Best when grouping on disk matters more than preserving duplicate-specific naming clues.",
+  },
+  {
+    value: "DUPLICATE_OWNS_DATE_STANDARDIZED",
+    title: "Duplicate owns date (standardized)",
+    description:
+      "Keep standardized duplicate names, but let each duplicate use its own date evidence when its standardized name is built.",
+    helper: "Good when you want normalized names without hiding a duplicate's own date trail.",
+  },
+  {
+    value: "PRESERVE_DUPLICATE_ORIGINAL_NAME",
+    title: "Preserve duplicate original name",
+    description:
+      "Keep the canonical item standardized, but preserve the duplicate's original filename so source provenance stays visible.",
+    helper: "Best when duplicate history matters more than filename grouping.",
+  },
+];
+
 function explainPolicyRule(rule: string): string {
   switch (rule) {
     case "embedded_metadata_evidence DESC":
@@ -794,6 +818,7 @@ function LibraryRulesTab() {
     if (!policy) return;
     setDraft({
       selected_policy: policy.canonical_priority.selected_policy,
+      naming_strategy: policy.naming.strategy,
       preferred_roots: policy.canonical_priority.preferred_roots,
       recanonicalization_enabled: policy.recanonicalization.enabled,
       version: policy.metadata.version,
@@ -809,6 +834,7 @@ function LibraryRulesTab() {
       const res = await updatePolicy(draft);
       setDraft({
         selected_policy: res.data.canonical_priority.selected_policy,
+        naming_strategy: res.data.naming.strategy,
         preferred_roots: res.data.canonical_priority.preferred_roots,
         recanonicalization_enabled: res.data.recanonicalization.enabled,
         version: res.data.metadata.version,
@@ -855,6 +881,7 @@ function LibraryRulesTab() {
     JSON.stringify(draft) !==
       JSON.stringify({
         selected_policy: policy.canonical_priority.selected_policy,
+        naming_strategy: policy.naming.strategy,
         preferred_roots: policy.canonical_priority.preferred_roots,
         recanonicalization_enabled: policy.recanonicalization.enabled,
         version: policy.metadata.version,
@@ -879,20 +906,29 @@ function LibraryRulesTab() {
     <div className="space-y-6">
       <GuidanceCard
         title="Library Rules"
-        description="Choose how the app decides which file should stay as the main version when similar files are found."
-        whenToUse="Use this when duplicate groups look correct, but the chosen main file is not what you expected."
-        example="Should the archive copy win? Should the first file seen stay primary? Should these changes follow through automatically?"
+        description="Set the default library rules the app should use when it chooses the main version and builds canonical and duplicate filenames."
+        whenToUse="Use this when duplicate groups look broadly right, but the saved defaults should steer future batches toward different main-file or naming behavior."
+        example="Should the archive copy win? Should duplicates keep a shared family name? Should these changes follow through automatically?"
       />
 
       {combinedError ? <ErrorAlert message={combinedError} onDismiss={() => setError(null)} /> : null}
       {success ? <ErrorAlert message="Library rules saved successfully" severity="info" /> : null}
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
         <MetricCard
           title="Current rule"
           value={policyOptions.find((option) => option.value === draft.selected_policy)?.title ?? draft.selected_policy}
           subtitle="How the main version is chosen"
           icon={<ShieldCheck className="h-4 w-4" />}
+        />
+        <MetricCard
+          title="Default naming"
+          value={
+            namingStrategyOptions.find((option) => option.value === draft.naming_strategy)?.title ??
+            draft.naming_strategy
+          }
+          subtitle="How canonical and duplicate filenames are built by default"
+          icon={<Fingerprint className="h-4 w-4" />}
         />
         <MetricCard
           title="Preferred folders"
@@ -929,6 +965,29 @@ function LibraryRulesTab() {
               description={option.description}
               helper={option.helper}
               onSelect={(value) => setDraft((prev) => (prev ? { ...prev, selected_policy: value } : prev))}
+            />
+          ))}
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-[28px] border-border/70 shadow-sm">
+        <CardHeader className="pb-3">
+          <CardDescription>Default naming rule</CardDescription>
+          <CardTitle className="text-xl">How should filenames be built after the main version is chosen?</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <p className="text-sm leading-6 text-muted-foreground">
+            These are saved library defaults. The Organize wizard will start from them for each batch, then let you adjust owner, context, and naming strategy for a specific run if needed.
+          </p>
+          {namingStrategyOptions.map((option) => (
+            <PolicyChoiceCard
+              key={option.value}
+              value={option.value}
+              selected={draft.naming_strategy === option.value}
+              title={option.title}
+              description={option.description}
+              helper={option.helper}
+              onSelect={(value) => setDraft((prev) => (prev ? { ...prev, naming_strategy: value } : prev))}
             />
           ))}
         </CardContent>

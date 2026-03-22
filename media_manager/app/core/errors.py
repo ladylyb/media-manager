@@ -84,6 +84,37 @@ class PolicySettingsVersionConflictError(MediaManagerError):
     """Raised when a policy update is based on a stale version."""
 
 
+class OwnerContextOverrideRequiredError(MediaManagerError):
+    """Raised when an ingest/plan request conflicts with stored owner/context values."""
+
+    def __init__(
+        self,
+        *,
+        requested_owner: str,
+        requested_context: str,
+        existing_owner: str,
+        existing_context: str,
+        conflicting_group_count: int,
+        sample_content_id: str,
+        sample_paths: list[str],
+    ) -> None:
+        self.details = {
+            "requested_owner": requested_owner,
+            "requested_context": requested_context,
+            "existing_owner": existing_owner,
+            "existing_context": existing_context,
+            "conflicting_group_count": conflicting_group_count,
+            "sample_content_id": sample_content_id,
+            "sample_paths": sample_paths,
+        }
+        super().__init__(
+            "Owner/context override confirmation is required for existing duplicate-backed content "
+            f"(requested_owner={requested_owner}, requested_context={requested_context}, "
+            f"existing_owner={existing_owner}, existing_context={existing_context}, "
+            f"conflicting_group_count={conflicting_group_count}, sample_content_id={sample_content_id})"
+        )
+
+
 class CanonicalUnreadableError(MediaManagerError):
     """Raised when canonical instance cannot be read in current runtime."""
 

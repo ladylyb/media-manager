@@ -1031,11 +1031,24 @@ class _FakeOperationServices:
             "folder_path": folder_path,
         }
 
-    def plan(self, *, folder_path: str, strict_metadata: bool) -> dict[str, object]:
+    def plan(
+        self,
+        *,
+        folder_path: str,
+        strict_metadata: bool,
+        owner: str = "LL",
+        context: str = "General",
+        naming_strategy: str = "SHARED_CANONICAL_NAME",
+        owner_context_override_confirmed: bool = False,
+    ) -> dict[str, object]:
         return {
             "operation": "PLAN",
             "run_id": "11111111-1111-1111-1111-111111111111",
             "strict_metadata": strict_metadata,
+            "owner": owner,
+            "context": context,
+            "naming_strategy": naming_strategy,
+            "owner_context_override_confirmed": owner_context_override_confirmed,
             "summary": {"scanned_count": 2, "move_actions": 1, "noop_actions": 1, "duplicate_actions": 0},
             "folder_path": folder_path,
         }
@@ -1066,15 +1079,47 @@ class _FakeOperationServices:
             "summary": {"scanned_count": 4, "changed_count": 1, "applied_count": 0 if dry_run else 1},
         }
 
-    def operator_run(self, *, folder_path: str, policy_name: str, dry_run: bool) -> dict[str, object]:
-        return self.run(folder_path=folder_path, policy_name=policy_name, dry_run=dry_run)
+    def operator_run(
+        self,
+        *,
+        folder_path: str,
+        policy_name: str,
+        dry_run: bool,
+        owner: str = "LL",
+        context: str = "General",
+        naming_strategy: str = "SHARED_CANONICAL_NAME",
+        owner_context_override_confirmed: bool = False,
+    ) -> dict[str, object]:
+        return self.run(
+            folder_path=folder_path,
+            policy_name=policy_name,
+            dry_run=dry_run,
+            owner=owner,
+            context=context,
+            naming_strategy=naming_strategy,
+            owner_context_override_confirmed=owner_context_override_confirmed,
+        )
 
-    def run(self, *, folder_path: str, policy_name: str, dry_run: bool) -> dict[str, object]:
+    def run(
+        self,
+        *,
+        folder_path: str,
+        policy_name: str,
+        dry_run: bool,
+        owner: str = "LL",
+        context: str = "General",
+        naming_strategy: str = "SHARED_CANONICAL_NAME",
+        owner_context_override_confirmed: bool = False,
+    ) -> dict[str, object]:
         if folder_path == "/missing":
             raise ValueError("Folder path does not exist: /missing")
         if dry_run:
             return {
                 "mode": "VALIDATION_ONLY",
+                "owner": owner,
+                "context": context,
+                "naming_strategy": naming_strategy,
+                "owner_context_override_confirmed": owner_context_override_confirmed,
                 "validation_report": {
                     "mode": "VALIDATION_ONLY",
                     "root_path": folder_path,
@@ -1099,6 +1144,10 @@ class _FakeOperationServices:
         return {
             "mode": "EXECUTION",
             "run_id": "33333333-3333-3333-3333-333333333333",
+            "owner": owner,
+            "context": context,
+            "naming_strategy": naming_strategy,
+            "owner_context_override_confirmed": owner_context_override_confirmed,
             "summary_metrics": {
                 "ingest": {
                     "files_scanned": 12,
@@ -1143,6 +1192,9 @@ class _FakeOperationServices:
                 "selected_policy": "PREFER_ROOT",
                 "preferred_roots": ["/archive", "/media"],
             },
+            "naming": {
+                "strategy": "SHARED_CANONICAL_NAME",
+            },
             "tie_breaker_rules": {
                 "effective_order": [
                     "preferred_root_match DESC",
@@ -1163,6 +1215,7 @@ class _FakeOperationServices:
         self,
         *,
         selected_policy: str,
+        naming_strategy: str = "SHARED_CANONICAL_NAME",
         preferred_roots: tuple[str, ...],
         recanonicalization_enabled: bool,
         version: int,
@@ -1177,6 +1230,9 @@ class _FakeOperationServices:
             "canonical_priority": {
                 "selected_policy": selected_policy,
                 "preferred_roots": list(preferred_roots),
+            },
+            "naming": {
+                "strategy": naming_strategy,
             },
             "tie_breaker_rules": {
                 "effective_order": [
