@@ -13,6 +13,7 @@ interface MediaGridProps {
   getDetailHref?: (file: CanonicalFile) => string;
   gridClassName?: string;
   skeletonCount?: number;
+  density?: "large" | "medium" | "small" | "compact";
 }
 
 export function MediaGrid({
@@ -24,6 +25,7 @@ export function MediaGrid({
   getDetailHref,
   gridClassName = "grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5",
   skeletonCount = 10,
+  density = "medium",
 }: MediaGridProps) {
   if (loading) {
     return (
@@ -60,6 +62,7 @@ export function MediaGrid({
           file={file}
           onPreview={() => onPreview?.(file)}
           detailHref={getDetailHref?.(file)}
+          density={density}
         />
       ))}
     </div>
