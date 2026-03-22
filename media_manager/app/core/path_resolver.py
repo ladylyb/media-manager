@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import re
+
+
+_DUPLICATE_SUFFIX_RE = re.compile(r"_DUP_(\d+)$")
+_COLLISION_SUFFIX_RE = re.compile(r"_C(\d+)$")
 
 
 def _media_folder(media_type: str) -> str:
@@ -12,18 +17,26 @@ def _media_folder(media_type: str) -> str:
     return "Photos"
 
 
+def _strip_indexed_suffix(stem: str, marker: str) -> str:
+    if marker == "DUP":
+        return _DUPLICATE_SUFFIX_RE.sub("", stem)
+    if marker == "C":
+        return _COLLISION_SUFFIX_RE.sub("", stem)
+    return stem
+
+
 def duplicate_filename(canonical_filename: str, duplicate_index: int) -> str:
     if duplicate_index < 1:
         raise ValueError("duplicate_index must be >= 1")
     path = Path(canonical_filename)
-    return f"{path.stem}_DUP_{duplicate_index}{path.suffix}"
+    return f"{_strip_indexed_suffix(path.stem, 'DUP')}_DUP_{duplicate_index}{path.suffix}"
 
 
 def collision_filename(canonical_filename: str, collision_index: int) -> str:
     if collision_index < 1:
         raise ValueError("collision_index must be >= 1")
     path = Path(canonical_filename)
-    return f"{path.stem}_C{collision_index:02d}{path.suffix}"
+    return f"{_strip_indexed_suffix(path.stem, 'C')}_C{collision_index:02d}{path.suffix}"
 
 
 def reserve_planned_path(
@@ -55,7 +68,7 @@ def reserve_planned_path_by_key(
         reserved_paths.add(desired_key)
         return desired_path, False
 
-    stem = desired_path.stem
+    stem = _strip_indexed_suffix(desired_path.stem, collision_marker)
     suffix = desired_path.suffix
     idx = 1
     while True:
