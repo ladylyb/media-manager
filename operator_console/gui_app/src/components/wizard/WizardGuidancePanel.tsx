@@ -1,6 +1,5 @@
-import { useState } from "react";
-import { ChevronDown, ChevronUp, Info } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Info } from "lucide-react";
+import { ExpandableSummaryPanel } from "@/components/ExpandableSummaryPanel";
 import { cn } from "@/lib/utils";
 
 export interface WizardGuidanceSection {
@@ -24,44 +23,31 @@ export function WizardGuidancePanel({
   sections,
   title = "Step Guidance",
   subtitle = "Optional help for understanding this step.",
-  showLabel = "Show step guidance",
-  hideLabel = "Hide step guidance",
   defaultOpen = false,
   gridClassName,
   className,
   panelClassName,
 }: WizardGuidancePanelProps) {
-  const [open, setOpen] = useState(defaultOpen);
+  const summary = `Includes ${sections.map((section) => section.title).join(", ")}.`;
 
   return (
-    <div className={cn("rounded-2xl border border-primary/15 bg-primary/[0.04] p-4 sm:p-5", className)}>
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <ExpandableSummaryPanel
+      title={title}
+      description={subtitle}
+      summary={summary}
+      defaultOpen={defaultOpen}
+      className={cn("border-primary/15 bg-primary/[0.04]", className)}
+      openClassName="border-primary/20 bg-primary/[0.05]"
+      closedClassName="border-primary/15 bg-primary/[0.04]"
+      contentClassName="space-y-4"
+      headerMeta={
         <div className="flex items-center gap-2">
           <Info className="h-4 w-4 text-primary" />
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-primary/80">
-              {title}
-            </p>
-            <p className="text-sm text-muted-foreground">{subtitle}</p>
-          </div>
+          <span className="text-xs font-semibold uppercase tracking-[0.22em] text-primary/80">Step Guidance</span>
         </div>
-        <Button type="button" variant="outline" size="sm" onClick={() => setOpen((current) => !current)}>
-          {open ? (
-            <>
-              <ChevronUp className="mr-2 h-4 w-4" />
-              {hideLabel}
-            </>
-          ) : (
-            <>
-              <ChevronDown className="mr-2 h-4 w-4" />
-              {showLabel}
-            </>
-          )}
-        </Button>
-      </div>
-
-      {open && (
-        <div className={cn("mt-4 grid gap-3 xl:grid-cols-2", gridClassName)}>
+      }
+    >
+      <div className={cn("grid gap-3 xl:grid-cols-2", gridClassName)}>
           {sections.map((section) => (
             <div
               key={section.title}
@@ -73,8 +59,7 @@ export function WizardGuidancePanel({
               <p className="mt-2 text-sm leading-6 text-foreground/90">{section.content}</p>
             </div>
           ))}
-        </div>
-      )}
-    </div>
+      </div>
+    </ExpandableSummaryPanel>
   );
 }

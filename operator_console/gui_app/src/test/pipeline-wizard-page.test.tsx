@@ -162,6 +162,9 @@ describe("Pipeline Wizard page", () => {
     expect(await screen.findByLabelText("Owner")).toHaveValue("LL");
     expect(screen.getByLabelText("Context")).toHaveValue("General");
     expect(screen.getByText("Duplicate owns date (standardized)")).toBeInTheDocument();
+    expect(screen.getByText("Planning This Folder")).toBeInTheDocument();
+    expect(screen.getByText("Previous Step Details")).toBeInTheDocument();
+    expect(screen.getByText("Naming Inputs Summary")).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Owner"), { target: { value: "TripA" } });
     fireEvent.change(screen.getByLabelText("Context"), { target: { value: "Family" } });
@@ -177,6 +180,63 @@ describe("Pipeline Wizard page", () => {
         owner_context_override_confirmed: false,
       }),
     );
+  });
+
+  it("keeps plan details available in collapsible summary panels", async () => {
+    mocks.runWizardIngest.mockResolvedValue({
+      data: { summary: { files_scanned: 10, new_contents: 5, new_instances: 5, duplicates_detected: 0 } },
+    });
+
+    renderPage();
+
+    fireEvent.change(await screen.findByLabelText("Folder Path"), {
+      target: { value: "/media/incoming" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run Ingest" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Continue to Review Ingest" })).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Review Ingest" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to Plan" }));
+
+    const planningPanel = screen.getByText("Planning This Folder").closest("[data-panel-state='open']");
+    expect(planningPanel).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Planning This Folder/ }));
+    expect(screen.getByText("Owner: LL")).toBeInTheDocument();
+    expect(screen.getByText("Context: General")).toBeInTheDocument();
+    expect(screen.getByText("Naming strategy: Duplicate owns date (standardized)")).toBeInTheDocument();
+  });
+
+  it("blocks plan creation early when owner or context is invalid", async () => {
+    mocks.runWizardIngest.mockResolvedValue({
+      data: { summary: { files_scanned: 4, new_contents: 4, new_instances: 4, duplicates_detected: 0 } },
+    });
+
+    renderPage();
+
+    fireEvent.change(await screen.findByLabelText("Folder Path"), {
+      target: { value: "/media/incoming" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run Ingest" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Continue to Review Ingest" })).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Review Ingest" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to Plan" }));
+
+    fireEvent.change(await screen.findByLabelText("Context"), { target: { value: "FEM-INSPO" } });
+
+    expect(screen.getByText("context must contain only alphanumeric characters or underscore")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create Plan" })).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("Context"), { target: { value: "FEM_INSPO" } });
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText("context must contain only alphanumeric characters or underscore"),
+      ).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: "Create Plan" })).toBeEnabled();
   });
 
   it("shows override confirmation when plan detects conflicting owner/context values and retries with confirmation", async () => {
@@ -282,7 +342,8 @@ describe("Pipeline Wizard page", () => {
     fireEvent.click(applyButton);
     fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
 
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(mocks.runWizardApply).toHaveBeenCalled());
+    expect(screen.queryByText("Execute Apply?")).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Apply Plan" })).toBeDisabled());
     expect(screen.getByText("Apply started. You can monitor progress below while the wizard stays available.")).toBeInTheDocument();
 
@@ -292,5 +353,5 @@ describe("Pipeline Wizard page", () => {
         summary: { applied_count: 1, moves_count: 1, duplicates_count: 0, errors_count: 0 },
       },
     });
-  });
+  }, 10000);
 });

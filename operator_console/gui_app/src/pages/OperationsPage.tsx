@@ -47,6 +47,14 @@ import {
   runTagEnrichment,
 } from "@/lib/api/endpoints";
 import { ApiClientError } from "@/lib/api/client";
+import {
+  DEFAULT_CONTEXT,
+  DEFAULT_NAMING_STRATEGY,
+  DEFAULT_OWNER,
+  formatNamingStrategy,
+  getNamingInputValidation,
+  NAMING_STRATEGY_OPTIONS,
+} from "@/lib/namingInputs";
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
 import { executionStepGuidance } from "@/lib/workflow/executionStepGuidance";
@@ -77,19 +85,6 @@ const INITIAL_EXECUTE_STATE: ExecuteState = {
   error: null,
   result: null,
 };
-
-const DEFAULT_OWNER = "LL";
-const DEFAULT_CONTEXT = "General";
-const DEFAULT_NAMING_STRATEGY = "SHARED_CANONICAL_NAME";
-const namingStrategyOptions = [
-  { value: DEFAULT_NAMING_STRATEGY, label: "Shared canonical name" },
-  { value: "DUPLICATE_OWNS_DATE_STANDARDIZED", label: "Duplicate owns date (standardized)" },
-  { value: "PRESERVE_DUPLICATE_ORIGINAL_NAME", label: "Preserve duplicate original name" },
-] as const;
-
-function formatNamingStrategy(value: string) {
-  return namingStrategyOptions.find((option) => option.value === value)?.label ?? value;
-}
 
 function asOverrideConflictDetails(value: unknown): OverrideConflictDetails | null {
   if (!value || typeof value !== "object") return null;
@@ -276,6 +271,7 @@ export default function OperationsPage() {
   const [applyState, setApplyState] = useState<ExecuteState>(INITIAL_EXECUTE_STATE);
   const [canonicalState, setCanonicalState] = useState<ExecuteState>(INITIAL_EXECUTE_STATE);
   const [tagState, setTagState] = useState<ExecuteState>(INITIAL_EXECUTE_STATE);
+  const recheckValidation = getNamingInputValidation(recheckOwner, recheckContext);
 
   const directoryPickerCapabilityQuery = useQuery({
     queryKey: queryKeys.directoryPickerCapability,
@@ -415,6 +411,11 @@ export default function OperationsPage() {
           error: "Choose a folder before running this step.",
         },
       }));
+      return;
+    }
+
+    if (mode === "plan" && !recheckValidation.isValid) {
+      document.getElementById(recheckValidation.ownerError ? "recheck-owner" : "recheck-context")?.focus();
       return;
     }
 
@@ -812,7 +813,15 @@ export default function OperationsPage() {
                     setRecheckOverrideConflict(null);
                   }}
                   placeholder={DEFAULT_OWNER}
+                  aria-invalid={Boolean(recheckValidation.ownerError)}
+                  className={cn(recheckValidation.ownerError && "border-destructive focus-visible:ring-destructive")}
                 />
+                <p className="text-xs text-muted-foreground">
+                  Use letters, numbers, and underscores only.
+                </p>
+                {recheckValidation.ownerError ? (
+                  <p className="text-sm text-destructive">{recheckValidation.ownerError}</p>
+                ) : null}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="recheck-context">Context</Label>
@@ -825,7 +834,15 @@ export default function OperationsPage() {
                     setRecheckOverrideConflict(null);
                   }}
                   placeholder={DEFAULT_CONTEXT}
+                  aria-invalid={Boolean(recheckValidation.contextError)}
+                  className={cn(recheckValidation.contextError && "border-destructive focus-visible:ring-destructive")}
                 />
+                <p className="text-xs text-muted-foreground">
+                  Use letters, numbers, and underscores only, up to 20 characters.
+                </p>
+                {recheckValidation.contextError ? (
+                  <p className="text-sm text-destructive">{recheckValidation.contextError}</p>
+                ) : null}
               </div>
             </div>
             <div className="space-y-2">
@@ -842,7 +859,7 @@ export default function OperationsPage() {
                   <SelectValue placeholder="Choose a naming strategy" />
                 </SelectTrigger>
                 <SelectContent>
-                  {namingStrategyOptions.map((option) => (
+                  {NAMING_STRATEGY_OPTIONS.map((option) => (
                     <SelectItem key={option.value} value={option.value}>
                       {option.label}
                     </SelectItem>
@@ -850,7 +867,7 @@ export default function OperationsPage() {
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                Manual planning here uses the same naming settings as the wizard, so the advanced page can reproduce batch behavior exactly.
+                {NAMING_STRATEGY_OPTIONS.find((option) => option.value === recheckNamingStrategy)?.description}
               </p>
               {policyQuery.error ? (
                 <p className="text-xs text-muted-foreground">
@@ -923,7 +940,7 @@ export default function OperationsPage() {
               <Button
                 type="button"
                 onClick={() => setConfirmingAction("recheck-plan")}
-                disabled={recheckState.plan.loading}
+                disabled={recheckState.plan.loading || !recheckValidation.isValid}
               >
                 {recheckState.plan.loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Prepare Plan
