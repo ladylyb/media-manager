@@ -578,19 +578,16 @@ def _sync_ingest_batch(
             summary="Ingest metadata extraction started",
             files_count=len(content_candidates),
         )
-        existing_sources = {
-            content_id: source
-            for content_id, source in session.execute(
-                select(MediaMetadata.content_id, MediaMetadata.decode_value)
-                .select_from(MediaMetadata)
-                .join(MetadataCode, MediaMetadata.code_id == MetadataCode.id)
-                .where(
-                    MediaMetadata.content_id.in_(tuple(content_candidates.keys())),
-                    MetadataCode.code_type == "TAKEN_DT_SOURCE",
-                )
-            ).all()
-        }
-        existing_owner_context = {
+        metadata_rows = session.execute(
+            select(MediaMetadata.content_id, MetadataCode.code_type, MediaMetadata.decode_value)
+            .select_from(MediaMetadata)
+            .join(MetadataCode, MediaMetadata.code_id == MetadataCode.id)
+            .where(
+                MediaMetadata.content_id.in_(tuple(content_candidates.keys())),
+                MetadataCode.code_type.in_(("TAKEN_DT_SOURCE", "OWNER", "CONTEXT")),
+            )
+        ).all()
+        existing_metadata = {
             content_id: values
             for content_id, values in (
                 (
@@ -603,19 +600,27 @@ def _sync_ingest_batch(
                 for content_id, rows in (
                     (
                         content_id,
-                        session.execute(
-                            select(MetadataCode.code_type, MediaMetadata.decode_value)
-                            .select_from(MediaMetadata)
-                            .join(MetadataCode, MediaMetadata.code_id == MetadataCode.id)
-                            .where(
-                                MediaMetadata.content_id == content_id,
-                                MetadataCode.code_type.in_(("OWNER", "CONTEXT")),
-                            )
-                        ).all(),
+                        [
+                            (code_type, decode_value)
+                            for row_content_id, code_type, decode_value in metadata_rows
+                            if row_content_id == content_id
+                        ],
                     )
                     for content_id in content_candidates.keys()
                 )
             )
+        }
+        existing_sources = {
+            content_id: values.get("TAKEN_DT_SOURCE")
+            for content_id, values in existing_metadata.items()
+        }
+        existing_owner_context = {
+            content_id: {
+                code_type: decode_value
+                for code_type, decode_value in values.items()
+                if code_type in {"OWNER", "CONTEXT"}
+            }
+            for content_id, values in existing_metadata.items()
         }
         metadata_by_content: dict[uuid.UUID, list[metadata_extractor.MetadataItem]] = {}
         conflicts: list[OwnerContextOverrideRequiredError] = []
@@ -660,19 +665,24 @@ def _sync_ingest_batch(
                 if best_rows is None or rank < best_rank:
                     best_rows = rows
                     best_rank = rank
-            should_update = content_id not in existing_sources or (
+            should_update_full_metadata = content_id not in existing_sources or (
                 best_rank < metadata_extractor.taken_dt_source_rank(existing_sources.get(content_id))
             )
-            if (
+            should_update_owner_context_only = (
                 owner_context_override_confirmed
                 and stored_owner is not None
                 and stored_context is not None
                 and (stored_owner != owner or stored_context != context)
-            ):
-                should_update = True
-            if best_rows is not None and should_update:
+            )
+            if best_rows is not None and should_update_full_metadata:
                 metadata_by_content[content_id] = best_rows
                 metadata_extracted += len(best_rows)
+            elif should_update_owner_context_only:
+                metadata_by_content[content_id] = [
+                    metadata_extractor.MetadataItem(code_type="OWNER", decode_value=owner),
+                    metadata_extractor.MetadataItem(code_type="CONTEXT", decode_value=context),
+                ]
+                metadata_extracted += 2
         if conflicts:
             first = conflicts[0]
             raise OwnerContextOverrideRequiredError(

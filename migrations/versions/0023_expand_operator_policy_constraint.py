@@ -30,5 +30,5 @@ def downgrade() -> None:
     op.create_check_constraint(
         "ck_operator_policy_settings_selected_policy",
         "operator_policy_settings",
-        "selected_policy IN ('FIRST_SEEN','PREFER_ROOT','SHORTEST_PATH')",
+        "selected_policy IN ('FIRST_SEEN','PREFER_ROOT','SHORTEST_PATH','EXIF_FILENAME_FALLBACK')",
     )
