@@ -15,6 +15,7 @@ interface ExecutionStepProps {
   onRun: () => void;
   onContinue: () => void;
   runLabel?: string;
+  runDisabled?: boolean;
   runVariant?: "default" | "outline";
   preferContinue?: boolean;
   continueLabel?: string;
@@ -37,6 +38,7 @@ export function ExecutionStep({
   onRun,
   onContinue,
   runLabel = "Run Step",
+  runDisabled = false,
   runVariant = "default",
   preferContinue = false,
   continueLabel = "Continue",
@@ -82,14 +84,14 @@ export function ExecutionStep({
               <Button onClick={onContinue} disabled={continueDisabled || loading}>
                 {continueLabel}
               </Button>
-              <Button ref={runButtonRef} variant={runVariant} onClick={onRun} disabled={loading}>
+              <Button ref={runButtonRef} variant={runVariant} onClick={onRun} disabled={loading || runDisabled}>
                 {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {runLabel}
               </Button>
             </>
           ) : (
             <>
-              <Button ref={runButtonRef} variant={runVariant} onClick={onRun} disabled={loading}>
+              <Button ref={runButtonRef} variant={runVariant} onClick={onRun} disabled={loading || runDisabled}>
                 {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {runLabel}
               </Button>

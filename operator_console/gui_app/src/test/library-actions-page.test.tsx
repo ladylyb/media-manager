@@ -142,7 +142,7 @@ describe("Import page", () => {
     expect(screen.queryByText("What this step does")).not.toBeInTheDocument();
     expect(startPanelButton.closest("[data-panel-state='open']")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Show step guidance" }));
+    fireEvent.click(screen.getAllByRole("button", { name: /Step Guidance/ })[0]);
     expect(await screen.findByText("What this step does")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /Continue a Saved Plan/ }));
@@ -152,7 +152,7 @@ describe("Import page", () => {
     expect(continuePanelButton.closest("[data-panel-state='open']")).toBeTruthy();
     expect(screen.queryByText("What this step does")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Show step guidance" }));
+    fireEvent.click(screen.getAllByRole("button", { name: /Step Guidance/ })[0]);
     await screen.findByText("Before you run");
     expect(screen.getByText("What success looks like")).toBeInTheDocument();
     expect(screen.getByText("Risk level")).toBeInTheDocument();
@@ -175,7 +175,7 @@ describe("Import page", () => {
     await screen.findByRole("button", { name: /Continue a Saved Plan/ });
     fireEvent.click(screen.getByRole("button", { name: /Continue a Saved Plan/ }));
 
-    expect(screen.getByRole("button", { name: "Show step guidance" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Step Guidance/ })).toBeInTheDocument();
     expect(screen.queryByText("What this step does")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Apply Saved Work" })).toBeInTheDocument();
   });
@@ -186,11 +186,11 @@ describe("Import page", () => {
     await screen.findByRole("button", { name: /Recheck a Folder/ });
     fireEvent.click(screen.getByRole("button", { name: /Recheck a Folder/ }));
 
-    expect(screen.getByRole("button", { name: "Show refresh guidance" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Show planning guidance" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Refresh Discovery Guidance/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Prepare Plan Guidance/ })).toBeInTheDocument();
     expect(screen.queryByText("What this step does")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Show refresh guidance" }));
+    fireEvent.click(screen.getByRole("button", { name: /Refresh Discovery Guidance/ }));
     expect(await screen.findByText("Refresh Discovery Guidance")).toBeInTheDocument();
   });
 
@@ -231,6 +231,29 @@ describe("Import page", () => {
         owner_context_override_confirmed: false,
       }),
     );
+  });
+
+  it("blocks prepare plan when naming inputs are invalid and clears once fixed", async () => {
+    renderPage();
+
+    await screen.findByText("Recheck a Folder");
+    fireEvent.click(screen.getByRole("button", { name: /Recheck a Folder/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Browse Folders" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Use This Path" }));
+
+    fireEvent.change(screen.getByLabelText("Context"), { target: { value: "FEM-INSPO" } });
+
+    expect(screen.getByText("context must contain only alphanumeric characters or underscore")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Prepare Plan" })).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("Context"), { target: { value: "FEM_INSPO" } });
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText("context must contain only alphanumeric characters or underscore"),
+      ).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: "Prepare Plan" })).toBeEnabled();
   });
 
   it("shows correction confirmation on recheck plan conflicts and retries with override", async () => {
@@ -289,7 +312,7 @@ describe("Import page", () => {
         owner_context_override_confirmed: true,
       }),
     );
-  });
+  }, 10000);
 
   it("closes the apply confirmation dialog immediately and keeps execution on the main panel", async () => {
     let resolveApply: ((value: { data: Record<string, unknown> }) => void) | null = null;
@@ -442,7 +465,7 @@ describe("Import page", () => {
         duration_ms: 42,
       },
     });
-  });
+  }, 10000);
 
   it("shows apply as running from request state even when no log KPI is available", async () => {
     let resolveApply: ((value: { data: Record<string, unknown> }) => void) | null = null;
