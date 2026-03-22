@@ -296,6 +296,7 @@ export default function GalleryPage() {
         loading={galleryQuery.isLoading && !data}
         gridClassName={densityPreset.gridClassName}
         skeletonCount={densityPreset.limit}
+        density={densityPreset.key}
         emptyTitle="No media files"
         emptyDescription={
           selectedTags.length
