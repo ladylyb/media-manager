@@ -14,11 +14,16 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from media_manager.app.core.config import StorageRoots, resolve_required_metadata_codes, resolve_storage_roots
-from media_manager.app.core.errors import MissingRequiredMetadataError, PlanningStateError
+from media_manager.app.core.errors import (
+    MissingRequiredMetadataError,
+    OwnerContextClassificationRequiredError,
+    PlanningStateError,
+)
 from media_manager.app.core.filenames import generate_canonical_filename, infer_media_type_from_extension
 from media_manager.app.core.logging_config import get_logger
 from media_manager.app.core.metadata_cache import MetadataCache
 from media_manager.app.core.metadata_extractor import extract_file_metadata
+from media_manager.app.core.naming import is_unknown_owner_context_value
 from media_manager.app.core.path_resolver import (
     reserve_planned_path_by_key,
     resolve_canonical_path,
@@ -232,6 +237,7 @@ class PlanningService:
                 _log_plan_stage(run.id, "discovery", status="completed", summary="Planner discovery refresh completed")
                 _log_plan_stage(run.id, "load_candidates", status="running", summary="Planner candidate loading started")
                 rows = self._load_candidate_instances(session, input_paths)
+                self._ensure_owner_context_classified(session, rows)
                 routing_by_instance_id = self._build_routing_decisions(session, rows)
                 load_candidates_duration_s = perf_counter() - t_load_candidates
                 _log_plan_stage(
@@ -626,6 +632,49 @@ class PlanningService:
         self._metadata_lookup_db_time_s += perf_counter() - t_db
         self._metadata_cache.set(cache_key, metadata)
         return metadata
+
+    def _ensure_owner_context_classified(self, session: Session, rows: list[FileInstance]) -> None:
+        content_ids = sorted({row.content_id for row in rows}, key=str)
+        if not content_ids:
+            return
+
+        metadata_rows = session.execute(
+            select(MediaMetadata.content_id, MetadataCode.code_type, MediaMetadata.decode_value)
+            .select_from(MediaMetadata)
+            .join(MetadataCode, MediaMetadata.code_id == MetadataCode.id)
+            .where(
+                MediaMetadata.content_id.in_(tuple(content_ids)),
+                MetadataCode.code_type.in_(("OWNER", "CONTEXT")),
+            )
+        ).all()
+        metadata_by_content: dict[uuid.UUID, dict[str, str]] = {content_id: {} for content_id in content_ids}
+        for content_id, code_type, decode_value in metadata_rows:
+            metadata_by_content.setdefault(content_id, {})[code_type] = decode_value
+
+        unclassified: list[tuple[uuid.UUID, str]] = []
+        seen_content_ids: set[uuid.UUID] = set()
+        for row in rows:
+            if row.content_id in seen_content_ids:
+                continue
+            seen_content_ids.add(row.content_id)
+            values = metadata_by_content.get(row.content_id, {})
+            owner = values.get("OWNER")
+            context = values.get("CONTEXT")
+            if owner is None or context is None:
+                unclassified.append((row.content_id, row.absolute_path))
+                continue
+            if is_unknown_owner_context_value(owner) or is_unknown_owner_context_value(context):
+                unclassified.append((row.content_id, row.absolute_path))
+        if not unclassified:
+            return
+
+        sample_content_id, first_path = unclassified[0]
+        sample_paths = [absolute_path for content_id, absolute_path in unclassified if content_id == sample_content_id][:3]
+        raise OwnerContextClassificationRequiredError(
+            unclassified_group_count=len(unclassified),
+            sample_content_id=str(sample_content_id),
+            sample_paths=sample_paths or [first_path],
+        )
 
     def _plan_single_instance(
         self,

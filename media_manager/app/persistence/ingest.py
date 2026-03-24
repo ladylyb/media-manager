@@ -14,9 +14,18 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from media_manager.app.core.hashing import sha256_file
 from media_manager.app.core.logging_config import get_logger
-from media_manager.app.core.naming import DEFAULT_CONTEXT, DEFAULT_OWNER
+from media_manager.app.core.naming import (
+    DEFAULT_CONTEXT,
+    DEFAULT_OWNER,
+    UNKNOWN_CONTEXT,
+    UNKNOWN_OWNER,
+    is_unknown_owner_context_value,
+)
 import media_manager.app.core.metadata_extractor as metadata_extractor
-from media_manager.app.core.errors import OwnerContextOverrideRequiredError
+from media_manager.app.core.errors import (
+    OwnerContextClassificationRequiredError,
+    OwnerContextOverrideRequiredError,
+)
 from media_manager.app.observability import record_ingest_metrics, record_ingest_structured_metrics
 from media_manager.app.persistence.base import transactional_session
 from media_manager.app.persistence.models import (
@@ -34,6 +43,15 @@ logger = get_logger(__name__)
 
 _HASH_PREFIX_LEN = 12
 _VALIDATION_SAMPLE_LIMIT = 100
+
+
+def _owner_context_is_unclassified(owner: str | None, context: str | None) -> bool:
+    return (
+        owner is None
+        or context is None
+        or is_unknown_owner_context_value(owner)
+        or is_unknown_owner_context_value(context)
+    )
 
 
 def _log_ingest_stage(
@@ -523,7 +541,6 @@ def _sync_ingest_batch(
     new_content_rows: list[FileContent] = []
     new_instance_rows: list[FileInstance] = []
     content_candidates: dict[uuid.UUID, list[_ScannedFileCandidate]] = {}
-    preexisting_content_ids: set[uuid.UUID] = set()
 
     new_contents = 0
     new_instances = 0
@@ -540,7 +557,6 @@ def _sync_ingest_batch(
             new_contents += 1
         else:
             duplicates += 1
-            preexisting_content_ids.add(content.content_id)
         content_candidates.setdefault(content.content_id, []).append(candidate)
 
         instance = instance_by_path.get(candidate.absolute_path)
@@ -623,36 +639,13 @@ def _sync_ingest_batch(
             for content_id, values in existing_metadata.items()
         }
         metadata_by_content: dict[uuid.UUID, list[metadata_extractor.MetadataItem]] = {}
-        conflicts: list[OwnerContextOverrideRequiredError] = []
         for content_id, candidates in content_candidates.items():
             best_rows: list[metadata_extractor.MetadataItem] | None = None
             best_rank = metadata_extractor.taken_dt_source_rank(existing_sources.get(content_id))
             stored_owner = existing_owner_context.get(content_id, {}).get("OWNER")
             stored_context = existing_owner_context.get(content_id, {}).get("CONTEXT")
-            if (
-                not owner_context_override_confirmed
-                and content_id in preexisting_content_ids
-                and stored_owner is not None
-                and stored_context is not None
-                and (stored_owner != owner or stored_context != context)
-            ):
-                conflicts.append(
-                    OwnerContextOverrideRequiredError(
-                        requested_owner=owner,
-                        requested_context=context,
-                        existing_owner=stored_owner,
-                        existing_context=stored_context,
-                        conflicting_group_count=0,
-                        sample_content_id=str(content_id),
-                        sample_paths=[candidate.absolute_path for candidate in candidates[:3]],
-                    )
-                )
-                continue
             effective_owner = stored_owner or owner
             effective_context = stored_context or context
-            if owner_context_override_confirmed and stored_owner and stored_context:
-                effective_owner = owner
-                effective_context = context
             for candidate in candidates:
                 rows = metadata_extractor.extract_file_metadata(
                     candidate.path,
@@ -668,32 +661,9 @@ def _sync_ingest_batch(
             should_update_full_metadata = content_id not in existing_sources or (
                 best_rank < metadata_extractor.taken_dt_source_rank(existing_sources.get(content_id))
             )
-            should_update_owner_context_only = (
-                owner_context_override_confirmed
-                and stored_owner is not None
-                and stored_context is not None
-                and (stored_owner != owner or stored_context != context)
-            )
             if best_rows is not None and should_update_full_metadata:
                 metadata_by_content[content_id] = best_rows
                 metadata_extracted += len(best_rows)
-            elif should_update_owner_context_only:
-                metadata_by_content[content_id] = [
-                    metadata_extractor.MetadataItem(code_type="OWNER", decode_value=owner),
-                    metadata_extractor.MetadataItem(code_type="CONTEXT", decode_value=context),
-                ]
-                metadata_extracted += 2
-        if conflicts:
-            first = conflicts[0]
-            raise OwnerContextOverrideRequiredError(
-                requested_owner=first.details["requested_owner"],
-                requested_context=first.details["requested_context"],
-                existing_owner=first.details["existing_owner"],
-                existing_context=first.details["existing_context"],
-                conflicting_group_count=len(conflicts),
-                sample_content_id=first.details["sample_content_id"],
-                sample_paths=list(first.details["sample_paths"]),
-            )
         if metadata_by_content:
             metadata_extractor.upsert_metadata_bulk(session, metadata_by_content)
         _log_ingest_stage(
@@ -861,8 +831,8 @@ def ingest_paths_in_session(
     *,
     authoritative_root: Path | None = None,
     latency_samples: _IngestLatencySamples | None = None,
-    owner: str = DEFAULT_OWNER,
-    context: str = DEFAULT_CONTEXT,
+    owner: str = UNKNOWN_OWNER,
+    context: str = UNKNOWN_CONTEXT,
     owner_context_override_confirmed: bool = False,
 ) -> IngestSummary:
     t_start = perf_counter()
@@ -946,8 +916,8 @@ class IngestService:
         self,
         root: Path,
         *,
-        owner: str = DEFAULT_OWNER,
-        context: str = DEFAULT_CONTEXT,
+        owner: str = UNKNOWN_OWNER,
+        context: str = UNKNOWN_CONTEXT,
         owner_context_override_confirmed: bool = False,
     ) -> IngestSummary:
         files = self.collect_files(root)
@@ -970,8 +940,8 @@ class IngestService:
         files: list[Path],
         *,
         authoritative_root: Path | None = None,
-        owner: str = DEFAULT_OWNER,
-        context: str = DEFAULT_CONTEXT,
+        owner: str = UNKNOWN_OWNER,
+        context: str = UNKNOWN_CONTEXT,
         owner_context_override_confirmed: bool = False,
     ) -> IngestSummary:
         latency_samples = _IngestLatencySamples(hash_latencies_ms=[], db_write_latencies_ms=[])
@@ -1007,8 +977,135 @@ class IngestService:
         with self._session_factory() as session:
             return validate_paths_in_session(session, files, authoritative_root=authoritative_root)
 
+    def classify_paths(
+        self,
+        files: list[Path],
+        *,
+        owner: str = DEFAULT_OWNER,
+        context: str = DEFAULT_CONTEXT,
+        owner_context_override_confirmed: bool = False,
+    ) -> None:
+        with transactional_session(self._session_factory) as session:
+            classify_paths_in_session(
+                session,
+                files,
+                owner=owner,
+                context=context,
+                owner_context_override_confirmed=owner_context_override_confirmed,
+            )
+
     @staticmethod
     def collect_files(root: Path) -> list[Path]:
         if root.is_file():
             return [root]
         return sorted((p for p in root.rglob("*") if p.is_file()), key=lambda p: p.resolve(strict=False).as_posix())
+
+
+def classify_paths_in_session(
+    session: Session,
+    files: list[Path],
+    *,
+    owner: str,
+    context: str,
+    owner_context_override_confirmed: bool,
+) -> None:
+    absolute_paths = sorted(
+        {
+            str(path.resolve(strict=False))
+            for path in files
+            if path.exists() and path.is_file()
+        }
+    )
+    if not absolute_paths:
+        return
+
+    instance_rows = session.execute(
+        select(FileInstance.content_id, FileInstance.absolute_path).where(FileInstance.absolute_path.in_(tuple(absolute_paths)))
+    ).all()
+    if not instance_rows:
+        return
+
+    content_ids = sorted({content_id for content_id, _path in instance_rows}, key=str)
+    sample_paths_by_content: dict[uuid.UUID, list[str]] = {}
+    for content_id, absolute_path in instance_rows:
+        sample_paths_by_content.setdefault(content_id, [])
+        if len(sample_paths_by_content[content_id]) < 3:
+            sample_paths_by_content[content_id].append(absolute_path)
+
+    metadata_rows = session.execute(
+        select(MediaMetadata.content_id, MetadataCode.code_type, MediaMetadata.decode_value)
+        .select_from(MediaMetadata)
+        .join(MetadataCode, MediaMetadata.code_id == MetadataCode.id)
+        .where(
+            MediaMetadata.content_id.in_(tuple(content_ids)),
+            MetadataCode.code_type.in_(("OWNER", "CONTEXT")),
+        )
+    ).all()
+    metadata_by_content: dict[uuid.UUID, dict[str, str]] = {content_id: {} for content_id in content_ids}
+    for content_id, code_type, decode_value in metadata_rows:
+        metadata_by_content.setdefault(content_id, {})[code_type] = decode_value
+
+    if _owner_context_is_unclassified(owner, context):
+        unclassified = [
+            content_id
+            for content_id in content_ids
+            if _owner_context_is_unclassified(
+                metadata_by_content.get(content_id, {}).get("OWNER"),
+                metadata_by_content.get(content_id, {}).get("CONTEXT"),
+            )
+        ]
+        if unclassified:
+            first = unclassified[0]
+            raise OwnerContextClassificationRequiredError(
+                unclassified_group_count=len(unclassified),
+                sample_content_id=str(first),
+                sample_paths=sample_paths_by_content.get(first, []),
+            )
+        return
+
+    conflicts: list[OwnerContextOverrideRequiredError] = []
+    metadata_updates: dict[uuid.UUID, list[metadata_extractor.MetadataItem]] = {}
+    for content_id in content_ids:
+        values = metadata_by_content.get(content_id, {})
+        stored_owner = values.get("OWNER")
+        stored_context = values.get("CONTEXT")
+        if _owner_context_is_unclassified(stored_owner, stored_context):
+            metadata_updates[content_id] = [
+                metadata_extractor.MetadataItem(code_type="OWNER", decode_value=owner),
+                metadata_extractor.MetadataItem(code_type="CONTEXT", decode_value=context),
+            ]
+            continue
+        if stored_owner == owner and stored_context == context:
+            continue
+        if not owner_context_override_confirmed:
+            conflicts.append(
+                OwnerContextOverrideRequiredError(
+                    requested_owner=owner,
+                    requested_context=context,
+                    existing_owner=stored_owner or UNKNOWN_OWNER,
+                    existing_context=stored_context or UNKNOWN_CONTEXT,
+                    conflicting_group_count=0,
+                    sample_content_id=str(content_id),
+                    sample_paths=sample_paths_by_content.get(content_id, []),
+                )
+            )
+            continue
+        metadata_updates[content_id] = [
+            metadata_extractor.MetadataItem(code_type="OWNER", decode_value=owner),
+            metadata_extractor.MetadataItem(code_type="CONTEXT", decode_value=context),
+        ]
+
+    if conflicts:
+        first = conflicts[0]
+        raise OwnerContextOverrideRequiredError(
+            requested_owner=first.details["requested_owner"],
+            requested_context=first.details["requested_context"],
+            existing_owner=first.details["existing_owner"],
+            existing_context=first.details["existing_context"],
+            conflicting_group_count=len(conflicts),
+            sample_content_id=first.details["sample_content_id"],
+            sample_paths=list(first.details["sample_paths"]),
+        )
+
+    if metadata_updates:
+        metadata_extractor.upsert_metadata_bulk(session, metadata_updates)

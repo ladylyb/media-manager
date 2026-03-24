@@ -126,6 +126,11 @@ type OverrideConflictDetails = {
   sample_content_id?: string;
   sample_paths?: string[];
 };
+type ClassificationRequiredDetails = {
+  unclassified_group_count: number;
+  sample_content_id?: string;
+  sample_paths?: string[];
+};
 
 const STEP_ORDER: StepId[] = [
   "ingest",
@@ -158,6 +163,19 @@ function asOverrideConflictDetails(value: unknown): OverrideConflictDetails | nu
     existing_context: typeof record.existing_context === "string" ? record.existing_context : DEFAULT_CONTEXT,
     conflicting_group_count:
       typeof record.conflicting_group_count === "number" ? record.conflicting_group_count : 1,
+    sample_content_id: typeof record.sample_content_id === "string" ? record.sample_content_id : undefined,
+    sample_paths: Array.isArray(record.sample_paths)
+      ? record.sample_paths.filter((item): item is string => typeof item === "string")
+      : undefined,
+  };
+}
+
+function asClassificationRequiredDetails(value: unknown): ClassificationRequiredDetails | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  return {
+    unclassified_group_count:
+      typeof record.unclassified_group_count === "number" ? record.unclassified_group_count : 1,
     sample_content_id: typeof record.sample_content_id === "string" ? record.sample_content_id : undefined,
     sample_paths: Array.isArray(record.sample_paths)
       ? record.sample_paths.filter((item): item is string => typeof item === "string")
@@ -485,6 +503,9 @@ export default function PipelineWizard() {
   const [confirmAbortOpen, setConfirmAbortOpen] = useState(false);
   const [ingestFolderValidationError, setIngestFolderValidationError] = useState<string | null>(null);
   const [planOverrideConflict, setPlanOverrideConflict] = useState<OverrideConflictDetails | null>(null);
+  const [planClassificationRequired, setPlanClassificationRequired] = useState<ClassificationRequiredDetails | null>(
+    null,
+  );
   const ingestFolderInputRef = useRef<HTMLInputElement | null>(null);
   const applyRunButtonRef = useRef<HTMLButtonElement | null>(null);
   const canonicalRunButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -717,6 +738,7 @@ export default function PipelineWizard() {
         payload = response.data;
       } else if (stepId === "plan") {
         setPlanOverrideConflict(null);
+        setPlanClassificationRequired(null);
         const response = await runWizardPlan({
           folder_path: wizardState.steps.plan.input.folder_path,
           strict_metadata: wizardState.steps.plan.input.strict_metadata,
@@ -784,6 +806,13 @@ export default function PipelineWizard() {
         const details = asOverrideConflictDetails(overrideError?.details);
         if (details) {
           setPlanOverrideConflict(details);
+        }
+        const classificationError = err.errors?.find(
+          (item) => item.code === "OWNER_CONTEXT_CLASSIFICATION_REQUIRED",
+        );
+        const classificationDetails = asClassificationRequiredDetails(classificationError?.details);
+        if (classificationDetails) {
+          setPlanClassificationRequired(classificationDetails);
         }
       }
       setWizardState((current) => ({
@@ -1552,7 +1581,11 @@ export default function PipelineWizard() {
                     <Input
                       id="plan-owner"
                       value={state.input.owner}
-                      onChange={(event) => updateStepInput("plan", { owner: event.target.value })}
+                      onChange={(event) => {
+                        setPlanOverrideConflict(null);
+                        setPlanClassificationRequired(null);
+                        updateStepInput("plan", { owner: event.target.value });
+                      }}
                       placeholder={DEFAULT_OWNER}
                       aria-invalid={Boolean(planInputValidation.ownerError)}
                       className={cn(planInputValidation.ownerError && "border-destructive focus-visible:ring-destructive")}
@@ -1569,7 +1602,11 @@ export default function PipelineWizard() {
                     <Input
                       id="plan-context"
                       value={state.input.context}
-                      onChange={(event) => updateStepInput("plan", { context: event.target.value })}
+                      onChange={(event) => {
+                        setPlanOverrideConflict(null);
+                        setPlanClassificationRequired(null);
+                        updateStepInput("plan", { context: event.target.value });
+                      }}
                       placeholder={DEFAULT_CONTEXT}
                       aria-invalid={Boolean(planInputValidation.contextError)}
                       className={cn(planInputValidation.contextError && "border-destructive focus-visible:ring-destructive")}
@@ -1623,6 +1660,37 @@ export default function PipelineWizard() {
               </div>
             </ExpandableSummaryPanel>
 
+            {planClassificationRequired ? (
+              <div className="space-y-3 rounded-xl border border-amber-300 bg-amber-50/80 p-4">
+                <div>
+                  <p className="text-sm font-semibold text-amber-950">Explicit classification is required</p>
+                  <p className="mt-1 text-sm leading-6 text-amber-900/90">
+                    Planning found content in this folder that is still marked as unclassified from ingest. Use
+                    explicit owner and context values here before naming can continue.
+                  </p>
+                </div>
+                <div className="grid gap-2 text-sm text-amber-950 sm:grid-cols-2">
+                  <p>Unclassified groups: {planClassificationRequired.unclassified_group_count}</p>
+                  {planClassificationRequired.sample_content_id ? (
+                    <p className="break-all">Example content group: {planClassificationRequired.sample_content_id}</p>
+                  ) : null}
+                </div>
+                {planClassificationRequired.sample_paths?.length ? (
+                  <div className="rounded-lg border border-amber-200 bg-white/70 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-900/80">
+                      Example matching paths
+                    </p>
+                    <div className="mt-2 space-y-1">
+                      {planClassificationRequired.sample_paths.map((path) => (
+                        <p key={path} className="break-all font-mono text-xs text-amber-950">
+                          {path}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             {planOverrideConflict ? (
               <div className="space-y-3 rounded-xl border border-amber-300 bg-amber-50/80 p-4">
                 <div>
