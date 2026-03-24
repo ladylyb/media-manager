@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from media_manager.app.core.errors import (
     MediaManagerError,
+    OwnerContextClassificationRequiredError,
     OwnerContextOverrideRequiredError,
     PolicySettingsValidationError,
     PolicySettingsVersionConflictError,
@@ -38,6 +39,16 @@ def map_exception(exc: Exception) -> ServiceLayerException:
             message=(
                 "This batch matches existing content with different saved owner/context values. "
                 "Confirm the override to correct the existing content group and corresponding canonical item."
+            ),
+            http_status=400,
+            details=exc.details,
+        )
+    if isinstance(exc, OwnerContextClassificationRequiredError):
+        return ServiceLayerException(
+            code="OWNER_CONTEXT_CLASSIFICATION_REQUIRED",
+            message=(
+                "This batch still contains content with unclassified owner/context metadata. "
+                "Choose explicit owner/context values in Plan before naming can continue."
             ),
             http_status=400,
             details=exc.details,

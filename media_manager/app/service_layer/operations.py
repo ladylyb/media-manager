@@ -153,9 +153,9 @@ class OperationServices:
         planner = PlanningService(self.session_factory)
         try:
             files = ingest.collect_files(folder)
-            ingest.ingest_paths(
+            ingest.ingest_paths(files, authoritative_root=folder)
+            ingest.classify_paths(
                 files,
-                authoritative_root=folder,
                 owner=owner,
                 context=context,
                 owner_context_override_confirmed=owner_context_override_confirmed,
@@ -332,7 +332,8 @@ class OperationServices:
             }
 
         policy = build_canonical_policy(policy_name)
-        ingest_summary = ingest_service.ingest_paths(
+        ingest_summary = ingest_service.ingest_paths(files)
+        ingest_service.classify_paths(
             files,
             owner=owner,
             context=context,

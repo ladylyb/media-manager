@@ -130,6 +130,10 @@ def test_plan_returns_run_and_summary(tmp_path: Path, monkeypatch: pytest.Monkey
             _ = authoritative_root, kwargs
             return SimpleNamespace()
 
+        def classify_paths(self, _files: list[Path], **kwargs):
+            _ = kwargs
+            return None
+
     class _FakeRunService:
         def __init__(self, _session_factory) -> None:
             pass
@@ -287,6 +291,10 @@ def test_run_execution_flows_through_service_layer_and_links_run(tmp_path: Path,
             assert files == [target]
             _ = kwargs
             return IngestSummary(1, 1, 1, 0, 1, 0.1)
+
+        def classify_paths(self, files: list[Path], **kwargs) -> None:
+            assert files == [target]
+            _ = kwargs
 
     class _FakeRunService:
         def __init__(self, _session_factory) -> None:
@@ -464,6 +472,10 @@ def test_plan_accepts_wrapped_quotes_path(tmp_path: Path, monkeypatch: pytest.Mo
             assert authoritative_root == dataset
             _ = kwargs
             return SimpleNamespace()
+
+        def classify_paths(self, _files: list[Path], **kwargs):
+            _ = kwargs
+            return None
 
     class _FakeRunService:
         def __init__(self, _session_factory) -> None:

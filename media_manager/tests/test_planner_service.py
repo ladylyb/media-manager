@@ -5,7 +5,11 @@ from pathlib import Path
 import pytest
 from sqlalchemy import delete, select, update
 
-from media_manager.app.core.errors import MissingRequiredMetadataError, PlanningStateError
+from media_manager.app.core.errors import (
+    MissingRequiredMetadataError,
+    OwnerContextClassificationRequiredError,
+    PlanningStateError,
+)
 from media_manager.app.core.state_machine import RunState
 from media_manager.app.persistence.ingest import IngestService
 from media_manager.app.persistence.models import (
@@ -30,6 +34,16 @@ def _write_file(path: Path, payload: bytes) -> Path:
     return path
 
 
+def _classify_paths(
+    ingest: IngestService,
+    paths: list[Path],
+    *,
+    owner: str = "LL",
+    context: str = "General",
+) -> None:
+    ingest.classify_paths(paths, owner=owner, context=context)
+
+
 def test_duplicate_identity_and_canonical_selection(tmp_path: Path, session_factory) -> None:
     run_service = RunService(session_factory)
     planner = PlanningService(session_factory)
@@ -38,6 +52,7 @@ def test_duplicate_identity_and_canonical_selection(tmp_path: Path, session_fact
     second = _write_file(tmp_path / "b.jpg", b"same-content")
 
     ingest.ingest_paths([first, second])
+    _classify_paths(ingest, [first, second])
     run = run_service.create_run()
     planner.plan_run(run.id, [first, second], ingest_if_needed=False)
     with session_factory() as session:
@@ -65,6 +80,7 @@ def test_planner_generates_actions_for_canonical_and_duplicate_instances(tmp_pat
     dup_path = _write_file(tmp_path / "inbox" / "dup_copy.jpg", b"b")
 
     ingest.ingest_paths([noop_path, move_path, dup_path])
+    _classify_paths(ingest, [noop_path, move_path, dup_path])
     summary = planner.plan_run(run.id, [noop_path, move_path, dup_path])
     assert summary.supported_count >= 2
 
@@ -84,7 +100,8 @@ def test_planner_duplicate_owns_date_strategy_uses_duplicate_filename_date(tmp_p
     canonical_path = _write_file(tmp_path / "inbox" / "holiday photo.jpg", b"same-content")
     duplicate_path = _write_file(tmp_path / "inbox" / "IMG_20260317_122454.jpg", b"same-content")
 
-    ingest.ingest_paths([canonical_path, duplicate_path], owner="Trip", context="BatchA")
+    ingest.ingest_paths([canonical_path, duplicate_path])
+    _classify_paths(ingest, [canonical_path, duplicate_path], owner="Trip", context="BatchA")
     run = run_service.create_run(
         owner="Trip",
         context="BatchA",
@@ -99,11 +116,11 @@ def test_planner_duplicate_owns_date_strategy_uses_duplicate_filename_date(tmp_p
         assert duplicate_action.target_path.endswith("IMG_20260317_122454_Trip_BatchA_DUP_1.jpg")
 
 
-def test_ingest_uses_run_owner_context_for_new_content(tmp_path: Path, session_factory) -> None:
+def test_ingest_persists_unknown_owner_context_for_new_content(tmp_path: Path, session_factory) -> None:
     ingest = IngestService(session_factory)
     path = _write_file(tmp_path / "set" / "one.jpg", b"one")
 
-    ingest.ingest_paths([path], owner="TripA", context="Family")
+    ingest.ingest_paths([path])
 
     with session_factory() as session:
         content_id = session.scalar(select(FileInstance.content_id).where(FileInstance.absolute_path == str(path.resolve())))
@@ -115,8 +132,8 @@ def test_ingest_uses_run_owner_context_for_new_content(tmp_path: Path, session_f
             .where(MediaMetadata.content_id == content_id, MetadataCode.code_type.in_(("OWNER", "CONTEXT")))
         ).all()
         metadata = {code_type: value for code_type, value in rows}
-        assert metadata["OWNER"] == "TripA"
-        assert metadata["CONTEXT"] == "Family"
+        assert metadata["OWNER"] == "UNKNOWN"
+        assert metadata["CONTEXT"] == "UNKNOWN"
 
 
 def test_planner_does_not_hash_when_planning_from_db_only(
@@ -128,6 +145,7 @@ def test_planner_does_not_hash_when_planning_from_db_only(
 
     candidate = _write_file(tmp_path / "x.jpg", b"x")
     ingest.ingest_paths([candidate])
+    _classify_paths(ingest, [candidate])
     run = run_service.create_run()
 
     import media_manager.app.core.hashing as hashing_module
@@ -164,6 +182,19 @@ def test_planning_failure_records_failure_event(tmp_path: Path, session_factory)
         assert persisted_run.state.value == RunState.PLANNED.value
 
 
+def test_planner_rejects_unclassified_owner_context(tmp_path: Path, session_factory) -> None:
+    run_service = RunService(session_factory)
+    planner = PlanningService(session_factory)
+    ingest = IngestService(session_factory)
+
+    path = _write_file(tmp_path / "unknown.jpg", b"x")
+    ingest.ingest_paths([path])
+
+    run = run_service.create_run()
+    with pytest.raises(OwnerContextClassificationRequiredError):
+        planner.plan_run(run.id, [path], ingest_if_needed=False)
+
+
 def test_planner_skips_inactive_canonical_instances(tmp_path: Path, session_factory) -> None:
     run_service = RunService(session_factory)
     planner = PlanningService(session_factory)
@@ -171,6 +202,7 @@ def test_planner_skips_inactive_canonical_instances(tmp_path: Path, session_fact
 
     path = _write_file(tmp_path / "x.jpg", b"x")
     ingest.ingest_paths([path])
+    _classify_paths(ingest, [path])
     with session_factory.begin() as session:
         session.execute(update(FileInstance).values(status="DELETED"))
 
@@ -185,15 +217,16 @@ def test_planner_skips_missing_required_metadata_when_not_strict(tmp_path: Path,
     planner = PlanningService(session_factory)
     ingest = IngestService(session_factory)
 
-    path = _write_file(tmp_path / "missing-owner.jpg", b"x")
+    path = _write_file(tmp_path / "missing-taken-dt.jpg", b"x")
     ingest.ingest_paths([path])
+    _classify_paths(ingest, [path])
     with session_factory.begin() as session:
         content_id = session.scalar(select(FileInstance.content_id).where(FileInstance.absolute_path == str(path.resolve())))
-        owner_code_id = session.scalar(select(MetadataCode.id).where(MetadataCode.code_type == "OWNER"))
+        taken_dt_code_id = session.scalar(select(MetadataCode.id).where(MetadataCode.code_type == "TAKEN_DT"))
         session.execute(
             delete(MediaMetadata).where(
                 MediaMetadata.content_id == content_id,
-                MediaMetadata.code_id == owner_code_id,
+                MediaMetadata.code_id == taken_dt_code_id,
             )
         )
 
@@ -217,15 +250,16 @@ def test_planner_raises_missing_required_metadata_when_strict(tmp_path: Path, se
     planner = PlanningService(session_factory)
     ingest = IngestService(session_factory)
 
-    path = _write_file(tmp_path / "missing-context.jpg", b"x")
+    path = _write_file(tmp_path / "missing-taken-dt-strict.jpg", b"x")
     ingest.ingest_paths([path])
+    _classify_paths(ingest, [path])
     with session_factory.begin() as session:
         content_id = session.scalar(select(FileInstance.content_id).where(FileInstance.absolute_path == str(path.resolve())))
-        context_code_id = session.scalar(select(MetadataCode.id).where(MetadataCode.code_type == "CONTEXT"))
+        taken_dt_code_id = session.scalar(select(MetadataCode.id).where(MetadataCode.code_type == "TAKEN_DT"))
         session.execute(
             delete(MediaMetadata).where(
                 MediaMetadata.content_id == content_id,
-                MediaMetadata.code_id == context_code_id,
+                MediaMetadata.code_id == taken_dt_code_id,
             )
         )
 
@@ -248,15 +282,16 @@ def test_planner_missing_metadata_warning_has_structured_fields(
     ingest = IngestService(session_factory)
     warnings: list[dict] = []
 
-    path = _write_file(tmp_path / "missing-owner-structured.jpg", b"x")
+    path = _write_file(tmp_path / "missing-taken-dt-structured.jpg", b"x")
     ingest.ingest_paths([path])
+    _classify_paths(ingest, [path])
     with session_factory.begin() as session:
         content_id = session.scalar(select(FileInstance.content_id).where(FileInstance.absolute_path == str(path.resolve())))
-        owner_code_id = session.scalar(select(MetadataCode.id).where(MetadataCode.code_type == "OWNER"))
+        taken_dt_code_id = session.scalar(select(MetadataCode.id).where(MetadataCode.code_type == "TAKEN_DT"))
         session.execute(
             delete(MediaMetadata).where(
                 MediaMetadata.content_id == content_id,
-                MediaMetadata.code_id == owner_code_id,
+                MediaMetadata.code_id == taken_dt_code_id,
             )
         )
 
@@ -280,7 +315,7 @@ def test_planner_missing_metadata_warning_has_structured_fields(
     assert extra["content_id"]
     assert extra["file_instance_id"]
     assert extra["canonical_instance_id"]
-    assert extra["missing_codes"] == ["OWNER"]
+    assert extra["missing_codes"] == ["TAKEN_DT"]
     assert extra["strict_missing_metadata"] is False
 
 
@@ -292,6 +327,7 @@ def test_planner_reads_canonical_assignment_and_ignores_legacy_column(tmp_path: 
     first = _write_file(tmp_path / "first.jpg", b"same")
     second = _write_file(tmp_path / "copy" / "second.jpg", b"same")
     ingest.ingest_paths([first, second])
+    _classify_paths(ingest, [first, second])
 
     with session_factory.begin() as session:
         content = session.scalar(select(FileContent))

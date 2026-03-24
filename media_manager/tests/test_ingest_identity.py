@@ -88,13 +88,15 @@ def test_ingest_duplicate_with_stronger_filename_evidence_upgrades_taken_dt_sour
         assert rows["TAKEN_DT"] == "2024-02-14T23:59:59+00:00"
 
 
-def test_owner_context_override_does_not_downgrade_taken_dt_source(tmp_path: Path, session_factory) -> None:
+def test_classify_paths_override_does_not_downgrade_taken_dt_source(tmp_path: Path, session_factory) -> None:
     ingest = IngestService(session_factory)
     canonical = _write_file(tmp_path / "IMG_20240214_235959.jpg", b"same")
     duplicate = _write_file(tmp_path / "copy.jpg", b"same")
 
-    ingest.ingest_paths([canonical], owner="LL", context="General")
-    ingest.ingest_paths(
+    ingest.ingest_paths([canonical])
+    ingest.classify_paths([canonical], owner="LL", context="General")
+    ingest.ingest_paths([duplicate])
+    ingest.classify_paths(
         [duplicate],
         owner="TripA",
         context="Family",

@@ -127,6 +127,27 @@ class OwnerContextOverrideRequiredError(MediaManagerError):
         )
 
 
+class OwnerContextClassificationRequiredError(MediaManagerError):
+    """Raised when planning encounters content that still uses unclassified owner/context values."""
+
+    def __init__(
+        self,
+        *,
+        unclassified_group_count: int,
+        sample_content_id: str,
+        sample_paths: list[str],
+    ) -> None:
+        self.details = {
+            "unclassified_group_count": unclassified_group_count,
+            "sample_content_id": sample_content_id,
+            "sample_paths": sample_paths,
+        }
+        super().__init__(
+            "Owner/context classification is required before planning can continue "
+            f"(unclassified_group_count={unclassified_group_count}, sample_content_id={sample_content_id})"
+        )
+
+
 class CanonicalUnreadableError(MediaManagerError):
     """Raised when canonical instance cannot be read in current runtime."""
 
