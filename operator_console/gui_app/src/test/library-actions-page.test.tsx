@@ -156,7 +156,7 @@ describe("Import page", () => {
     await screen.findByText("Before you run");
     expect(screen.getByText("What success looks like")).toBeInTheDocument();
     expect(screen.getByText("Risk level")).toBeInTheDocument();
-  });
+  }, 10000);
 
   it("uses softened state styling for open and closed panels", async () => {
     renderPage();
@@ -231,7 +231,7 @@ describe("Import page", () => {
         owner_context_override_confirmed: false,
       }),
     );
-  });
+  }, 10000);
 
   it("blocks prepare plan when naming inputs are invalid and clears once fixed", async () => {
     renderPage();

@@ -9,6 +9,7 @@ from sqlalchemy import select
 from media_manager.app.core.errors import ApplyStateError
 from media_manager.app.core.path_resolver import collision_filename
 from media_manager.app.persistence.apply import ApplyService
+from media_manager.app.persistence.ingest import IngestService
 from media_manager.app.persistence.models import (
     ApplyAuditItem,
     ApplyAuditRun,
@@ -32,24 +33,32 @@ def _write_file(path: Path, payload: bytes) -> Path:
 def _create_planned_run_with_actions(tmp_path: Path, session_factory) -> uuid.UUID:
     run_service = RunService(session_factory)
     planner = PlanningService(session_factory)
+    ingest = IngestService(session_factory)
     run = run_service.create_run()
 
     noop_path = _write_file(tmp_path / "Media" / "Photos" / "2024" / "01" / "IMG_20240110.jpg", b"noop")
     move_path = _write_file(tmp_path / "inbox" / "IMG_20240111.jpg", b"dup-content")
     dup_path = _write_file(tmp_path / "inbox" / "dup_copy.jpg", b"dup-content")
     _write_file(tmp_path / "inbox" / "unsupported.customext", b"unsupported")
-    planner.plan_run(run.id, [noop_path, move_path, dup_path, tmp_path / "inbox" / "unsupported.customext"])
+    paths = [noop_path, move_path, dup_path, tmp_path / "inbox" / "unsupported.customext"]
+    ingest.ingest_paths(paths)
+    ingest.classify_paths(paths, owner="LL", context="General")
+    planner.plan_run(run.id, paths, ingest_if_needed=False)
     return run.id
 
 
 def _create_planned_run_with_moves_only(tmp_path: Path, session_factory) -> uuid.UUID:
     run_service = RunService(session_factory)
     planner = PlanningService(session_factory)
+    ingest = IngestService(session_factory)
     run = run_service.create_run()
 
     move_a = _write_file(tmp_path / "inbox" / "IMG_20240111.jpg", b"content-a")
     move_b = _write_file(tmp_path / "inbox" / "IMG_20240112.jpg", b"content-b")
-    planner.plan_run(run.id, [move_a, move_b])
+    paths = [move_a, move_b]
+    ingest.ingest_paths(paths)
+    ingest.classify_paths(paths, owner="LL", context="General")
+    planner.plan_run(run.id, paths, ingest_if_needed=False)
     return run.id
 
 
