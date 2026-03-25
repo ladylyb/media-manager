@@ -239,11 +239,8 @@ def _require_non_empty(value: str | None, field_name: str) -> str:
 
 
 def _resolve_console_static_dir(package_root: Path) -> Path:
-    """Prefer untracked gui_app/dist assets, falling back to legacy static_v2 snapshots."""
-    dist_dir = package_root / "gui_app" / "dist"
-    if (dist_dir / "index.html").exists():
-        return dist_dir
-    return package_root / "static_v2"
+    """Return the runtime frontend build directory."""
+    return package_root / "gui_app" / "dist"
 
 
 def _parse_sample_limit(value: int) -> int:
@@ -514,7 +511,7 @@ def create_app() -> FastAPI:
     _install_logs_endpoint_access_filter()
 
     app = FastAPI(title="Media Manager Operator Console")
-    app.mount("/static-v2", StaticFiles(directory=str(console_static_dir)), name="static-v2")
+    app.mount("/static-v2", StaticFiles(directory=str(console_static_dir), check_dir=False), name="static-v2")
     mount_metrics_endpoint(app)
 
     @app.exception_handler(HTTPException)
@@ -541,8 +538,7 @@ def create_app() -> FastAPI:
                 status_code=503,
                 content=(
                     "Operator Console v2 assets are missing. "
-                    "Build frontend assets into operator_console/gui_app/dist/ "
-                    "or restore the legacy operator_console/static_v2/ fallback."
+                    "Build frontend assets into operator_console/gui_app/dist/."
                 ),
             )
         return FileResponse(path=console_static_index)

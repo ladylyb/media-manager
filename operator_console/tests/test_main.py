@@ -21,6 +21,39 @@ from operator_console.main import (
     get_read_services,
 )
 
+
+def _create_console_build(tmp_path: Path) -> Path:
+    dist_dir = tmp_path / "gui_app" / "dist"
+    assets_dir = dist_dir / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    (dist_dir / "index.html").write_text(
+        """
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Operator Console</title>
+    <script type="module" src="/static-v2/assets/index-test.js"></script>
+    <link rel="stylesheet" href="/static-v2/assets/index-test.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
+""".strip(),
+        encoding="utf-8",
+    )
+    (assets_dir / "index-test.js").write_text("console.log('test build');\n", encoding="utf-8")
+    (assets_dir / "index-test.css").write_text("body { background: #fff; }\n", encoding="utf-8")
+    (dist_dir / "favicon.ico").write_bytes(b"\x00\x00\x01\x00")
+    return dist_dir
+
+
+def _create_console_client(tmp_path: Path, monkeypatch) -> TestClient:
+    dist_dir = _create_console_build(tmp_path)
+    monkeypatch.setattr(main_module, "_resolve_console_static_dir", lambda _package_root: dist_dir)
+    return TestClient(create_app())
+
 def test_canonical_api_route_inventory_and_v1_removal() -> None:
     route_paths = {route.path for route in app.routes}
 
@@ -65,8 +98,8 @@ def test_canonical_api_route_inventory_and_v1_removal() -> None:
     assert not any(path.startswith("/api/v2") for path in route_paths)
 
 
-def test_favicon_route_serves_built_asset() -> None:
-    client = TestClient(app)
+def test_favicon_route_serves_built_asset(tmp_path: Path, monkeypatch) -> None:
+    client = _create_console_client(tmp_path, monkeypatch)
 
     response = client.get("/favicon.ico")
 
@@ -91,26 +124,21 @@ def test_favicon_route_returns_404_when_asset_missing(tmp_path: Path, monkeypatc
 def test_resolve_console_static_dir_prefers_gui_dist(tmp_path: Path) -> None:
     package_root = tmp_path / "operator_console"
     dist_dir = package_root / "gui_app" / "dist"
-    static_dir = package_root / "static_v2"
     dist_dir.mkdir(parents=True)
-    static_dir.mkdir(parents=True)
     (dist_dir / "index.html").write_text("<html>dist</html>", encoding="utf-8")
-    (static_dir / "index.html").write_text("<html>static</html>", encoding="utf-8")
 
     resolved = main_module._resolve_console_static_dir(package_root)
 
     assert resolved == dist_dir
 
 
-def test_resolve_console_static_dir_falls_back_to_static_v2(tmp_path: Path) -> None:
+def test_resolve_console_static_dir_returns_dist_path_even_when_not_built(tmp_path: Path) -> None:
     package_root = tmp_path / "operator_console"
-    static_dir = package_root / "static_v2"
-    static_dir.mkdir(parents=True)
-    (static_dir / "index.html").write_text("<html>static</html>", encoding="utf-8")
+    dist_dir = package_root / "gui_app" / "dist"
 
     resolved = main_module._resolve_console_static_dir(package_root)
 
-    assert resolved == static_dir
+    assert resolved == dist_dir
 
 
 def test_logs_endpoint_returns_recent_log_lines() -> None:
@@ -1410,9 +1438,9 @@ class _FakeAdminServices:
         }
 
 
-def test_dashboard_route_serves_spa_shell() -> None:
+def test_dashboard_route_serves_spa_shell(tmp_path: Path, monkeypatch) -> None:
     """GET / should serve the operator console SPA shell."""
-    client = TestClient(app)
+    client = _create_console_client(tmp_path, monkeypatch)
 
     response = client.get("/")
 
@@ -1421,8 +1449,8 @@ def test_dashboard_route_serves_spa_shell() -> None:
     assert "/static-v2/assets/" in response.text
 
 
-def test_operations_page_serves_spa_shell() -> None:
-    client = TestClient(app)
+def test_operations_page_serves_spa_shell(tmp_path: Path, monkeypatch) -> None:
+    client = _create_console_client(tmp_path, monkeypatch)
 
     response = client.get("/operations")
 
@@ -1439,8 +1467,8 @@ def test_console_v2_route_is_not_supported() -> None:
     assert response.status_code == 404
 
 
-def test_canonical_operator_routes_serve_spa_shell() -> None:
-    client = TestClient(app)
+def test_canonical_operator_routes_serve_spa_shell(tmp_path: Path, monkeypatch) -> None:
+    client = _create_console_client(tmp_path, monkeypatch)
 
     dashboard = client.get("/")
     operations = client.get("/operations")
@@ -1528,9 +1556,9 @@ def test_latest_metrics_endpoint_returns_json() -> None:
     }
 
 
-def test_runs_page_serves_spa_shell() -> None:
+def test_runs_page_serves_spa_shell(tmp_path: Path, monkeypatch) -> None:
     """GET /runs should serve the SPA shell for the legacy compatibility route."""
-    client = TestClient(app)
+    client = _create_console_client(tmp_path, monkeypatch)
 
     response = client.get("/runs")
 
@@ -1539,9 +1567,9 @@ def test_runs_page_serves_spa_shell() -> None:
     assert "/static-v2/assets/" in response.text
 
 
-def test_gallery_page_serves_spa_shell() -> None:
+def test_gallery_page_serves_spa_shell(tmp_path: Path, monkeypatch) -> None:
     """GET /gallery should serve the operator console SPA shell."""
-    client = TestClient(app)
+    client = _create_console_client(tmp_path, monkeypatch)
 
     response = client.get("/gallery")
 
@@ -1550,8 +1578,8 @@ def test_gallery_page_serves_spa_shell() -> None:
     assert "/static-v2/assets/" in response.text
 
 
-def test_admin_diagnostics_page_serves_spa_shell() -> None:
-    client = TestClient(app)
+def test_admin_diagnostics_page_serves_spa_shell(tmp_path: Path, monkeypatch) -> None:
+    client = _create_console_client(tmp_path, monkeypatch)
 
     response = client.get("/admin/diagnostics")
 
@@ -1560,8 +1588,8 @@ def test_admin_diagnostics_page_serves_spa_shell() -> None:
     assert "/static-v2/assets/" in response.text
 
 
-def test_discover_page_serves_spa_shell() -> None:
-    client = TestClient(app)
+def test_discover_page_serves_spa_shell(tmp_path: Path, monkeypatch) -> None:
+    client = _create_console_client(tmp_path, monkeypatch)
 
     response = client.get("/discover")
 
@@ -1570,9 +1598,9 @@ def test_discover_page_serves_spa_shell() -> None:
     assert "/static-v2/assets/" in response.text
 
 
-def test_ledger_page_serves_spa_shell() -> None:
+def test_ledger_page_serves_spa_shell(tmp_path: Path, monkeypatch) -> None:
     """GET /ledger should serve the SPA shell for the legacy compatibility route."""
-    client = TestClient(app)
+    client = _create_console_client(tmp_path, monkeypatch)
 
     response = client.get("/ledger")
 
@@ -2019,9 +2047,9 @@ def test_media_endpoint_returns_404_for_missing() -> None:
     assert response.status_code == 404
 
 
-def test_gallery_detail_page_serves_spa_shell() -> None:
+def test_gallery_detail_page_serves_spa_shell(tmp_path: Path, monkeypatch) -> None:
     """GET /gallery/{id} should serve the operator console SPA shell."""
-    client = TestClient(app)
+    client = _create_console_client(tmp_path, monkeypatch)
 
     response = client.get("/gallery/33333333-0000-0000-0000-000000000001?page=3")
 
@@ -2030,9 +2058,9 @@ def test_gallery_detail_page_serves_spa_shell() -> None:
     assert "/static-v2/assets/" in response.text
 
 
-def test_gallery_detail_page_unknown_id_still_serves_spa_shell() -> None:
+def test_gallery_detail_page_unknown_id_still_serves_spa_shell(tmp_path: Path, monkeypatch) -> None:
     """GET /gallery/{id} should defer unknown-detail handling to the SPA."""
-    client = TestClient(app)
+    client = _create_console_client(tmp_path, monkeypatch)
 
     response = client.get("/gallery/33333333-0000-0000-0000-000000000099")
 
@@ -2073,9 +2101,9 @@ def test_gallery_detail_endpoint_returns_404_for_unknown_item() -> None:
     assert response.json()["errors"][0]["message"] == "Canonical media item not found."
 
 
-def test_duplicates_page_serves_spa_shell() -> None:
+def test_duplicates_page_serves_spa_shell(tmp_path: Path, monkeypatch) -> None:
     """GET /duplicates should serve the operator console SPA shell."""
-    client = TestClient(app)
+    client = _create_console_client(tmp_path, monkeypatch)
 
     response = client.get("/duplicates")
 
@@ -2201,9 +2229,9 @@ def test_video_thumbnail_endpoint_returns_404_for_missing_or_ineligible() -> Non
     assert response.status_code == 404
 
 
-def test_policy_page_serves_spa_shell() -> None:
+def test_policy_page_serves_spa_shell(tmp_path: Path, monkeypatch) -> None:
     """GET /policy should serve the operator console SPA shell."""
-    client = TestClient(app)
+    client = _create_console_client(tmp_path, monkeypatch)
 
     response = client.get("/policy")
 
@@ -2212,8 +2240,8 @@ def test_policy_page_serves_spa_shell() -> None:
     assert "/static-v2/assets/" in response.text
 
 
-def test_admin_page_serves_spa_shell() -> None:
-    client = TestClient(app)
+def test_admin_page_serves_spa_shell(tmp_path: Path, monkeypatch) -> None:
+    client = _create_console_client(tmp_path, monkeypatch)
     response = client.get("/admin")
     assert response.status_code == 200
     assert '<div id="root"></div>' in response.text

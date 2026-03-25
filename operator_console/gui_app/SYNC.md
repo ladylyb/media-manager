@@ -47,8 +47,8 @@ npm run build
 The supported build now writes runtime assets into:
 - `operator_console/gui_app/dist/`
 
-FastAPI serves that directory first and keeps `operator_console/static_v2/` only as a
-temporary local fallback for older environments that have not rebuilt yet.
+FastAPI serves that directory directly at runtime. `operator_console/static_v2/`
+is no longer used as a fallback runtime snapshot.
 
 4. Validate the canonical FastAPI operator-console routes render the React shell.
 
