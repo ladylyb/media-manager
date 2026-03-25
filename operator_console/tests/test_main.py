@@ -91,26 +91,21 @@ def test_favicon_route_returns_404_when_asset_missing(tmp_path: Path, monkeypatc
 def test_resolve_console_static_dir_prefers_gui_dist(tmp_path: Path) -> None:
     package_root = tmp_path / "operator_console"
     dist_dir = package_root / "gui_app" / "dist"
-    static_dir = package_root / "static_v2"
     dist_dir.mkdir(parents=True)
-    static_dir.mkdir(parents=True)
     (dist_dir / "index.html").write_text("<html>dist</html>", encoding="utf-8")
-    (static_dir / "index.html").write_text("<html>static</html>", encoding="utf-8")
 
     resolved = main_module._resolve_console_static_dir(package_root)
 
     assert resolved == dist_dir
 
 
-def test_resolve_console_static_dir_falls_back_to_static_v2(tmp_path: Path) -> None:
+def test_resolve_console_static_dir_returns_dist_path_even_when_not_built(tmp_path: Path) -> None:
     package_root = tmp_path / "operator_console"
-    static_dir = package_root / "static_v2"
-    static_dir.mkdir(parents=True)
-    (static_dir / "index.html").write_text("<html>static</html>", encoding="utf-8")
+    dist_dir = package_root / "gui_app" / "dist"
 
     resolved = main_module._resolve_console_static_dir(package_root)
 
-    assert resolved == static_dir
+    assert resolved == dist_dir
 
 
 def test_logs_endpoint_returns_recent_log_lines() -> None:
