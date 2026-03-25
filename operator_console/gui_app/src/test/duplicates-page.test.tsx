@@ -7,11 +7,13 @@ import DuplicatesPage from "@/pages/DuplicatesPage";
 
 const mocks = vi.hoisted(() => ({
   getDuplicates: vi.fn(),
+  setDuplicateReclaim: vi.fn(),
   setDuplicateReview: vi.fn(),
 }));
 
 vi.mock("@/lib/api/endpoints", () => ({
   getDuplicates: mocks.getDuplicates,
+  setDuplicateReclaim: mocks.setDuplicateReclaim,
   setDuplicateReview: mocks.setDuplicateReview,
 }));
 
@@ -20,6 +22,9 @@ function buildGroup(id: string, canonicalName: string, duplicateNames: string[])
     group_id: id,
     hash: `${id}-hash`,
     canonical_path: `/library/${canonicalName}`,
+    integrity_issue_count: 0,
+    integrity_broken_count: 0,
+    integrity_suspect_count: 0,
     duplicates: [
       {
         file_instance_id: `${id}-canonical`,
@@ -103,6 +108,7 @@ describe("DuplicatesPage", () => {
       buildGroup("group-gamma", "gamma-main.jpg", ["gamma-copy.jpg"]),
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+    mocks.setDuplicateReclaim.mockResolvedValue({ data: {} });
     mocks.setDuplicateReview.mockImplementation(async (payload: { content_id: string; review_status: string; reviewed_canonical_instance_id: string }) => {
       groupsData = groupsData.map((group) =>
         group.group_id === payload.content_id
@@ -128,6 +134,7 @@ describe("DuplicatesPage", () => {
     renderPage();
 
     expect(await screen.findByText("1 of 3")).toBeInTheDocument();
+    expect(screen.getByText("Files reclaimable")).toBeInTheDocument();
     expect(screen.queryByText("Group members")).not.toBeInTheDocument();
     expect(screen.queryByText("Queue")).not.toBeInTheDocument();
     expect(screen.queryByText("Shortcuts")).not.toBeInTheDocument();
@@ -187,6 +194,39 @@ describe("DuplicatesPage", () => {
     expect(screen.getAllByRole("button", { name: "Mark as looks right" })).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: "Mark as needs review" })).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: "Mark as not sure" })).toHaveLength(2);
+  });
+
+  it("marks a group as safe to reclaim", async () => {
+    renderPage();
+
+    expect(await screen.findByText("1 of 3")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark safe to reclaim" }));
+
+    await waitFor(() =>
+      expect(mocks.setDuplicateReclaim).toHaveBeenCalledWith({
+        content_id: "group-alpha",
+        reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
+      }),
+    );
+  });
+
+  it("surfaces integrity risk counts for the selected duplicate group", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        integrity_issue_count: 2,
+        integrity_broken_count: 1,
+        integrity_suspect_count: 1,
+      },
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+
+    renderPage();
+
+    expect(await screen.findByText("2 integrity issues")).toBeInTheDocument();
+    expect(screen.getByText("1 broken")).toBeInTheDocument();
+    expect(screen.getByText("1 suspect")).toBeInTheDocument();
   });
 
   it("renders video poster previews in the comparison cards and queue", async () => {

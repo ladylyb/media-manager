@@ -1,4 +1,4 @@
-import { Cog, Copy, Image, House, Route, type LucideIcon, Settings } from "lucide-react";
+import { Cog, Copy, Image, House, Route, ShieldAlert, type LucideIcon, Settings } from "lucide-react";
 import { useLocation } from "react-router-dom";
 
 import { NavLink } from "@/components/NavLink";
@@ -25,6 +25,7 @@ const mainNav = [
 const mediaNav = [
   { title: "Library", url: "/gallery", icon: Image },
   { title: "Duplicate Review", url: "/duplicates", icon: Copy },
+  { title: "Integrity", url: "/integrity", icon: ShieldAlert },
 ];
 
 const systemNav = [

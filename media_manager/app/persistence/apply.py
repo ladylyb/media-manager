@@ -33,8 +33,16 @@ from media_manager.app.persistence.models import (
     FailureEvent,
     FailurePhase,
     CanonicalAssignment,
+    DuplicateReclaimItem,
+    DuplicateReclaimItemStatus,
     FileInstance,
     FileInstanceStatus,
+    IntegrityQuarantineRecord,
+    IntegrityQuarantineStatus,
+    MediaFile,
+    DuplicateReclaimRecord,
+    DuplicateReclaimStatus,
+    MediaFileStatus,
     PlannedAction,
     PlannedActionRole,
     Run,
@@ -192,7 +200,18 @@ class ApplyService:
 
                     self._persist_applied_action(audit_run_id, action, outcome)
                     applied_count += 1
-                    if action.action_type in {"RENAME", "MOVE"}:
+                    if action.action_type in {
+                        "RENAME",
+                        "MOVE",
+                        "RECLAIM_ARCHIVE",
+                        "RECLAIM_RESTORE",
+                        "RECLAIM_RECYCLE",
+                        "RECLAIM_PURGE",
+                        "INTEGRITY_QUARANTINE",
+                        "INTEGRITY_RESTORE",
+                        "INTEGRITY_RECYCLE",
+                        "INTEGRITY_PURGE",
+                    }:
                         moves_count += 1
                     elif action.action_type in {"COLLISION_RESOLVED", "MARK_DUPLICATE"}:
                         duplicates_count += 1
@@ -439,12 +458,13 @@ class ApplyService:
 
     def _execute_action(self, run_id: uuid.UUID, action: PlannedAction, collision_mode: CollisionMode) -> ActionOutcome:
         source = Path(action.source_path)
+        purge_action = action.action_type in {"RECLAIM_PURGE", "INTEGRITY_PURGE"}
         destination = Path(action.target_path) if action.target_path else source
         source_resolved = source.resolve(strict=False)
         destination_resolved = destination.resolve(strict=False)
 
         if not source.exists() or not source.is_file():
-            if destination.exists() and destination.is_file():
+            if purge_action or (destination.exists() and destination.is_file()):
                 logger.info(
                     "Idempotent apply detected",
                     extra={
@@ -458,7 +478,7 @@ class ApplyService:
                 return ActionOutcome(
                     result="APPLIED",
                     source_path=str(source_resolved),
-                    target_path=str(destination_resolved),
+                    target_path=None if purge_action else str(destination_resolved),
                     error_message=None,
                     collision_detected=False,
                     collision_resolved=False,
@@ -487,6 +507,40 @@ class ApplyService:
             )
 
         if source_resolved == destination_resolved:
+            if purge_action:
+                try:
+                    source.unlink()
+                except OSError as exc:
+                    return ActionOutcome(
+                        result="FAILED",
+                        source_path=str(source_resolved),
+                        target_path=None,
+                        error_message=str(exc),
+                        collision_detected=False,
+                        collision_resolved=False,
+                        file_instance_id=action.file_id,
+                        planned_action_id=action.id,
+                    )
+                logger.info(
+                    "File deleted",
+                    extra={
+                        "run_id": str(run_id),
+                        "phase": "apply",
+                        "planned_action_id": str(action.id),
+                        "file_instance_id": str(action.file_id),
+                        "action_type": action.action_type,
+                    },
+                )
+                return ActionOutcome(
+                    result="APPLIED",
+                    source_path=str(source_resolved),
+                    target_path=None,
+                    error_message=None,
+                    collision_detected=False,
+                    collision_resolved=False,
+                    file_instance_id=action.file_id,
+                    planned_action_id=action.id,
+                )
             return ActionOutcome(
                 result="SKIPPED",
                 source_path=str(source_resolved),
@@ -645,7 +699,8 @@ class ApplyService:
 
     def _verify_applied_action(self, outcome: ActionOutcome) -> bool:
         if outcome.target_path is None:
-            return False
+            source = Path(outcome.source_path)
+            return not source.exists()
         target = Path(outcome.target_path)
         source = Path(outcome.source_path)
         return target.exists() and target.is_file() and not source.exists()
@@ -682,6 +737,12 @@ class ApplyService:
             file_row = session.get(FileInstance, action.file_id)
             if file_row is not None and outcome.target_path is not None:
                 file_row.absolute_path = outcome.target_path
+                media_row = session.scalar(
+                    select(MediaFile)
+                    .where(MediaFile.current_path == action.source_path, MediaFile.status != MediaFileStatus.DELETED.value)
+                )
+                if media_row is not None:
+                    media_row.current_path = outcome.target_path
 
             session.add(
                 ApplyAuditItem(
@@ -693,6 +754,78 @@ class ApplyService:
                     error_message=None,
                 )
             )
+            self._update_phase3_records(session, action, outcome)
+
+    def _update_phase3_records(self, session: Session, action: PlannedAction, outcome: ActionOutcome) -> None:
+        now = _utcnow()
+        if action.action_type == "RECLAIM_ARCHIVE":
+            item = session.get(DuplicateReclaimItem, action.file_id)
+            if item is not None:
+                item.item_status = DuplicateReclaimItemStatus.ARCHIVED.value
+                item.reclaimed_at = now
+                item.updated_at = now
+                record = session.get(DuplicateReclaimRecord, item.content_id)
+                if record is not None:
+                    record.reclaim_status = DuplicateReclaimStatus.ARCHIVED.value
+                    record.archive_path = item.archive_path
+                    record.reclaimed_at = now
+                    record.expires_at = item.expires_at
+                    record.updated_at = now
+        elif action.action_type == "RECLAIM_RESTORE":
+            item = session.get(DuplicateReclaimItem, action.file_id)
+            if item is not None:
+                item.item_status = DuplicateReclaimItemStatus.RESTORED.value
+                item.restored_at = now
+                item.updated_at = now
+                record = session.get(DuplicateReclaimRecord, item.content_id)
+                if record is not None:
+                    record.reclaim_status = DuplicateReclaimStatus.RESTORED.value
+                    record.restored_at = now
+                    record.updated_at = now
+        elif action.action_type == "RECLAIM_RECYCLE":
+            item = session.get(DuplicateReclaimItem, action.file_id)
+            if item is not None:
+                item.item_status = DuplicateReclaimItemStatus.RECYCLED.value
+                item.recycled_at = now
+                item.updated_at = now
+                record = session.get(DuplicateReclaimRecord, item.content_id)
+                if record is not None:
+                    record.reclaim_status = DuplicateReclaimStatus.SCHEDULED_FOR_DELETE.value
+                    record.archive_path = item.recycle_path
+                    record.reclaimed_at = now
+                    record.expires_at = item.purge_after_at
+                    record.updated_at = now
+        elif action.action_type == "RECLAIM_PURGE":
+            item = session.get(DuplicateReclaimItem, action.file_id)
+            if item is not None:
+                item.purged_at = now
+                item.updated_at = now
+                record = session.get(DuplicateReclaimRecord, item.content_id)
+                if record is not None:
+                    record.updated_at = now
+        elif action.action_type == "INTEGRITY_QUARANTINE":
+            record = session.get(IntegrityQuarantineRecord, action.file_id)
+            if record is not None:
+                record.quarantine_status = IntegrityQuarantineStatus.QUARANTINED.value
+                record.quarantined_at = now
+                record.updated_at = now
+        elif action.action_type == "INTEGRITY_RESTORE":
+            record = session.get(IntegrityQuarantineRecord, action.file_id)
+            if record is not None:
+                record.quarantine_status = IntegrityQuarantineStatus.RESTORED.value
+                record.restored_at = now
+                record.updated_at = now
+        elif action.action_type == "INTEGRITY_RECYCLE":
+            record = session.get(IntegrityQuarantineRecord, action.file_id)
+            if record is not None:
+                record.quarantine_status = IntegrityQuarantineStatus.RECYCLED.value
+                record.recycled_at = now
+                record.updated_at = now
+        elif action.action_type == "INTEGRITY_PURGE":
+            record = session.get(IntegrityQuarantineRecord, action.file_id)
+            if record is not None:
+                record.purged_at = now
+                record.updated_at = now
 
     def _persist_action_item(self, audit_run_id: uuid.UUID, outcome: ActionOutcome, error_message: str | None) -> None:
         with transactional_session(self._session_factory) as session:
@@ -902,9 +1035,9 @@ class ApplyService:
             )
             duplicate_action = (
                 action.role == PlannedActionRole.DUPLICATE.value
-                and action.action_type in {"COLLISION_RESOLVED", "MARK_DUPLICATE"}
+                and action.action_type in {"COLLISION_RESOLVED", "MARK_DUPLICATE", "RECLAIM_ARCHIVE"}
             )
-            if not duplicate_action and active_duplicate_count <= 1:
+            if not duplicate_action:
                 return None
 
             assignment = session.execute(

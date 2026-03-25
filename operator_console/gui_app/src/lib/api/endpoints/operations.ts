@@ -2,6 +2,7 @@ import { apiPost } from "@/lib/api/client";
 import { apiGet } from "@/lib/api/client";
 import { withData } from "@/lib/api/envelope";
 import { mapOperationResult } from "@/lib/api/mappers/admin";
+import { mapRetentionRecycleItems } from "@/lib/api/mappers/media";
 import type { DirectoryPickerCapability, DirectoryPickerListing } from "@/types";
 
 export const runIngest = async (params: { folder_path?: string; dry_run?: boolean }) => {
@@ -81,6 +82,17 @@ export const runCanonicalRecompute = async (params?: {
   return withData(envelope, mapOperationResult(envelope.data, { fallbackOperation: "CANONICAL_RECOMPUTE" }));
 };
 
+export const runIntegrityScan = async (params?: {
+  mode?: "FAST" | "DEEP";
+  file_instance_ids?: string[];
+}) => {
+  const envelope = await apiPost<Record<string, unknown>>("/integrity/scan", {
+    mode: params?.mode ?? "FAST",
+    file_instance_ids: params?.file_instance_ids ?? [],
+  });
+  return withData(envelope, mapOperationResult(envelope.data, { fallbackOperation: "INTEGRITY_SCAN" }));
+};
+
 export const runWizardCanonicalRecompute = async (params?: {
   policy_name?: string;
   dry_run?: boolean;
@@ -125,3 +137,33 @@ export const getDirectoryPickerCapability = async () =>
 
 export const getDirectoryPickerListing = async (path: string) =>
   apiGet<DirectoryPickerListing>("/directory-picker/list", { path });
+
+export const getRetentionRecycleItems = async (params?: { page?: number; limit?: number }) => {
+  const envelope = await apiGet<Record<string, unknown>>("/retention/recycle", {
+    page: params?.page ?? 1,
+    limit: params?.limit ?? 30,
+  });
+  return withData(envelope, mapRetentionRecycleItems(envelope.data));
+};
+
+export const runRetentionRecycle = async (params: {
+  workflow: "duplicates" | "integrity";
+  file_instance_ids?: string[];
+}) => {
+  const envelope = await apiPost<Record<string, unknown>>("/retention/recycle", {
+    workflow: params.workflow,
+    file_instance_ids: params.file_instance_ids ?? [],
+  });
+  return withData(envelope, mapOperationResult(envelope.data, { fallbackOperation: "RETENTION_RECYCLE" }));
+};
+
+export const runRetentionPurge = async (params: {
+  workflow: "duplicates" | "integrity";
+  file_instance_ids?: string[];
+}) => {
+  const envelope = await apiPost<Record<string, unknown>>("/retention/purge", {
+    workflow: params.workflow,
+    file_instance_ids: params.file_instance_ids ?? [],
+  });
+  return withData(envelope, mapOperationResult(envelope.data, { fallbackOperation: "RETENTION_PURGE" }));
+};

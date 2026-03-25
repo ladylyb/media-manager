@@ -15,11 +15,18 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { getDuplicates, setDuplicateReview } from "@/lib/api/endpoints";
+import {
+  executeDuplicateReclaim,
+  getDuplicateReclaimItems,
+  getDuplicates,
+  restoreDuplicateReclaim,
+  setDuplicateReclaim,
+  setDuplicateReview,
+} from "@/lib/api/endpoints";
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
 import { cn } from "@/lib/utils";
-import type { DuplicateFile, DuplicateGroup } from "@/types";
+import type { DuplicateFile, DuplicateGroup, DuplicateReclaimItem } from "@/types";
 
 type ReviewMark = "looks_right" | "needs_review" | "not_sure";
 type ReviewFilter = "all" | "unreviewed" | ReviewMark;
@@ -158,6 +165,55 @@ export default function DuplicatesPage() {
     },
   });
 
+  const reclaimMutation = useMutation({
+    mutationFn: (payload: { content_id: string; reclaim_status: "UNREVIEWED" | "REVIEWED_SAFE_TO_RECLAIM" }) =>
+      setDuplicateReclaim(payload),
+    onMutate: async (payload) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.duplicates });
+      const previous = queryClient.getQueryData<DuplicateGroup[]>(queryKeys.duplicates);
+      queryClient.setQueryData<DuplicateGroup[]>(queryKeys.duplicates, (current = []) =>
+        current.map((group) =>
+          group.group_id === payload.content_id
+            ? {
+                ...group,
+                reclaim_status: payload.reclaim_status,
+              }
+            : group,
+        ),
+      );
+      return { previous };
+    },
+    onError: (_error, _payload, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(queryKeys.duplicates, context.previous);
+      }
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.duplicates });
+    },
+  });
+
+  const reclaimItemsQuery = useQuery({
+    queryKey: queryKeys.duplicateReclaimItems(1, 50),
+    queryFn: async () => (await getDuplicateReclaimItems({ page: 1, limit: 50 })).data,
+  });
+
+  const executeReclaimMutation = useMutation({
+    mutationFn: (payload: { content_ids: string[]; retention_days: number }) => executeDuplicateReclaim(payload),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.duplicates });
+      void queryClient.invalidateQueries({ queryKey: ["duplicates", "reclaim-items"] });
+    },
+  });
+
+  const restoreReclaimMutation = useMutation({
+    mutationFn: (fileInstanceId: string) => restoreDuplicateReclaim({ file_instance_ids: [fileInstanceId] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.duplicates });
+      void queryClient.invalidateQueries({ queryKey: ["duplicates", "reclaim-items"] });
+    },
+  });
+
   const groups = (duplicatesQuery.data as DuplicateGroup[] | undefined) ?? [];
   const sortedGroups = useMemo(
     () =>
@@ -198,6 +254,9 @@ export default function DuplicatesPage() {
   const selectedIndex = selected ? filteredGroups.findIndex((group) => group.group_id === selected.group_id) : -1;
   const selectedOverallIndex = selected ? sortedGroups.findIndex((group) => group.group_id === selected.group_id) : -1;
   const reviewedCount = sortedGroups.filter((group) => currentReviewMark(group)).length;
+  const reclaimReadyCount = sortedGroups.filter((group) => group.reclaim_status === "REVIEWED_SAFE_TO_RECLAIM").length;
+  const totalReclaimableFiles = sortedGroups.reduce((sum, group) => sum + (group.reclaimable_file_count ?? 0), 0);
+  const totalEstimatedBytes = sortedGroups.reduce((sum, group) => sum + (group.estimated_reclaim_bytes ?? 0), 0);
   const selectedCanonical = selected?.duplicates.find((file) => file.is_canonical) ?? null;
   const selectedDuplicates = useMemo(
     () => selected?.duplicates.filter((file) => !file.is_canonical) ?? [],
@@ -217,6 +276,9 @@ export default function DuplicatesPage() {
   const selectedDuplicate =
     selectedDuplicates.find((file) => file.file_instance_id === selectedDuplicateId) ?? selectedDuplicates[0] ?? null;
   const selectedReview = selected ? getReviewPresentation(currentReviewMark(selected), Boolean(selected.is_stale)) : null;
+  const archivedItems = ((reclaimItemsQuery.data?.items ?? []) as DuplicateReclaimItem[]).filter(
+    (item) => item.item_status === "ARCHIVED",
+  );
 
   function moveSelection(direction: -1 | 1) {
     if (!filteredGroups.length || selectedIndex < 0) return;
@@ -299,6 +361,15 @@ export default function DuplicatesPage() {
       {reviewMutation.error && (
         <ErrorAlert message={getErrorMessage(reviewMutation.error) || "Failed to save duplicate review"} />
       )}
+      {reclaimMutation.error && (
+        <ErrorAlert message={getErrorMessage(reclaimMutation.error) || "Failed to save reclaim readiness"} />
+      )}
+      {executeReclaimMutation.error && (
+        <ErrorAlert message={getErrorMessage(executeReclaimMutation.error) || "Failed to archive reclaimable duplicates"} />
+      )}
+      {restoreReclaimMutation.error && (
+        <ErrorAlert message={getErrorMessage(restoreReclaimMutation.error) || "Failed to restore archived duplicate"} />
+      )}
 
       {duplicatesQuery.isLoading ? (
         <div className="space-y-4">
@@ -315,13 +386,32 @@ export default function DuplicatesPage() {
         <>
           <Card className="rounded-[24px] border-border/70 bg-card/95 shadow-sm">
             <CardContent className="space-y-4 p-4">
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="rounded-[20px] border border-border/60 bg-background/70 p-4">
+                  <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Duplicate groups</p>
+                  <p className="mt-2 text-2xl font-semibold text-foreground">{sortedGroups.length}</p>
+                </div>
+                <div className="rounded-[20px] border border-border/60 bg-background/70 p-4">
+                  <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Files reclaimable</p>
+                  <p className="mt-2 text-2xl font-semibold text-foreground">{totalReclaimableFiles}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{reclaimReadyCount} groups marked safe to reclaim.</p>
+                </div>
+                <div className="rounded-[20px] border border-border/60 bg-background/70 p-4">
+                  <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Estimated savings</p>
+                  <p className="mt-2 text-2xl font-semibold text-foreground">
+                    {(totalEstimatedBytes / (1024 ** 3)).toFixed(2)} GB
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">{archivedItems.length} duplicate files currently archived.</p>
+                </div>
+              </div>
+
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    {selectedReview ? <StatusBadge label={selectedReview.label} severity={selectedReview.severity} /> : null}
-                    {selected ? (
-                      <>
-                        <StatusBadge label={`${selected.duplicates.length} files in group`} severity="neutral" />
+                <div className="flex flex-wrap items-center gap-2">
+                  {selectedReview ? <StatusBadge label={selectedReview.label} severity={selectedReview.severity} /> : null}
+                  {selected ? (
+                    <>
+                      <StatusBadge label={`${selected.duplicates.length} files in group`} severity="neutral" />
                         <StatusBadge
                           label={
                             selectedDuplicates.length === 1
@@ -330,6 +420,27 @@ export default function DuplicatesPage() {
                           }
                           severity="info"
                         />
+                        <StatusBadge
+                          label={`${((selected.estimated_reclaim_bytes ?? 0) / (1024 ** 2)).toFixed(1)} MB reclaimable`}
+                          severity="neutral"
+                        />
+                        {(selected.integrity_issue_count ?? 0) > 0 ? (
+                          <StatusBadge
+                            label={`${selected.integrity_issue_count} integrity issue${selected.integrity_issue_count === 1 ? "" : "s"}`}
+                            severity="caution"
+                          />
+                        ) : (
+                          <StatusBadge label="No integrity issues" severity="success" />
+                        )}
+                        {(selected.integrity_broken_count ?? 0) > 0 ? (
+                          <StatusBadge label={`${selected.integrity_broken_count} broken`} severity="destructive" />
+                        ) : null}
+                        {(selected.integrity_suspect_count ?? 0) > 0 ? (
+                          <StatusBadge label={`${selected.integrity_suspect_count} suspect`} severity="caution" />
+                        ) : null}
+                        {selected.reclaim_status ? (
+                          <StatusBadge label={selected.reclaim_status.replaceAll("_", " ")} severity="neutral" />
+                        ) : null}
                       </>
                     ) : null}
                   </div>
@@ -338,6 +449,40 @@ export default function DuplicatesPage() {
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    onClick={() =>
+                      executeReclaimMutation.mutate({
+                        content_ids: sortedGroups
+                          .filter((group) => group.reclaim_status === "REVIEWED_SAFE_TO_RECLAIM")
+                          .map((group) => group.group_id),
+                        retention_days: 14,
+                      })
+                    }
+                    disabled={executeReclaimMutation.isPending || reclaimReadyCount === 0}
+                  >
+                    Archive reclaimable
+                  </Button>
+                  {selected ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() =>
+                        reclaimMutation.mutate({
+                          content_id: selected.group_id,
+                          reclaim_status:
+                            selected.reclaim_status === "REVIEWED_SAFE_TO_RECLAIM"
+                              ? "UNREVIEWED"
+                              : "REVIEWED_SAFE_TO_RECLAIM",
+                        })
+                      }
+                      disabled={reclaimMutation.isPending}
+                    >
+                      {selected.reclaim_status === "REVIEWED_SAFE_TO_RECLAIM"
+                        ? "Unset reclaim"
+                        : "Mark safe to reclaim"}
+                    </Button>
+                  ) : null}
                   <Button type="button" variant="outline" onClick={() => moveSelection(-1)} disabled={selectedIndex <= 0}>
                     Prev
                   </Button>
@@ -372,6 +517,10 @@ export default function DuplicatesPage() {
                   </Button>
                 ))}
               </div>
+
+              <p className="text-sm text-muted-foreground">
+                Integrity signals are surfaced here so reclaim decisions stay aligned with playback-health review.
+              </p>
             </CardContent>
           </Card>
 
@@ -527,6 +676,43 @@ export default function DuplicatesPage() {
                   title="Select a group to compare"
                   description="Choose a duplicate group from the active filter to compare the main version against a matching file."
                 />
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="rounded-[24px] border-border/70 bg-card/95 shadow-sm">
+            <CardContent className="space-y-3 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">Archived duplicates</p>
+                  <p className="text-sm text-muted-foreground">Reversible reclaim state with restore access.</p>
+                </div>
+                <StatusBadge label={`${archivedItems.length} archived`} severity="neutral" />
+              </div>
+              {!archivedItems.length ? (
+                <p className="text-sm text-muted-foreground">No duplicate files are archived yet.</p>
+              ) : (
+                <div className="space-y-2">
+                  {archivedItems.slice(0, 8).map((item) => (
+                    <div
+                      key={item.file_instance_id}
+                      className="flex flex-col gap-2 rounded-2xl border border-border/70 bg-background/70 p-3 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-foreground">{basename(item.original_path)}</p>
+                        <p className="truncate text-xs text-muted-foreground">{item.archive_path}</p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => restoreReclaimMutation.mutate(item.file_instance_id)}
+                        disabled={restoreReclaimMutation.isPending}
+                      >
+                        Restore
+                      </Button>
+                    </div>
+                  ))}
+                </div>
               )}
             </CardContent>
           </Card>

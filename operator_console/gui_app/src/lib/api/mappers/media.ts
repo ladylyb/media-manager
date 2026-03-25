@@ -5,9 +5,15 @@ import type {
   CanonicalFileDetail,
   DuplicateFile,
   DuplicateGroup,
+  DuplicateReclaimItem,
   HashAuditResult,
+  IntegrityDashboard,
+  IntegrityFileDetail,
+  IntegrityIssue,
+  IntegrityQuarantineItem,
   MediaFileRecord,
   PaginatedResponse,
+  RetentionRecycleItem,
   Tag,
 } from "@/types";
 
@@ -75,8 +81,131 @@ export function mapDuplicateGroups(payload: Record<string, unknown>): DuplicateG
         : null,
       is_stale: Boolean(row.is_stale),
       stale_reason: row.stale_reason ? String(row.stale_reason) as DuplicateGroup["stale_reason"] : null,
+      estimated_reclaim_bytes: Number(row.estimated_reclaim_bytes ?? 0),
+      reclaim_status: row.reclaim_status ? String(row.reclaim_status) as DuplicateGroup["reclaim_status"] : null,
+      reclaimable_file_count: Number(row.reclaimable_file_count ?? 0),
+      retention_expires_at: row.retention_expires_at ? String(row.retention_expires_at) : null,
+      integrity_issue_count: Number(row.integrity_issue_count ?? 0),
+      integrity_broken_count: Number(row.integrity_broken_count ?? 0),
+      integrity_suspect_count: Number(row.integrity_suspect_count ?? 0),
     };
   });
+}
+
+export function mapIntegrityDashboard(payload: Record<string, unknown>): IntegrityDashboard {
+  return {
+    total_files_scanned: Number(payload.total_files_scanned ?? 0),
+    playback_issues: Number(payload.playback_issues ?? 0),
+    quarantined: Number(payload.quarantined ?? 0),
+    last_scan_at: payload.last_scan_at ? String(payload.last_scan_at) : null,
+    broken_count: Number(payload.broken_count ?? 0),
+    suspect_count: Number(payload.suspect_count ?? 0),
+    ignored_count: Number(payload.ignored_count ?? 0),
+    marked_ok_count: Number(payload.marked_ok_count ?? 0),
+  };
+}
+
+export function mapIntegrityIssuePage(payload: Record<string, unknown>): PaginatedResponse<IntegrityIssue> {
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  const mapped = items.map((item) => {
+    const row = item as Record<string, unknown>;
+    return {
+      check_id: String(row.check_id ?? ""),
+      file_instance_id: String(row.file_instance_id ?? ""),
+      absolute_path: String(row.absolute_path ?? ""),
+      status: String(row.status ?? "SUSPECT") as IntegrityIssue["status"],
+      confidence: Number(row.confidence ?? 0),
+      probe_status: row.probe_status ? String(row.probe_status) : null,
+      decode_status: row.decode_status ? String(row.decode_status) : null,
+      reviewed_decision: row.reviewed_decision ? String(row.reviewed_decision) as IntegrityIssue["reviewed_decision"] : null,
+      reviewed_at: row.reviewed_at ? String(row.reviewed_at) : null,
+      signal_types: Array.isArray(row.signal_types) ? row.signal_types.map(String) : [],
+    };
+  });
+  return mapPagination(payload, mapped);
+}
+
+export function mapIntegrityFileDetail(payload: Record<string, unknown>): IntegrityFileDetail {
+  return {
+    check_id: String(payload.check_id ?? ""),
+    file_instance_id: String(payload.file_instance_id ?? ""),
+    absolute_path: String(payload.absolute_path ?? ""),
+    status: String(payload.status ?? "SUSPECT") as IntegrityFileDetail["status"],
+    confidence: Number(payload.confidence ?? 0),
+    probe_status: payload.probe_status ? String(payload.probe_status) : null,
+    decode_status: payload.decode_status ? String(payload.decode_status) : null,
+    reviewed_decision: payload.reviewed_decision ? String(payload.reviewed_decision) as IntegrityFileDetail["reviewed_decision"] : null,
+    reviewed_at: payload.reviewed_at ? String(payload.reviewed_at) : null,
+    signal_types: Array.isArray(payload.signal_types) ? payload.signal_types.map(String) : [],
+    signals: Array.isArray(payload.signals)
+      ? payload.signals.map((item) => {
+          const row = item as Record<string, unknown>;
+          return {
+            signal_type: String(row.signal_type ?? ""),
+            severity: String(row.severity ?? ""),
+            details: (row.details ?? {}) as Record<string, unknown>,
+            created_at: String(row.created_at ?? ""),
+          };
+        })
+      : [],
+  };
+}
+
+export function mapIntegrityQuarantineItems(payload: Record<string, unknown>): PaginatedResponse<IntegrityQuarantineItem> {
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  const mapped = items.map((item) => {
+    const row = item as Record<string, unknown>;
+    return {
+      file_instance_id: String(row.file_instance_id ?? ""),
+      check_id: String(row.check_id ?? ""),
+      original_path: String(row.original_path ?? ""),
+      quarantine_path: String(row.quarantine_path ?? ""),
+      quarantine_status: String(row.quarantine_status ?? "PENDING") as IntegrityQuarantineItem["quarantine_status"],
+      quarantined_at: row.quarantined_at ? String(row.quarantined_at) : null,
+      restored_at: row.restored_at ? String(row.restored_at) : null,
+    };
+  });
+  return mapPagination(payload, mapped);
+}
+
+export function mapDuplicateReclaimItems(payload: Record<string, unknown>): PaginatedResponse<DuplicateReclaimItem> {
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  const mapped = items.map((item) => {
+    const row = item as Record<string, unknown>;
+    return {
+      file_instance_id: String(row.file_instance_id ?? ""),
+      content_id: String(row.content_id ?? ""),
+      original_path: String(row.original_path ?? ""),
+      archive_path: String(row.archive_path ?? ""),
+      item_status: String(row.item_status ?? "PENDING") as DuplicateReclaimItem["item_status"],
+      reclaimed_at: row.reclaimed_at ? String(row.reclaimed_at) : null,
+      expires_at: row.expires_at ? String(row.expires_at) : null,
+      restored_at: row.restored_at ? String(row.restored_at) : null,
+    };
+  });
+  return mapPagination(payload, mapped);
+}
+
+export function mapRetentionRecycleItems(payload: Record<string, unknown>): PaginatedResponse<RetentionRecycleItem> {
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  const mapped = items.map((item) => {
+    const row = item as Record<string, unknown>;
+    return {
+      workflow: String(row.workflow ?? "duplicate_reclaim") as RetentionRecycleItem["workflow"],
+      file_instance_id: String(row.file_instance_id ?? ""),
+      source_path: String(row.source_path ?? ""),
+      recycle_path: row.recycle_path ? String(row.recycle_path) : null,
+      current_status: String(row.current_status ?? ""),
+      retention_expires_at: row.retention_expires_at ? String(row.retention_expires_at) : null,
+      recycled_at: row.recycled_at ? String(row.recycled_at) : null,
+      purge_after_at: row.purge_after_at ? String(row.purge_after_at) : null,
+      purged_at: row.purged_at ? String(row.purged_at) : null,
+      ready_for_recycle: Boolean(row.ready_for_recycle),
+      ready_for_purge: Boolean(row.ready_for_purge),
+      days_remaining: typeof row.days_remaining === "number" ? row.days_remaining : null,
+    };
+  });
+  return mapPagination(payload, mapped);
 }
 
 export function mapLedgerRows(payload: Record<string, unknown>): PaginatedResponse<MediaFileRecord> {

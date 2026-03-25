@@ -10,7 +10,11 @@ import {
   adminDbReset,
   getDirectoryPickerCapability,
   getDirectoryPickerListing,
+  getIntegrityDashboard,
+  reportIntegrityPlaybackFailure,
+  runIntegrityScan,
   runIngest,
+  setDuplicateReclaim,
   updatePolicy,
 } from "@/lib/api/endpoints";
 
@@ -167,6 +171,82 @@ describe("api endpoints", () => {
 
     expect(apiGet).toHaveBeenCalledWith("/directory-picker/list", {
       path: "/srv/media/incoming",
+    });
+  });
+
+  it("routes integrity dashboard reads through the API client", async () => {
+    vi.mocked(apiGet).mockResolvedValue({
+      ok: true,
+      workflow_version: "v2-service-layer",
+      schema_version: "schema-1",
+      generated_at: "2026-03-25T00:00:00+00:00",
+      data: {
+        total_files_scanned: 12,
+        playback_issues: 3,
+      },
+      errors: [],
+    });
+
+    await getIntegrityDashboard();
+
+    expect(apiGet).toHaveBeenCalledWith("/integrity/dashboard");
+  });
+
+  it("posts duplicate reclaim readiness through the API client", async () => {
+    vi.mocked(apiPost).mockResolvedValue({
+      ok: true,
+      workflow_version: "v2-service-layer",
+      schema_version: "schema-1",
+      generated_at: "2026-03-25T00:00:00+00:00",
+      data: { reclaim_status: "REVIEWED_SAFE_TO_RECLAIM" },
+      errors: [],
+    });
+
+    await setDuplicateReclaim({
+      content_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
+    });
+
+    expect(apiPost).toHaveBeenCalledWith("/duplicates/reclaim", {
+      content_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
+    });
+  });
+
+  it("posts integrity scans through the operations client surface", async () => {
+    vi.mocked(apiPost).mockResolvedValue({
+      ok: true,
+      workflow_version: "v2-service-layer",
+      schema_version: "schema-1",
+      generated_at: "2026-03-25T00:00:00+00:00",
+      data: { scan_mode: "DEEP", scanned_count: 10 },
+      errors: [],
+    });
+
+    await runIntegrityScan({ mode: "DEEP", file_instance_ids: [] });
+
+    expect(apiPost).toHaveBeenCalledWith("/integrity/scan", {
+      mode: "DEEP",
+      file_instance_ids: [],
+    });
+  });
+
+  it("posts playback failure scans through the media client surface", async () => {
+    vi.mocked(apiPost).mockResolvedValue({
+      ok: true,
+      workflow_version: "v2-service-layer",
+      schema_version: "schema-1",
+      generated_at: "2026-03-25T00:00:00+00:00",
+      data: { trigger: "playback_failure" },
+      errors: [],
+    });
+
+    await reportIntegrityPlaybackFailure({
+      file_instance_id: "aaaaaaaa-0000-0000-0000-000000000002",
+    });
+
+    expect(apiPost).toHaveBeenCalledWith("/integrity/playback-failure", {
+      file_instance_id: "aaaaaaaa-0000-0000-0000-000000000002",
     });
   });
 });

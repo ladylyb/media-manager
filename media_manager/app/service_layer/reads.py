@@ -54,6 +54,7 @@ class ReadServices:
                 "latest_metrics",
                 "canonical",
                 "duplicates",
+                "integrity",
                 "ledger",
                 "admin_observability",
                 "admin_benchmarks",
@@ -222,6 +223,39 @@ class ReadServices:
 
     def duplicates(self) -> dict[str, object]:
         return {"groups": [group.to_dict() for group in self._read_service.get_duplicate_groups()]}
+
+    def integrity_dashboard(self) -> dict[str, object]:
+        return self._read_service.get_integrity_dashboard_summary().to_dict()
+
+    def integrity_issues(
+        self,
+        *,
+        status: str | None,
+        min_confidence: float | None,
+        page: int,
+        limit: int,
+    ) -> dict[str, object]:
+        return self._read_service.get_integrity_issue_page(
+            status=status,
+            min_confidence=min_confidence,
+            page=page,
+            limit=limit,
+        ).to_dict()
+
+    def integrity_file_detail(self, *, check_id: str) -> dict[str, object] | None:
+        from uuid import UUID
+
+        detail = self._read_service.get_integrity_file_detail(UUID(check_id))
+        return None if detail is None else detail.to_dict()
+
+    def integrity_quarantine_items(self, *, page: int, limit: int) -> dict[str, object]:
+        return self._read_service.get_integrity_quarantine_page(page=page, limit=limit).to_dict()
+
+    def duplicate_reclaim_items(self, *, page: int, limit: int) -> dict[str, object]:
+        return self._read_service.get_duplicate_reclaim_archive_page(page=page, limit=limit).to_dict()
+
+    def retention_recycle_items(self, *, page: int, limit: int) -> dict[str, object]:
+        return self._read_service.get_retention_recycle_page(page=page, limit=limit).to_dict()
 
     def canonical(
         self,

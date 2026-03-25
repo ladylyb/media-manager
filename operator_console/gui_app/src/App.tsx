@@ -8,6 +8,7 @@ import DashboardPage from "@/pages/DashboardPage";
 import OperationsPage from "@/pages/OperationsPage";
 import PipelineWizard from "@/pages/PipelineWizard";
 import DuplicatesPage from "@/pages/DuplicatesPage";
+import IntegrityPage from "@/pages/IntegrityPage";
 import PolicyPage from "@/pages/PolicyPage";
 import AdminPage from "@/pages/AdminPage";
 import DiagnosticsPage from "@/pages/DiagnosticsPage";
@@ -33,6 +34,7 @@ const appRoutes = [
   { path: "/pipeline-wizard", element: <PipelineWizard /> },
   { path: "/admin/diagnostics", element: <DiagnosticsPage /> },
   { path: "/duplicates", element: <DuplicatesPage /> },
+  { path: "/integrity", element: <IntegrityPage /> },
   { path: "/policy", element: <PolicyPage /> },
   { path: "/admin", element: <AdminPage /> },
   { path: "/gallery", element: <GalleryPage /> },

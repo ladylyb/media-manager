@@ -12,6 +12,7 @@ import {
   Route,
   Sparkles,
   Tag,
+  ShieldAlert,
 } from "lucide-react";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -38,11 +39,15 @@ import {
 import {
   getDirectoryPickerCapability,
   getPolicy,
+  getRetentionRecycleItems,
   getRuns,
   invalidateReadsAfterOperation,
   runApply,
   runCanonicalRecompute,
   runIngest,
+  runIntegrityScan,
+  runRetentionPurge,
+  runRetentionRecycle,
   runPlan,
   runTagEnrichment,
 } from "@/lib/api/endpoints";
@@ -59,7 +64,7 @@ import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
 import { executionStepGuidance } from "@/lib/workflow/executionStepGuidance";
 import { cn } from "@/lib/utils";
-import type { OperationResult, PaginatedResponse, Policy, Run } from "@/types";
+import type { OperationResult, PaginatedResponse, Policy, RetentionRecycleItem, Run } from "@/types";
 import type { ProgressOperationKind, ProgressOperationStatus } from "@/types/logs";
 
 type ExecuteState = {
@@ -68,8 +73,8 @@ type ExecuteState = {
   result: OperationResult | null;
 };
 
-type ConfirmingAction = "recheck-ingest" | "recheck-plan" | "apply" | "canonical" | "tag";
-type PanelId = "start" | "continue" | "recheck" | "canonical" | "tag";
+type ConfirmingAction = "recheck-ingest" | "recheck-plan" | "apply" | "canonical" | "integrity" | "retention" | "purge" | "tag";
+type PanelId = "start" | "continue" | "recheck" | "canonical" | "integrity" | "retention" | "tag";
 type OverrideConflictDetails = {
   requested_owner: string;
   requested_context: string;
@@ -283,6 +288,7 @@ export default function OperationsPage() {
   const applyPanelRef = useRef<HTMLDivElement | null>(null);
   const canonicalPanelRef = useRef<HTMLDivElement | null>(null);
   const tagPanelRef = useRef<HTMLDivElement | null>(null);
+  const retentionPanelRef = useRef<HTMLDivElement | null>(null);
   const [recheckState, setRecheckState] = useState<{ ingest: ExecuteState; plan: ExecuteState }>({
     ingest: INITIAL_EXECUTE_STATE,
     plan: INITIAL_EXECUTE_STATE,
@@ -295,6 +301,10 @@ export default function OperationsPage() {
   const [recheckClassificationRequired, setRecheckClassificationRequired] = useState<ClassificationRequiredDetails | null>(null);
   const [applyState, setApplyState] = useState<ExecuteState>(INITIAL_EXECUTE_STATE);
   const [canonicalState, setCanonicalState] = useState<ExecuteState>(INITIAL_EXECUTE_STATE);
+  const [integrityMode, setIntegrityMode] = useState<"FAST" | "DEEP">("FAST");
+  const [integrityState, setIntegrityState] = useState<ExecuteState>(INITIAL_EXECUTE_STATE);
+  const [retentionState, setRetentionState] = useState<ExecuteState>(INITIAL_EXECUTE_STATE);
+  const [purgeState, setPurgeState] = useState<ExecuteState>(INITIAL_EXECUTE_STATE);
   const [tagState, setTagState] = useState<ExecuteState>(INITIAL_EXECUTE_STATE);
   const recheckValidation = getNamingInputValidation(recheckOwner, recheckContext);
 
@@ -315,6 +325,16 @@ export default function OperationsPage() {
     queryFn: async () => (await getPolicy()).data,
     staleTime: queryOptions.policy.staleTime,
   });
+
+  const retentionRecycleQuery = useQuery({
+    queryKey: queryKeys.retentionRecycleItems(1, 100),
+    queryFn: async () => (await getRetentionRecycleItems({ page: 1, limit: 100 })).data,
+    staleTime: queryOptions.runs.staleTime,
+  });
+  const retentionItems = ((retentionRecycleQuery.data?.items ?? []) as RetentionRecycleItem[]);
+  const readyForRecycle = retentionItems.filter((item) => item.ready_for_recycle);
+  const readyForPurge = retentionItems.filter((item) => item.ready_for_purge);
+  const recycledItems = retentionItems.filter((item) => item.current_status === "RECYCLED");
 
   const policy = (policyQuery.data as Policy | undefined) ?? null;
 
@@ -400,12 +420,16 @@ export default function OperationsPage() {
       const status = toExecuteOperationStatus(canonicalState);
       return status === "idle" ? null : { kind: activeProgressKind, status };
     }
+    if (activeProgressKind === "integrity") {
+      const status = toExecuteOperationStatus(integrityState);
+      return status === "idle" ? null : { kind: activeProgressKind, status };
+    }
     if (activeProgressKind === "tag") {
       const status = toExecuteOperationStatus(tagState);
       return status === "idle" ? null : { kind: activeProgressKind, status };
     }
     return null;
-  }, [activeProgressKind, applyState, canonicalState, recheckState.ingest, recheckState.plan, tagState]);
+  }, [activeProgressKind, applyState, canonicalState, integrityState, recheckState.ingest, recheckState.plan, tagState]);
 
   const togglePanel = (panelId: PanelId) => {
     setOpenPanel((current) => (current === panelId ? null : panelId));
@@ -540,6 +564,113 @@ export default function OperationsPage() {
       await invalidateReadsAfterOperation(queryClient, "canonicalRecompute");
     } catch (err) {
       setCanonicalState({ loading: false, error: parseError(err), result: null });
+    } finally {
+      setConfirmingAction(null);
+    }
+  };
+
+  const executeIntegrityScan = async () => {
+    setIntegrityState({ loading: true, error: null, result: null });
+    setActiveProgressKind(null);
+    try {
+      const response = await runIntegrityScan({ mode: integrityMode, file_instance_ids: [] });
+      setIntegrityState({ loading: false, error: null, result: response.data });
+      await invalidateReadsAfterOperation(queryClient, "integrityScan");
+    } catch (err) {
+      setIntegrityState({ loading: false, error: parseError(err), result: null });
+    } finally {
+      setConfirmingAction(null);
+    }
+  };
+
+  const executeRetentionRecycle = async () => {
+    setRetentionState({ loading: true, error: null, result: null });
+    setActiveProgressKind(null);
+    try {
+      const items = (retentionRecycleQuery.data?.items ?? []) as RetentionRecycleItem[];
+      const duplicateIds = items
+        .filter((item) => item.ready_for_recycle && item.workflow === "duplicate_reclaim")
+        .map((item) => item.file_instance_id);
+      const integrityIds = items
+        .filter((item) => item.ready_for_recycle && item.workflow === "integrity_quarantine")
+        .map((item) => item.file_instance_id);
+
+      const duplicateResponse =
+        duplicateIds.length > 0
+          ? await runRetentionRecycle({ workflow: "duplicates", file_instance_ids: duplicateIds })
+          : null;
+      const integrityResponse =
+        integrityIds.length > 0
+          ? await runRetentionRecycle({ workflow: "integrity", file_instance_ids: integrityIds })
+          : null;
+
+      setRetentionState({
+        loading: false,
+        error: null,
+        result: {
+          operation: "RETENTION_RECYCLE",
+          success: true,
+          summary: "Eligible archived and quarantined files were moved into the recycle bin.",
+          duration_ms:
+            (duplicateResponse?.data.duration_ms ?? 0) + (integrityResponse?.data.duration_ms ?? 0),
+          details: {
+            duplicate_result: duplicateResponse?.data.details ?? null,
+            integrity_result: integrityResponse?.data.details ?? null,
+            duplicate_count: duplicateIds.length,
+            integrity_count: integrityIds.length,
+          },
+        },
+      });
+      await invalidateReadsAfterOperation(queryClient, "integrityScan");
+      await queryClient.invalidateQueries({ queryKey: queryKeys.retentionRecycleItems(1, 100) });
+    } catch (err) {
+      setRetentionState({ loading: false, error: parseError(err), result: null });
+    } finally {
+      setConfirmingAction(null);
+    }
+  };
+
+  const executeRetentionPurge = async () => {
+    setPurgeState({ loading: true, error: null, result: null });
+    setActiveProgressKind(null);
+    try {
+      const items = (retentionRecycleQuery.data?.items ?? []) as RetentionRecycleItem[];
+      const duplicateIds = items
+        .filter((item) => item.ready_for_purge && item.workflow === "duplicate_reclaim")
+        .map((item) => item.file_instance_id);
+      const integrityIds = items
+        .filter((item) => item.ready_for_purge && item.workflow === "integrity_quarantine")
+        .map((item) => item.file_instance_id);
+
+      const duplicateResponse =
+        duplicateIds.length > 0
+          ? await runRetentionPurge({ workflow: "duplicates", file_instance_ids: duplicateIds })
+          : null;
+      const integrityResponse =
+        integrityIds.length > 0
+          ? await runRetentionPurge({ workflow: "integrity", file_instance_ids: integrityIds })
+          : null;
+
+      setPurgeState({
+        loading: false,
+        error: null,
+        result: {
+          operation: "RETENTION_PURGE",
+          success: true,
+          summary: "Eligible recycle-bin items were permanently deleted.",
+          duration_ms: (duplicateResponse?.data.duration_ms ?? 0) + (integrityResponse?.data.duration_ms ?? 0),
+          details: {
+            duplicate_result: duplicateResponse?.data.details ?? null,
+            integrity_result: integrityResponse?.data.details ?? null,
+            duplicate_count: duplicateIds.length,
+            integrity_count: integrityIds.length,
+          },
+        },
+      });
+      await invalidateReadsAfterOperation(queryClient, "integrityScan");
+      await queryClient.invalidateQueries({ queryKey: queryKeys.retentionRecycleItems(1, 100) });
+    } catch (err) {
+      setPurgeState({ loading: false, error: parseError(err), result: null });
     } finally {
       setConfirmingAction(null);
     }
@@ -1088,6 +1219,170 @@ export default function OperationsPage() {
         </ActionPanel>
 
         <ActionPanel
+          panelId="integrity"
+          openPanel={openPanel}
+          onToggle={togglePanel}
+          title="Scan Current Library Integrity"
+          description="Run a read-only integrity pass across the current active library files and persist playback-health state into the integrity tables for later review."
+          summary="Best before manual issue review, when you want fresh health signals without mutating files or changing ledger lifecycle state."
+          badge="Library-wide health"
+          impactLabel="Checks before changing anything"
+          impactTone="checks"
+        >
+          <div className="space-y-4 rounded-2xl border bg-background/75 p-4">
+            <div className="space-y-2">
+              <Label htmlFor="integrity-mode">Scan mode</Label>
+              <Select value={integrityMode} onValueChange={(value: "FAST" | "DEEP") => setIntegrityMode(value)}>
+                <SelectTrigger id="integrity-mode">
+                  <SelectValue placeholder="Choose scan mode" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="FAST">Fast</SelectItem>
+                  <SelectItem value="DEEP">Deep</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Fast checks file readability and `ffprobe` metadata. Deep also attempts a short decode when `ffmpeg` is installed.
+              </p>
+            </div>
+            <div className="rounded-2xl border bg-muted/15 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                Library scope
+              </p>
+              <p className="mt-2 text-sm text-foreground">
+                This uses the current active `file_instances` set as the scan target. Results are written to integrity tables and operation logs only.
+              </p>
+              <p className="mt-2 text-xs text-muted-foreground">
+                `media_file` stays ledger-only in this phase, so library lifecycle state is preserved while integrity state is updated in the new durable tables.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <Button
+                type="button"
+                onClick={() => setConfirmingAction("integrity")}
+                disabled={integrityState.loading}
+              >
+                {integrityState.loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                <ShieldAlert className="mr-2 h-4 w-4" />
+                Run Integrity Scan
+              </Button>
+              <Button asChild type="button" variant="outline">
+                <Link to="/integrity">Open Integrity Review</Link>
+              </Button>
+            </div>
+            {integrityState.loading ? (
+              <p className="text-sm font-medium text-foreground">
+                Integrity scan started. Review results will refresh in the Integrity workspace when it completes.
+              </p>
+            ) : null}
+          </div>
+          <ResultPanel
+            state={integrityState}
+            idleCopy="The current-library integrity scan result will appear here after you run it."
+          />
+        </ActionPanel>
+
+        <ActionPanel
+          panelId="retention"
+          openPanel={openPanel}
+          onToggle={togglePanel}
+          title="Move Expired Items to Recycle Bin"
+          description="Manual soft-delete pass for archived duplicate files and quarantined integrity files whose retention window has elapsed."
+          summary="Best practice is explicit operator confirmation here, not mutation at startup. This keeps delete-like actions visible and restart-safe."
+          badge="Cautious retention"
+          impactLabel="State-changing follow-up"
+          impactTone="follow-up"
+        >
+          <div
+            ref={retentionPanelRef}
+            tabIndex={-1}
+            className="space-y-4 rounded-2xl border bg-background/75 p-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="rounded-2xl border bg-muted/15 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Ready now</p>
+                <p className="mt-2 text-2xl font-semibold text-foreground">{readyForRecycle.length}</p>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Items whose first retention window has elapsed and can be moved to the recycle bin.
+                </p>
+              </div>
+              <div className="rounded-2xl border bg-muted/15 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Recycled</p>
+                <p className="mt-2 text-2xl font-semibold text-foreground">{recycledItems.length}</p>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  These remain soft-deleted only. The warning countdown below is informational; hard delete is not automatic in this slice.
+                </p>
+              </div>
+              <div className="rounded-2xl border bg-muted/15 p-4 md:col-span-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Ready for permanent delete</p>
+                <p className="mt-2 text-2xl font-semibold text-foreground">{readyForPurge.length}</p>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  These recycle-bin items have reached the configured warning deadline and can be permanently deleted only through the CTA below.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <Button
+                type="button"
+                onClick={() => setConfirmingAction("retention")}
+                disabled={retentionState.loading || readyForRecycle.length === 0}
+              >
+                {retentionState.loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Move Eligible Items to Recycle Bin
+              </Button>
+              <Button asChild type="button" variant="outline">
+                <Link to="/duplicates">Open Duplicate Review</Link>
+              </Button>
+              <Button asChild type="button" variant="outline">
+                <Link to="/integrity">Open Integrity Review</Link>
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => setConfirmingAction("purge")}
+                disabled={purgeState.loading || readyForPurge.length === 0}
+              >
+                {purgeState.loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Permanently Delete Expired Recycle-Bin Items
+              </Button>
+            </div>
+            <div className="space-y-3">
+              {retentionItems.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No retention-tracked items are available yet.</p>
+              ) : (
+                retentionItems.slice(0, 10).map((item) => (
+                  <div key={`${item.workflow}-${item.file_instance_id}`} className="rounded-2xl border bg-muted/15 p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <StatusBadge label={item.workflow.replaceAll("_", " ")} severity="neutral" />
+                      <StatusBadge label={item.current_status} severity={item.ready_for_recycle ? "caution" : "info"} />
+                      {item.ready_for_recycle ? (
+                        <StatusBadge label="Ready for recycle" severity="caution" />
+                      ) : item.ready_for_purge ? (
+                        <StatusBadge label="Ready for permanent delete" severity="destructive" />
+                      ) : item.days_remaining !== null && item.days_remaining !== undefined ? (
+                        <StatusBadge label={`Warn: ${item.days_remaining} day(s) until purge`} severity="destructive" />
+                      ) : null}
+                    </div>
+                    <p className="mt-2 break-all text-sm text-foreground">{item.source_path}</p>
+                    {item.recycle_path ? (
+                      <p className="mt-1 break-all text-xs text-muted-foreground">Recycle path: {item.recycle_path}</p>
+                    ) : null}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+          <ResultPanel
+            state={retentionState}
+            idleCopy="The recycle-bin move result will appear here after you run the retention pass."
+          />
+          <ResultPanel
+            state={purgeState}
+            idleCopy="The permanent delete result will appear here after you run the purge pass."
+          />
+        </ActionPanel>
+
+        <ActionPanel
           panelId="tag"
           openPanel={openPanel}
           onToggle={togglePanel}
@@ -1168,6 +1463,29 @@ export default function OperationsPage() {
         title="Preview Library Decision Refresh?"
         description="This runs the existing canonical refresh preview so you can inspect how current policy choices would look."
         onConfirm={() => confirmAndRunAction(canonicalPanelRef, executeCanonicalRefresh)}
+      />
+      <ConfirmDialog
+        open={confirmingAction === "integrity"}
+        onOpenChange={(open) => setConfirmingAction(open ? "integrity" : null)}
+        title="Run current-library integrity scan?"
+        description="This scans the current active library files and persists integrity results for review. It does not move, quarantine, archive, or delete files."
+        onConfirm={executeIntegrityScan}
+      />
+      <ConfirmDialog
+        open={confirmingAction === "retention"}
+        onOpenChange={(open) => setConfirmingAction(open ? "retention" : null)}
+        title="Move expired items to recycle bin?"
+        description="This does not hard delete files. It moves only retention-eligible archived or quarantined files into the configured recycle bin and starts the purge-warning window."
+        destructive
+        onConfirm={() => confirmAndRunAction(retentionPanelRef, executeRetentionRecycle)}
+      />
+      <ConfirmDialog
+        open={confirmingAction === "purge"}
+        onOpenChange={(open) => setConfirmingAction(open ? "purge" : null)}
+        title="Permanently delete expired recycle-bin items?"
+        description="This permanently deletes only recycle-bin items whose warning window has expired. This action cannot be undone."
+        destructive
+        onConfirm={() => confirmAndRunAction(retentionPanelRef, executeRetentionPurge)}
       />
       <ConfirmDialog
         open={confirmingAction === "tag"}

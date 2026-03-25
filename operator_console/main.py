@@ -210,6 +210,60 @@ class DuplicateReviewPayload(BaseModel):
     reviewed_by: str | None = None
 
 
+class DuplicateReclaimPayload(BaseModel):
+    """Payload for durable duplicate reclaim readiness decisions."""
+
+    content_id: str
+    reclaim_status: str
+    reviewed_by: str | None = None
+
+
+class IntegrityScanPayload(BaseModel):
+    """Payload for read-only integrity scans."""
+
+    mode: str = "FAST"
+    file_instance_ids: list[str] = Field(default_factory=list)
+
+
+class IntegrityReviewPayload(BaseModel):
+    """Payload for read-only integrity review decisions."""
+
+    check_id: str
+    decision: str
+    reviewed_by: str | None = None
+
+
+class IntegrityQuarantinePayload(BaseModel):
+    check_id: str
+
+
+class IntegrityRestorePayload(BaseModel):
+    file_instance_id: str
+
+
+class IntegrityPlaybackFailurePayload(BaseModel):
+    file_instance_id: str
+
+
+class DuplicateReclaimExecutePayload(BaseModel):
+    content_ids: list[str] = Field(default_factory=list)
+    retention_days: int = 14
+
+
+class DuplicateReclaimRestorePayload(BaseModel):
+    file_instance_ids: list[str] = Field(default_factory=list)
+
+
+class RetentionRecyclePayload(BaseModel):
+    workflow: str
+    file_instance_ids: list[str] = Field(default_factory=list)
+
+
+class RetentionPurgePayload(BaseModel):
+    workflow: str
+    file_instance_ids: list[str] = Field(default_factory=list)
+
+
 @dataclass(frozen=True)
 class _DiscoveryQueryArgs:
     page: int
@@ -586,6 +640,11 @@ def create_app() -> FastAPI:
         """Render the Operator Console duplicate group browser page."""
         return _render_console_v2_shell()
 
+    @app.get("/integrity", response_class=HTMLResponse)
+    def integrity_page() -> Response:
+        """Render the Operator Console integrity review page."""
+        return _render_console_v2_shell()
+
     @app.get("/gallery", response_class=HTMLResponse)
     def gallery_page() -> Response:
         """Render the Operator Console canonical gallery page."""
@@ -764,6 +823,65 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         return _execute_read("duplicates", services.duplicates)
 
+    @app.get("/api/integrity/dashboard")
+    def integrity_dashboard_v2(
+        services: ReadServices = Depends(get_read_services),
+    ) -> JSONResponse:
+        return _execute_read("integrity-dashboard", services.integrity_dashboard)
+
+    @app.get("/api/integrity/issues")
+    def integrity_issues_v2(
+        status: str | None = Query(default=None),
+        min_confidence: float | None = Query(default=None),
+        page: int = Query(default=1),
+        limit: int = Query(default=30),
+        services: ReadServices = Depends(get_read_services),
+    ) -> JSONResponse:
+        parsed_page, parsed_limit = _parse_paging_args(page=page, limit=limit)
+        return _execute_read(
+            "integrity-issues",
+            lambda: services.integrity_issues(
+                status=status,
+                min_confidence=min_confidence,
+                page=parsed_page,
+                limit=parsed_limit,
+            ),
+        )
+
+    @app.get("/api/integrity/quarantine/items")
+    def integrity_quarantine_items_v2(
+        page: int = Query(default=1),
+        limit: int = Query(default=30),
+        services: ReadServices = Depends(get_read_services),
+    ) -> JSONResponse:
+        parsed_page, parsed_limit = _parse_paging_args(page=page, limit=limit)
+        return _execute_read(
+            "integrity-quarantine-items",
+            lambda: services.integrity_quarantine_items(page=parsed_page, limit=parsed_limit),
+        )
+
+    @app.get("/api/retention/recycle")
+    def retention_recycle_items_v2(
+        page: int = Query(default=1),
+        limit: int = Query(default=30),
+        services: ReadServices = Depends(get_read_services),
+    ) -> JSONResponse:
+        parsed_page, parsed_limit = _parse_paging_args(page=page, limit=limit)
+        return _execute_read(
+            "retention-recycle-items",
+            lambda: services.retention_recycle_items(page=parsed_page, limit=parsed_limit),
+        )
+
+    @app.get("/api/integrity/file/{check_id}")
+    def integrity_file_detail_v2(
+        check_id: UUID,
+        services: ReadServices = Depends(get_read_services),
+    ) -> JSONResponse:
+        detail = services.integrity_file_detail(check_id=str(check_id))
+        if detail is None:
+            raise HTTPException(status_code=404, detail="Integrity check not found.")
+        return _execute_read("integrity-file", lambda: detail)
+
     @app.post("/api/duplicates/review")
     def duplicate_review_set_v2(
         payload: DuplicateReviewPayload,
@@ -777,6 +895,148 @@ def create_app() -> FastAPI:
                 reviewed_canonical_instance_id=payload.reviewed_canonical_instance_id,
                 reviewed_by=payload.reviewed_by,
             ),
+        )
+
+    @app.post("/api/duplicates/reclaim")
+    def duplicate_reclaim_set_v2(
+        payload: DuplicateReclaimPayload,
+        services: OperationServices = Depends(get_operation_services),
+    ) -> JSONResponse:
+        return _execute_mutation(
+            "duplicates-reclaim",
+            lambda: services.duplicate_reclaim_set(
+                content_id=payload.content_id,
+                reclaim_status=payload.reclaim_status,
+                reviewed_by=payload.reviewed_by,
+            ),
+        )
+
+    @app.post("/api/duplicates/reclaim/execute")
+    def duplicate_reclaim_execute_v2(
+        payload: DuplicateReclaimExecutePayload,
+        services: OperationServices = Depends(get_operation_services),
+    ) -> JSONResponse:
+        return _execute_mutation(
+            "duplicates-reclaim-execute",
+            lambda: services.duplicate_reclaim_execute(
+                content_ids=payload.content_ids,
+                retention_days=payload.retention_days,
+            ),
+        )
+
+    @app.get("/api/duplicates/reclaim/items")
+    def duplicate_reclaim_items_v2(
+        page: int = Query(default=1),
+        limit: int = Query(default=30),
+        services: ReadServices = Depends(get_read_services),
+    ) -> JSONResponse:
+        parsed_page, parsed_limit = _parse_paging_args(page=page, limit=limit)
+        return _execute_read(
+            "duplicates-reclaim-items",
+            lambda: services.duplicate_reclaim_items(page=parsed_page, limit=parsed_limit),
+        )
+
+    @app.post("/api/duplicates/reclaim/restore")
+    def duplicate_reclaim_restore_v2(
+        payload: DuplicateReclaimRestorePayload,
+        services: OperationServices = Depends(get_operation_services),
+    ) -> JSONResponse:
+        return _execute_mutation(
+            "duplicates-reclaim-restore",
+            lambda: services.duplicate_reclaim_restore(file_instance_ids=payload.file_instance_ids),
+        )
+
+    @app.post("/api/retention/recycle")
+    def retention_recycle_v2(
+        payload: RetentionRecyclePayload,
+        services: OperationServices = Depends(get_operation_services),
+    ) -> JSONResponse:
+        workflow = payload.workflow.strip().lower()
+        if workflow == "duplicates":
+            return _execute_mutation(
+                "retention-recycle-duplicates",
+                lambda: services.retention_recycle_duplicates(file_instance_ids=payload.file_instance_ids),
+            )
+        if workflow == "integrity":
+            return _execute_mutation(
+                "retention-recycle-integrity",
+                lambda: services.retention_recycle_integrity(file_instance_ids=payload.file_instance_ids),
+            )
+        raise HTTPException(status_code=400, detail="workflow must be one of: duplicates, integrity")
+
+    @app.post("/api/retention/purge")
+    def retention_purge_v2(
+        payload: RetentionPurgePayload,
+        services: OperationServices = Depends(get_operation_services),
+    ) -> JSONResponse:
+        workflow = payload.workflow.strip().lower()
+        if workflow == "duplicates":
+            return _execute_mutation(
+                "retention-purge-duplicates",
+                lambda: services.retention_purge_duplicates(file_instance_ids=payload.file_instance_ids),
+            )
+        if workflow == "integrity":
+            return _execute_mutation(
+                "retention-purge-integrity",
+                lambda: services.retention_purge_integrity(file_instance_ids=payload.file_instance_ids),
+            )
+        raise HTTPException(status_code=400, detail="workflow must be one of: duplicates, integrity")
+
+    @app.post("/api/integrity/scan")
+    def integrity_scan_v2(
+        payload: IntegrityScanPayload,
+        services: OperationServices = Depends(get_operation_services),
+    ) -> JSONResponse:
+        return _execute_mutation(
+            "integrity-scan",
+            lambda: services.integrity_scan(
+                mode=payload.mode,
+                file_instance_ids=payload.file_instance_ids,
+            ),
+        )
+
+    @app.post("/api/integrity/playback-failure")
+    def integrity_playback_failure_v2(
+        payload: IntegrityPlaybackFailurePayload,
+        services: OperationServices = Depends(get_operation_services),
+    ) -> JSONResponse:
+        return _execute_mutation(
+            "integrity-playback-failure",
+            lambda: services.integrity_playback_failure(file_instance_id=payload.file_instance_id),
+        )
+
+    @app.post("/api/integrity/review")
+    def integrity_review_set_v2(
+        payload: IntegrityReviewPayload,
+        services: OperationServices = Depends(get_operation_services),
+    ) -> JSONResponse:
+        return _execute_mutation(
+            "integrity-review",
+            lambda: services.integrity_review_set(
+                check_id=payload.check_id,
+                decision=payload.decision,
+                reviewed_by=payload.reviewed_by,
+            ),
+        )
+
+    @app.post("/api/integrity/quarantine")
+    def integrity_quarantine_v2(
+        payload: IntegrityQuarantinePayload,
+        services: OperationServices = Depends(get_operation_services),
+    ) -> JSONResponse:
+        return _execute_mutation(
+            "integrity-quarantine",
+            lambda: services.integrity_quarantine(check_id=payload.check_id),
+        )
+
+    @app.post("/api/integrity/restore")
+    def integrity_restore_v2(
+        payload: IntegrityRestorePayload,
+        services: OperationServices = Depends(get_operation_services),
+    ) -> JSONResponse:
+        return _execute_mutation(
+            "integrity-restore",
+            lambda: services.integrity_restore(file_instance_id=payload.file_instance_id),
         )
 
     @app.get("/api/media-file/by-hash")

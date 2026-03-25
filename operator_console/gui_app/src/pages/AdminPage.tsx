@@ -1803,7 +1803,14 @@ function SystemHealthTab() {
           {(runsQuery.data?.data as Run[] | undefined)?.slice(0, 12).map((run) => (
             <div key={run.operation_run_id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3">
               <div>
-                <div className="font-medium">{run.operation_type}</div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="font-medium">{run.operation_type}</div>
+                  {typeof run.context?.trigger === "string" ? (
+                    <span className="rounded-full border border-border/70 bg-muted px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                      {String(run.context.trigger).replaceAll("_", " ")}
+                    </span>
+                  ) : null}
+                </div>
                 <div className="font-mono text-xs text-muted-foreground">{run.operation_run_id}</div>
               </div>
               <div className="text-sm text-muted-foreground">{new Date(run.started_at).toLocaleString()}</div>

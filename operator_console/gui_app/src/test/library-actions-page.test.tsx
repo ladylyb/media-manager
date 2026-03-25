@@ -10,11 +10,15 @@ const mocks = vi.hoisted(() => ({
   getDirectoryPickerListing: vi.fn(),
   getDirectoryPickerCapability: vi.fn(),
   getPolicy: vi.fn(),
+  getRetentionRecycleItems: vi.fn(),
   getRuns: vi.fn(),
   invalidateReadsAfterOperation: vi.fn(),
   runApply: vi.fn(),
   runCanonicalRecompute: vi.fn(),
   runIngest: vi.fn(),
+  runIntegrityScan: vi.fn(),
+  runRetentionPurge: vi.fn(),
+  runRetentionRecycle: vi.fn(),
   runPlan: vi.fn(),
   runTagEnrichment: vi.fn(),
 }));
@@ -23,11 +27,15 @@ vi.mock("@/lib/api/endpoints", () => ({
   getDirectoryPickerListing: mocks.getDirectoryPickerListing,
   getDirectoryPickerCapability: mocks.getDirectoryPickerCapability,
   getPolicy: mocks.getPolicy,
+  getRetentionRecycleItems: mocks.getRetentionRecycleItems,
   getRuns: mocks.getRuns,
   invalidateReadsAfterOperation: mocks.invalidateReadsAfterOperation,
   runApply: mocks.runApply,
   runCanonicalRecompute: mocks.runCanonicalRecompute,
   runIngest: mocks.runIngest,
+  runIntegrityScan: mocks.runIntegrityScan,
+  runRetentionPurge: mocks.runRetentionPurge,
+  runRetentionRecycle: mocks.runRetentionRecycle,
   runPlan: mocks.runPlan,
   runTagEnrichment: mocks.runTagEnrichment,
 }));
@@ -105,12 +113,72 @@ describe("Import page", () => {
       },
     });
     mocks.invalidateReadsAfterOperation.mockResolvedValue(undefined);
+    mocks.getRetentionRecycleItems.mockResolvedValue({
+      data: {
+        items: [
+          {
+            workflow: "integrity_quarantine",
+            file_instance_id: "file-1",
+            source_path: "/tmp/media-manager/quarantine/problem.mp4",
+            recycle_path: null,
+            current_status: "QUARANTINED",
+            retention_expires_at: "2026-03-26T12:00:00Z",
+            recycled_at: null,
+            purge_after_at: null,
+            ready_for_recycle: true,
+            ready_for_purge: false,
+            days_remaining: null,
+          },
+          {
+            workflow: "duplicate_reclaim",
+            file_instance_id: "file-2",
+            source_path: "/tmp/media-manager/recycle-bin/duplicates/file-2.jpg",
+            recycle_path: "/tmp/media-manager/recycle-bin/duplicates/file-2.jpg",
+            current_status: "RECYCLED",
+            retention_expires_at: "2026-03-01T12:00:00Z",
+            recycled_at: "2026-03-02T12:00:00Z",
+            purge_after_at: "2026-03-03T12:00:00Z",
+            purged_at: null,
+            ready_for_recycle: false,
+            ready_for_purge: true,
+            days_remaining: 0,
+          },
+        ],
+      },
+    });
     mocks.runApply.mockResolvedValue({
       data: {
         operation: "APPLY",
         success: true,
         summary: "Applied saved work.",
         details: { run_id: "durable-run-1" },
+        duration_ms: 42,
+      },
+    });
+    mocks.runIntegrityScan.mockResolvedValue({
+      data: {
+        operation: "INTEGRITY_SCAN",
+        success: true,
+        summary: "Integrity Scan completed.",
+        details: { scan_mode: "FAST", scanned_count: 12 },
+        duration_ms: 42,
+      },
+    });
+    mocks.runRetentionRecycle.mockResolvedValue({
+      data: {
+        operation: "RETENTION_RECYCLE",
+        success: true,
+        summary: "Retention recycle completed.",
+        details: { moved_count: 1 },
+        duration_ms: 42,
+      },
+    });
+    mocks.runRetentionPurge.mockResolvedValue({
+      data: {
+        operation: "RETENTION_PURGE",
+        success: true,
+        summary: "Retention purge completed.",
+        details: { deleted_count: 1 },
         duration_ms: 42,
       },
     });
@@ -128,6 +196,8 @@ describe("Import page", () => {
     expect(screen.getByText("Continue a Saved Plan")).toBeInTheDocument();
     expect(screen.getByText("Recheck a Folder")).toBeInTheDocument();
     expect(screen.getByText("Refresh Library Decisions")).toBeInTheDocument();
+    expect(screen.getByText("Scan Current Library Integrity")).toBeInTheDocument();
+    expect(screen.getByText("Move Expired Items to Recycle Bin")).toBeInTheDocument();
     expect(screen.getByText("Add Searchable Details")).toBeInTheDocument();
     expect(screen.queryByText("Legacy Composite Run")).not.toBeInTheDocument();
     expect(screen.queryByText("Mutating")).not.toBeInTheDocument();
@@ -157,6 +227,35 @@ describe("Import page", () => {
     expect(screen.getByText("What success looks like")).toBeInTheDocument();
     expect(screen.getByText("Risk level")).toBeInTheDocument();
   }, 10000);
+
+  it("shows retention readiness and allows recycle-bin confirmation", async () => {
+    renderPage();
+
+    await screen.findByText("Move Expired Items to Recycle Bin");
+    fireEvent.click(screen.getByRole("button", { name: /Move Expired Items to Recycle Bin/ }));
+
+    expect(screen.getByText("Ready now")).toBeInTheDocument();
+    expect(screen.getByText("Recycled")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Move Eligible Items to Recycle Bin" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+
+    await waitFor(() => expect(mocks.runRetentionRecycle).toHaveBeenCalled());
+  });
+
+  it("shows permanent delete readiness and allows purge confirmation", async () => {
+    renderPage();
+
+    await screen.findByText("Move Expired Items to Recycle Bin");
+    fireEvent.click(screen.getByRole("button", { name: /Move Expired Items to Recycle Bin/ }));
+
+    expect(screen.getAllByText("Ready for permanent delete").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Permanently Delete Expired Recycle-Bin Items" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+
+    await waitFor(() => expect(mocks.runRetentionPurge).toHaveBeenCalled());
+  });
 
   it("uses softened state styling for open and closed panels", async () => {
     renderPage();
@@ -232,6 +331,19 @@ describe("Import page", () => {
       }),
     );
   }, 10000);
+
+  it("runs integrity scan for the current active library set from the operations page", async () => {
+    renderPage();
+
+    await screen.findByText("Scan Current Library Integrity");
+    fireEvent.click(screen.getByRole("button", { name: /Scan Current Library Integrity/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Run Integrity Scan" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+
+    await waitFor(() =>
+      expect(mocks.runIntegrityScan).toHaveBeenCalledWith({ mode: "FAST", file_instance_ids: [] }),
+    );
+  });
 
   it("blocks prepare plan when naming inputs are invalid and clears once fixed", async () => {
     renderPage();
