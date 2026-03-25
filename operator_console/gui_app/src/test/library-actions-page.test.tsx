@@ -359,10 +359,22 @@ describe("Import page", () => {
       }),
     );
 
+    expect(
+      await screen.findByText(
+        "If Apply fails, fix the issue and retry this same durable run ID instead of starting ingest and plan again.",
+      ),
+    ).toBeInTheDocument();
+
     fireEvent.click(screen.getByRole("button", { name: "Enter Run ID Instead" }));
     fireEvent.change(screen.getByPlaceholderText("00000000-0000-0000-0000-000000000000"), {
       target: { value: "manual-run-42" },
     });
+
+    expect(
+      screen.getByText(
+        "Use this when you already know the durable run ID you want to apply, including retrying a failed apply after the underlying problem has been fixed.",
+      ),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Apply Saved Work" }));
     fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));

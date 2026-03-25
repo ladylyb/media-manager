@@ -7,12 +7,15 @@ import pytest
 from sqlalchemy import select
 
 from media_manager.app.core.errors import ApplyStateError
+from media_manager.app.core.path_resolver import collision_filename
 from media_manager.app.persistence.apply import ApplyService
 from media_manager.app.persistence.models import (
     ApplyAuditItem,
     ApplyAuditRun,
+    FileInstance,
     FailureEvent,
     FailurePhase,
+    PlannedAction,
     Run,
     RunStateDB,
 )
@@ -36,6 +39,17 @@ def _create_planned_run_with_actions(tmp_path: Path, session_factory) -> uuid.UU
     dup_path = _write_file(tmp_path / "inbox" / "dup_copy.jpg", b"dup-content")
     _write_file(tmp_path / "inbox" / "unsupported.customext", b"unsupported")
     planner.plan_run(run.id, [noop_path, move_path, dup_path, tmp_path / "inbox" / "unsupported.customext"])
+    return run.id
+
+
+def _create_planned_run_with_moves_only(tmp_path: Path, session_factory) -> uuid.UUID:
+    run_service = RunService(session_factory)
+    planner = PlanningService(session_factory)
+    run = run_service.create_run()
+
+    move_a = _write_file(tmp_path / "inbox" / "IMG_20240111.jpg", b"content-a")
+    move_b = _write_file(tmp_path / "inbox" / "IMG_20240112.jpg", b"content-b")
+    planner.plan_run(run.id, [move_a, move_b])
     return run.id
 
 
@@ -74,7 +88,7 @@ def test_apply_service_state_enforcement_non_planned_raises(session_factory) -> 
     service = ApplyService(session_factory)
     run = run_service.create_run()
 
-    with pytest.raises(ApplyStateError, match="Apply is only allowed from PLANNED"):
+    with pytest.raises(ApplyStateError, match="Apply is only allowed from PLANNED or FAILED"):
         service.apply_run(run.id)
 
 
@@ -156,3 +170,154 @@ def test_apply_service_records_invalid_target_parent_path_failure(tmp_path: Path
         error_codes = {failure.error_code for failure in failures}
         assert "TARGET_PARENT_PATH_INVALID" in error_codes
         assert "APPLY_FAILED" in error_codes
+
+
+def test_apply_rename_collision_mode_resolves_to_collision_suffix(tmp_path: Path, session_factory) -> None:
+    run_id = _create_planned_run_with_moves_only(tmp_path, session_factory)
+
+    with session_factory() as session:
+        action = session.scalar(
+            select(PlannedAction)
+            .where(PlannedAction.run_id == run_id, PlannedAction.action_type == "RENAME")
+            .order_by(PlannedAction.target_path.asc())
+        )
+        assert action is not None
+        occupied_path = Path(action.target_path or "")
+        file_row = session.get(FileInstance, action.file_id)
+        assert file_row is not None
+
+    _write_file(occupied_path, b"occupied")
+
+    summary = ApplyService(session_factory).apply_run(run_id, collision_mode="rename")
+    assert summary.applied_count == 2
+
+    resolved_path = occupied_path.with_name(collision_filename(occupied_path.name, 1))
+    assert occupied_path.exists()
+    assert resolved_path.exists()
+
+    with session_factory() as session:
+        file_row = session.get(FileInstance, action.file_id)
+        assert file_row is not None
+        assert file_row.absolute_path == str(resolved_path.resolve(strict=False))
+
+        audit_run = session.scalars(
+            select(ApplyAuditRun).where(ApplyAuditRun.run_id == run_id).order_by(ApplyAuditRun.started_at.desc())
+        ).first()
+        assert audit_run is not None
+        audit_item = session.scalar(
+            select(ApplyAuditItem).where(
+                ApplyAuditItem.run_id == audit_run.id,
+                ApplyAuditItem.planned_action_id == action.id,
+            )
+        )
+        assert audit_item is not None
+        assert audit_item.result == "APPLIED"
+        assert audit_item.target_path == str(resolved_path.resolve(strict=False))
+
+
+def test_apply_skip_collision_mode_records_skipped_item_and_completes(tmp_path: Path, session_factory) -> None:
+    run_id = _create_planned_run_with_moves_only(tmp_path, session_factory)
+
+    with session_factory() as session:
+        action = session.scalar(
+            select(PlannedAction)
+            .where(PlannedAction.run_id == run_id, PlannedAction.action_type == "RENAME")
+            .order_by(PlannedAction.target_path.asc())
+        )
+        assert action is not None
+        occupied_path = Path(action.target_path or "")
+
+    _write_file(occupied_path, b"occupied")
+
+    summary = ApplyService(session_factory).apply_run(run_id, collision_mode="skip")
+    assert summary.skipped_count == 1
+
+    with session_factory() as session:
+        run = session.scalar(select(Run).where(Run.id == run_id))
+        assert run is not None
+        assert run.state == RunStateDB.COMPLETED
+
+        audit_runs = session.scalars(select(ApplyAuditRun).where(ApplyAuditRun.run_id == run_id)).all()
+        assert len(audit_runs) == 1
+        skipped_item = session.scalar(
+            select(ApplyAuditItem).where(
+                ApplyAuditItem.run_id == audit_runs[0].id,
+                ApplyAuditItem.planned_action_id == action.id,
+            )
+        )
+        assert skipped_item is not None
+        assert skipped_item.result == "SKIPPED"
+        assert "collision_mode=skip" in (skipped_item.error_message or "")
+
+
+def test_apply_fail_collision_mode_preserves_failure_behavior(tmp_path: Path, session_factory) -> None:
+    run_id = _create_planned_run_with_moves_only(tmp_path, session_factory)
+
+    with session_factory() as session:
+        action = session.scalar(
+            select(PlannedAction)
+            .where(PlannedAction.run_id == run_id, PlannedAction.action_type == "RENAME")
+            .order_by(PlannedAction.target_path.asc())
+        )
+        assert action is not None
+        occupied_path = Path(action.target_path or "")
+
+    _write_file(occupied_path, b"occupied")
+
+    with pytest.raises(RuntimeError, match="Apply target path already occupied unexpectedly"):
+        ApplyService(session_factory).apply_run(run_id, collision_mode="fail")
+
+    with session_factory() as session:
+        run = session.scalar(select(Run).where(Run.id == run_id))
+        assert run is not None
+        assert run.state == RunStateDB.FAILED
+        failure_codes = {
+            failure.error_code for failure in session.scalars(select(FailureEvent).where(FailureEvent.run_id == run_id)).all()
+        }
+        assert "TARGET_PATH_OCCUPIED" in failure_codes
+        assert "APPLY_FAILED" in failure_codes
+
+
+def test_apply_failed_run_resume_skips_previously_applied_actions(tmp_path: Path, session_factory) -> None:
+    run_id = _create_planned_run_with_moves_only(tmp_path, session_factory)
+    service = ApplyService(session_factory)
+    real_execute = service._execute_action
+    call_count = 0
+
+    def _fail_after_first_action(run_uuid, action, collision_mode):  # type: ignore[no-untyped-def]
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise RuntimeError("simulated mid-run failure")
+        return real_execute(run_uuid, action, collision_mode)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(service, "_execute_action", _fail_after_first_action)
+    try:
+        with pytest.raises(RuntimeError, match="simulated mid-run failure"):
+            service.apply_run(run_id, collision_mode="rename")
+    finally:
+        monkeypatch.undo()
+
+    resumed_summary = ApplyService(session_factory).apply_run(run_id, collision_mode="rename")
+    assert resumed_summary.applied_count == 1
+
+    with session_factory() as session:
+        run = session.scalar(select(Run).where(Run.id == run_id))
+        assert run is not None
+        assert run.state == RunStateDB.COMPLETED
+
+        audit_runs = session.scalars(
+            select(ApplyAuditRun).where(ApplyAuditRun.run_id == run_id).order_by(ApplyAuditRun.started_at.asc())
+        ).all()
+        assert len(audit_runs) == 2
+
+        applied_items = session.scalars(
+            select(ApplyAuditItem)
+            .join(ApplyAuditRun, ApplyAuditRun.id == ApplyAuditItem.run_id)
+            .where(
+                ApplyAuditRun.run_id == run_id,
+                ApplyAuditItem.result == "APPLIED",
+            )
+        ).all()
+        assert len(applied_items) == 2

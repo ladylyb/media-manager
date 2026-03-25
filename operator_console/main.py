@@ -238,6 +238,14 @@ def _require_non_empty(value: str | None, field_name: str) -> str:
     return normalized
 
 
+def _resolve_console_static_dir(package_root: Path) -> Path:
+    """Prefer untracked gui_app/dist assets, falling back to legacy static_v2 snapshots."""
+    dist_dir = package_root / "gui_app" / "dist"
+    if (dist_dir / "index.html").exists():
+        return dist_dir
+    return package_root / "static_v2"
+
+
 def _parse_sample_limit(value: int) -> int:
     parsed = int(value)
     if parsed < 1 or parsed > 200:
@@ -499,14 +507,14 @@ def _parse_discovery_query_args(
 def create_app() -> FastAPI:
     """Create and configure the Operator Console FastAPI application."""
     package_root = Path(__file__).parent
-    static_v2_dir = package_root / "static_v2"
-    static_v2_index = static_v2_dir / "index.html"
+    console_static_dir = _resolve_console_static_dir(package_root)
+    console_static_index = console_static_dir / "index.html"
 
     # Polling `/logs` is intentional, but its access records should not dominate INFO logs.
     _install_logs_endpoint_access_filter()
 
     app = FastAPI(title="Media Manager Operator Console")
-    app.mount("/static-v2", StaticFiles(directory=str(static_v2_dir)), name="static-v2")
+    app.mount("/static-v2", StaticFiles(directory=str(console_static_dir)), name="static-v2")
     mount_metrics_endpoint(app)
 
     @app.exception_handler(HTTPException)
@@ -528,20 +536,21 @@ def create_app() -> FastAPI:
         return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
     def _render_console_v2_shell() -> Response:
-        if not static_v2_index.exists():
+        if not console_static_index.exists():
             return HTMLResponse(
                 status_code=503,
                 content=(
                     "Operator Console v2 assets are missing. "
-                    "Build and copy frontend assets into operator_console/static_v2/."
+                    "Build frontend assets into operator_console/gui_app/dist/ "
+                    "or restore the legacy operator_console/static_v2/ fallback."
                 ),
             )
-        return FileResponse(path=static_v2_index)
+        return FileResponse(path=console_static_index)
 
     @app.get("/favicon.ico")
     def favicon() -> Response:
         """Serve the root favicon expected by browsers and crawlers."""
-        favicon_path = static_v2_dir / "favicon.ico"
+        favicon_path = console_static_dir / "favicon.ico"
         if not favicon_path.exists():
             raise HTTPException(status_code=404, detail="favicon.ico was not found.")
         return FileResponse(path=favicon_path)

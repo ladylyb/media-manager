@@ -338,6 +338,12 @@ describe("Pipeline Wizard page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Continue to Duplicate Review" }));
     fireEvent.click(await screen.findByRole("button", { name: "Continue to Apply" }));
 
+    expect(
+      await screen.findByText(
+        "This saved plan reference was carried forward from the previous Plan step. In the wizard, Apply uses the default guided collision handling automatically, and a failed apply can be retried with this same durable run ID after the root cause is fixed.",
+      ),
+    ).toBeInTheDocument();
+
     const applyButton = await screen.findByRole("button", { name: "Apply Plan" });
     fireEvent.click(applyButton);
     fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));

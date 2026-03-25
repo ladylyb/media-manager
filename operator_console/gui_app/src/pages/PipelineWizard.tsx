@@ -387,6 +387,12 @@ function parseError(err: unknown): string {
   return String(err);
 }
 
+function buildApplyErrorMessage(err: unknown, runId: string): string {
+  const baseMessage = parseError(err);
+  if (!runId) return baseMessage;
+  return `${baseMessage} Retry the same durable run ID (${runId}) after fixing the root cause.`;
+}
+
 function toProgressOperationStatus(status: StepStatus): ProgressOperationStatus {
   if (status === "running") return "running";
   if (status === "completed") return "completed";
@@ -793,7 +799,10 @@ export default function PipelineWizard() {
           [stepId]: {
             ...current.steps[stepId],
             status: "failed",
-            error: parseError(err),
+            error:
+              stepId === "apply"
+                ? buildApplyErrorMessage(err, current.steps.apply.input.run_id)
+                : parseError(err),
           },
         },
       }));
@@ -1817,7 +1826,7 @@ export default function PipelineWizard() {
               {state.input.run_id || "--"}
             </p>
             <p className="mt-3 text-sm text-muted-foreground">
-              This saved plan reference was carried forward from the previous Plan step. In the wizard, Apply uses the default guided collision handling automatically.
+              This saved plan reference was carried forward from the previous Plan step. In the wizard, Apply uses the default guided collision handling automatically, and a failed apply can be retried with this same durable run ID after the root cause is fixed.
             </p>
             {state.status === "running" ? (
               <p className="mt-3 text-sm font-medium text-foreground">
