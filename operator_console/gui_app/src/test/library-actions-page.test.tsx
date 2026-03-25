@@ -314,6 +314,35 @@ describe("Import page", () => {
     );
   }, 10000);
 
+  it("shows classification guidance on recheck plan when content is still unclassified", async () => {
+    mocks.runPlan.mockRejectedValueOnce(
+      new ApiClientError("classification required", 400, [
+        {
+          code: "OWNER_CONTEXT_CLASSIFICATION_REQUIRED",
+          message: "classification required",
+          details: {
+            unclassified_group_count: 2,
+            sample_content_id: "content-unknown",
+            sample_paths: ["/media/incoming/a.jpg"],
+          },
+        },
+      ]),
+    );
+
+    renderPage();
+
+    await screen.findByText("Recheck a Folder");
+    fireEvent.click(screen.getByRole("button", { name: /Recheck a Folder/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Browse Folders" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Use This Path" }));
+    fireEvent.click(screen.getByRole("button", { name: "Prepare Plan" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+
+    expect(await screen.findByText("Explicit classification is required")).toBeInTheDocument();
+    expect(screen.getByText("Unclassified groups: 2")).toBeInTheDocument();
+    expect(screen.getByText("Example content group: content-unknown")).toBeInTheDocument();
+  });
+
   it("closes the apply confirmation dialog immediately and keeps execution on the main panel", async () => {
     let resolveApply: ((value: { data: Record<string, unknown> }) => void) | null = null;
     mocks.runApply.mockReturnValue(

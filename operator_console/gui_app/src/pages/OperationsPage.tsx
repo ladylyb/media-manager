@@ -79,6 +79,11 @@ type OverrideConflictDetails = {
   sample_content_id?: string;
   sample_paths?: string[];
 };
+type ClassificationRequiredDetails = {
+  unclassified_group_count: number;
+  sample_content_id?: string;
+  sample_paths?: string[];
+};
 
 const INITIAL_EXECUTE_STATE: ExecuteState = {
   loading: false,
@@ -98,6 +103,19 @@ function asOverrideConflictDetails(value: unknown): OverrideConflictDetails | nu
       typeof record.existing_context === "string" ? record.existing_context : DEFAULT_CONTEXT,
     conflicting_group_count:
       typeof record.conflicting_group_count === "number" ? record.conflicting_group_count : 1,
+    sample_content_id: typeof record.sample_content_id === "string" ? record.sample_content_id : undefined,
+    sample_paths: Array.isArray(record.sample_paths)
+      ? record.sample_paths.filter((item): item is string => typeof item === "string")
+      : undefined,
+  };
+}
+
+function asClassificationRequiredDetails(value: unknown): ClassificationRequiredDetails | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  return {
+    unclassified_group_count:
+      typeof record.unclassified_group_count === "number" ? record.unclassified_group_count : 1,
     sample_content_id: typeof record.sample_content_id === "string" ? record.sample_content_id : undefined,
     sample_paths: Array.isArray(record.sample_paths)
       ? record.sample_paths.filter((item): item is string => typeof item === "string")
@@ -274,6 +292,7 @@ export default function OperationsPage() {
   const [recheckNamingStrategy, setRecheckNamingStrategy] = useState(DEFAULT_NAMING_STRATEGY);
   const [recheckOverrideConfirmed, setRecheckOverrideConfirmed] = useState(false);
   const [recheckOverrideConflict, setRecheckOverrideConflict] = useState<OverrideConflictDetails | null>(null);
+  const [recheckClassificationRequired, setRecheckClassificationRequired] = useState<ClassificationRequiredDetails | null>(null);
   const [applyState, setApplyState] = useState<ExecuteState>(INITIAL_EXECUTE_STATE);
   const [canonicalState, setCanonicalState] = useState<ExecuteState>(INITIAL_EXECUTE_STATE);
   const [tagState, setTagState] = useState<ExecuteState>(INITIAL_EXECUTE_STATE);
@@ -432,6 +451,7 @@ export default function OperationsPage() {
     setActiveProgressKind(mode);
     if (mode === "plan") {
       setRecheckOverrideConflict(null);
+      setRecheckClassificationRequired(null);
     }
 
     try {
@@ -459,6 +479,13 @@ export default function OperationsPage() {
         const details = asOverrideConflictDetails(overrideError?.details);
         if (details) {
           setRecheckOverrideConflict(details);
+        }
+        const classificationError = err.errors?.find(
+          (item) => item.code === "OWNER_CONTEXT_CLASSIFICATION_REQUIRED",
+        );
+        const classificationDetails = asClassificationRequiredDetails(classificationError?.details);
+        if (classificationDetails) {
+          setRecheckClassificationRequired(classificationDetails);
         }
       }
       setRecheckState((current) => ({
@@ -817,16 +844,17 @@ export default function OperationsPage() {
               {recheckFolderPath || "Choose a server folder to validate or plan again."}
             </p>
             <div className="grid gap-4 lg:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="recheck-owner">Owner</Label>
-                <Input
-                  id="recheck-owner"
-                  value={recheckOwner}
-                  onChange={(event) => {
-                    setRecheckOwner(event.target.value);
-                    setRecheckOverrideConfirmed(false);
-                    setRecheckOverrideConflict(null);
-                  }}
+                <div className="space-y-2">
+                  <Label htmlFor="recheck-owner">Owner</Label>
+                  <Input
+                    id="recheck-owner"
+                    value={recheckOwner}
+                    onChange={(event) => {
+                      setRecheckOwner(event.target.value);
+                      setRecheckOverrideConfirmed(false);
+                      setRecheckOverrideConflict(null);
+                      setRecheckClassificationRequired(null);
+                    }}
                   placeholder={DEFAULT_OWNER}
                   aria-invalid={Boolean(recheckValidation.ownerError)}
                   className={cn(recheckValidation.ownerError && "border-destructive focus-visible:ring-destructive")}
@@ -840,14 +868,15 @@ export default function OperationsPage() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="recheck-context">Context</Label>
-                <Input
-                  id="recheck-context"
-                  value={recheckContext}
-                  onChange={(event) => {
-                    setRecheckContext(event.target.value);
-                    setRecheckOverrideConfirmed(false);
-                    setRecheckOverrideConflict(null);
-                  }}
+                  <Input
+                    id="recheck-context"
+                    value={recheckContext}
+                    onChange={(event) => {
+                      setRecheckContext(event.target.value);
+                      setRecheckOverrideConfirmed(false);
+                      setRecheckOverrideConflict(null);
+                      setRecheckClassificationRequired(null);
+                    }}
                   placeholder={DEFAULT_CONTEXT}
                   aria-invalid={Boolean(recheckValidation.contextError)}
                   className={cn(recheckValidation.contextError && "border-destructive focus-visible:ring-destructive")}
@@ -895,6 +924,37 @@ export default function OperationsPage() {
               <p>Context: {recheckContext || DEFAULT_CONTEXT}</p>
               <p>Naming strategy: {formatNamingStrategy(recheckNamingStrategy)}</p>
             </div>
+            {recheckClassificationRequired ? (
+              <div className="space-y-3 rounded-xl border border-amber-300 bg-amber-50/80 p-4">
+                <div>
+                  <p className="text-sm font-semibold text-amber-950">Explicit classification is required</p>
+                  <p className="mt-1 text-sm leading-6 text-amber-900/90">
+                    Planning found content in this folder that is still marked as unclassified from ingest. Use
+                    explicit owner and context values here before naming can continue.
+                  </p>
+                </div>
+                <div className="grid gap-2 text-sm text-amber-950 sm:grid-cols-2">
+                  <p>Unclassified groups: {recheckClassificationRequired.unclassified_group_count}</p>
+                  {recheckClassificationRequired.sample_content_id ? (
+                    <p className="break-all">Example content group: {recheckClassificationRequired.sample_content_id}</p>
+                  ) : null}
+                </div>
+                {recheckClassificationRequired.sample_paths?.length ? (
+                  <div className="rounded-lg border border-amber-200 bg-white/70 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-900/80">
+                      Example matching paths
+                    </p>
+                    <div className="mt-2 space-y-1">
+                      {recheckClassificationRequired.sample_paths.map((path) => (
+                        <p key={path} className="break-all font-mono text-xs text-amber-950">
+                          {path}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             {recheckOverrideConflict ? (
               <div className="space-y-3 rounded-xl border border-amber-300 bg-amber-50/80 p-4">
                 <div>

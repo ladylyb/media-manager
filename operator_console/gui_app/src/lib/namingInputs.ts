@@ -2,6 +2,8 @@ const TOKEN_RE = /^[A-Za-z0-9_]+$/;
 
 export const DEFAULT_OWNER = "LL";
 export const DEFAULT_CONTEXT = "General";
+export const UNKNOWN_OWNER = "UNKNOWN";
+export const UNKNOWN_CONTEXT = "UNKNOWN";
 export const DEFAULT_NAMING_STRATEGY = "SHARED_CANONICAL_NAME";
 
 export const NAMING_STRATEGY_OPTIONS = [
@@ -28,6 +30,9 @@ export function formatNamingStrategy(value: string) {
 
 function validateNamingToken(name: string, value: string, maxLength?: number): string | null {
   if (!value) return `${name} is required`;
+  if (value.toUpperCase() === "UNKNOWN") {
+    return `${name} must be explicitly classified; UNKNOWN is reserved for ingest-only state`;
+  }
   if (maxLength !== undefined && value.length > maxLength) {
     return `${name} must be <= ${maxLength} characters`;
   }

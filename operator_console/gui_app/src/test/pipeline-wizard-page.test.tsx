@@ -302,6 +302,43 @@ describe("Pipeline Wizard page", () => {
     );
   });
 
+  it("shows classification guidance when plan detects unclassified owner/context metadata", async () => {
+    mocks.runWizardIngest.mockResolvedValue({
+      data: { summary: { files_scanned: 2, new_contents: 2, new_instances: 2, duplicates_detected: 0 } },
+    });
+    mocks.runWizardPlan.mockRejectedValueOnce(
+      new ApiClientError("classification required", 400, [
+        {
+          code: "OWNER_CONTEXT_CLASSIFICATION_REQUIRED",
+          message: "classification required",
+          details: {
+            unclassified_group_count: 2,
+            sample_content_id: "content-unknown",
+            sample_paths: ["/media/incoming/a.jpg"],
+          },
+        },
+      ]),
+    );
+
+    renderPage();
+
+    fireEvent.change(await screen.findByLabelText("Folder Path"), {
+      target: { value: "/media/incoming" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run Ingest" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Continue to Review Ingest" })).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Review Ingest" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Continue to Plan" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Plan" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Plan" }));
+
+    expect(await screen.findByText("Explicit classification is required")).toBeInTheDocument();
+    expect(screen.getByText("Unclassified groups: 2")).toBeInTheDocument();
+    expect(screen.getByText("Example content group: content-unknown")).toBeInTheDocument();
+  });
+
   it("closes the apply confirmation dialog immediately and keeps execution on the main wizard screen", async () => {
     let resolveApply: ((value: { data: Record<string, unknown> }) => void) | null = null;
     mocks.runWizardIngest.mockResolvedValue({
