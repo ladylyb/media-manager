@@ -36,7 +36,8 @@ def _add_instance(
     )
 
 
-def test_get_duplicate_groups_orders_groups_and_files_deterministically(session_factory) -> None:
+def test_get_duplicate_groups_orders_groups_and_files_deterministically(session_factory, monkeypatch) -> None:
+    monkeypatch.setenv("MEDIA_MANAGER_VIDEO_THUMBNAILS_ENABLED", "true")
     service = OperatorConsoleReadService(session_factory)
     base = datetime(2026, 3, 1, 10, 0, tzinfo=UTC)
 
@@ -130,12 +131,47 @@ def test_get_duplicate_groups_orders_groups_and_files_deterministically(session_
     assert groups[1].canonical_file is None
     assert groups[0].files[0].media_type == "IMG"
     assert groups[0].files[2].media_type == "VID"
+    assert groups[0].files[0].preview_url == f"/api/thumbnail/{a1}"
     assert groups[0].files[0].thumbnail_url == f"/api/thumbnail/{a1}"
+    assert groups[0].files[2].preview_url == f"/api/video-thumbnail/{a3}"
     assert groups[0].files[2].thumbnail_url is None
     assert groups[0].files[0].role == "CANONICAL"
     assert groups[0].files[1].role == "DUPLICATE"
     assert groups[0].files[1].duplicate_index == 1
     assert groups[0].files[2].duplicate_index == 2
+
+
+def test_get_duplicate_groups_video_preview_absent_when_video_thumbnails_disabled(session_factory, monkeypatch) -> None:
+    monkeypatch.delenv("MEDIA_MANAGER_VIDEO_THUMBNAILS_ENABLED", raising=False)
+    service = OperatorConsoleReadService(session_factory)
+    base = datetime(2026, 3, 1, 10, 0, tzinfo=UTC)
+
+    content_id = UUID("99999999-9999-9999-9999-999999999999")
+    a1 = UUID("ffffffff-ffff-ffff-ffff-fffffffffff1")
+    a2 = UUID("ffffffff-ffff-ffff-ffff-fffffffffff2")
+
+    with session_factory.begin() as session:
+        _add_content(session, content_id, "hash-video", base)
+        session.flush()
+        _add_instance(
+            session,
+            file_instance_id=a1,
+            content_id=content_id,
+            absolute_path="/media/one.mov",
+            first_seen_at=base,
+        )
+        _add_instance(
+            session,
+            file_instance_id=a2,
+            content_id=content_id,
+            absolute_path="/media/two.mov",
+            first_seen_at=base + timedelta(seconds=1),
+        )
+
+    groups = service.get_duplicate_groups()
+
+    assert len(groups) == 1
+    assert all(file.preview_url is None for file in groups[0].files)
 
 
 def test_get_duplicate_groups_canonical_null_when_latest_assignment_not_active(session_factory) -> None:

@@ -58,6 +58,7 @@ export function mapDuplicateGroups(payload: Record<string, unknown>): DuplicateG
         media_type: String(item.media_type ?? "OTHER"),
         is_image: Boolean(item.is_image),
         media_url: item.media_url ? String(item.media_url) : null,
+        preview_url: item.preview_url ? String(item.preview_url) : null,
         thumbnail_url: item.thumbnail_url ? String(item.thumbnail_url) : null,
         is_canonical: absolutePath === canonicalPath,
       };

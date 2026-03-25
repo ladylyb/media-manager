@@ -306,6 +306,7 @@ class _FakeService:
                             "media_type": "IMG",
                             "is_image": True,
                             "media_url": "/media/aaaaaaaa-0000-0000-0000-000000000001",
+                            "preview_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000001",
                             "thumbnail_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000001",
                         },
                         {
@@ -314,6 +315,7 @@ class _FakeService:
                             "media_type": "IMG",
                             "is_image": True,
                             "media_url": "/media/aaaaaaaa-0000-0000-0000-000000000002",
+                            "preview_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000002",
                             "thumbnail_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000002",
                         },
                     ],
@@ -896,6 +898,7 @@ class _FakeReadServices:
                             "media_type": "IMG",
                             "is_image": True,
                             "media_url": "/media/aaaaaaaa-0000-0000-0000-000000000001",
+                            "preview_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000001",
                             "thumbnail_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000001",
                         },
                         {
@@ -904,6 +907,7 @@ class _FakeReadServices:
                             "media_type": "IMG",
                             "is_image": True,
                             "media_url": "/media/aaaaaaaa-0000-0000-0000-000000000002",
+                            "preview_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000002",
                             "thumbnail_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000002",
                         },
                     ],
@@ -2134,6 +2138,7 @@ def test_duplicates_endpoint_returns_json() -> None:
                         "media_type": "IMG",
                         "is_image": True,
                         "media_url": "/media/aaaaaaaa-0000-0000-0000-000000000001",
+                        "preview_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000001",
                         "thumbnail_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000001",
                     },
                     {
@@ -2142,6 +2147,7 @@ def test_duplicates_endpoint_returns_json() -> None:
                         "media_type": "IMG",
                         "is_image": True,
                         "media_url": "/media/aaaaaaaa-0000-0000-0000-000000000002",
+                        "preview_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000002",
                         "thumbnail_url": "/api/thumbnail/aaaaaaaa-0000-0000-0000-000000000002",
                     },
                 ],

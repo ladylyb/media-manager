@@ -449,7 +449,7 @@ export default function DuplicatesPage() {
                                   {active ? <StatusBadge label="Selected" severity="info" /> : null}
                                 </div>
                                 <DuplicateMediaPreview
-                                  src={file.thumbnail_url}
+                                  src={file.preview_url ?? (file.is_image ? file.media_url ?? file.thumbnail_url : null)}
                                   alt={basename(file.path)}
                                   isImage={file.is_image}
                                   mediaType={file.media_type}

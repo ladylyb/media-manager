@@ -27,6 +27,7 @@ function buildGroup(id: string, canonicalName: string, duplicateNames: string[])
         media_type: "image",
         is_image: true,
         media_url: `/media/${id}-canonical`,
+        preview_url: `/api/thumbnail/${id}-canonical`,
         thumbnail_url: null,
         is_canonical: true,
       },
@@ -36,6 +37,37 @@ function buildGroup(id: string, canonicalName: string, duplicateNames: string[])
         media_type: "image",
         is_image: true,
         media_url: `/media/${id}-duplicate-${index}`,
+        preview_url: `/api/thumbnail/${id}-duplicate-${index}`,
+        thumbnail_url: null,
+        is_canonical: false,
+      })),
+    ],
+  };
+}
+
+function buildVideoGroup(id: string, canonicalName: string, duplicateNames: string[]) {
+  return {
+    group_id: id,
+    hash: `${id}-hash`,
+    canonical_path: `/library/${canonicalName}`,
+    duplicates: [
+      {
+        file_instance_id: `${id}-canonical`,
+        path: `/library/${canonicalName}`,
+        media_type: "VID",
+        is_image: false,
+        media_url: null,
+        preview_url: `/api/video-thumbnail/${id}-canonical`,
+        thumbnail_url: null,
+        is_canonical: true,
+      },
+      ...duplicateNames.map((name, index) => ({
+        file_instance_id: `${id}-duplicate-${index}`,
+        path: `/library/${name}`,
+        media_type: "VID",
+        is_image: false,
+        media_url: null,
+        preview_url: `/api/video-thumbnail/${id}-duplicate-${index}`,
         thumbnail_url: null,
         is_canonical: false,
       })),
@@ -155,5 +187,60 @@ describe("DuplicatesPage", () => {
     expect(screen.getAllByRole("button", { name: "Mark as looks right" })).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: "Mark as needs review" })).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: "Mark as not sure" })).toHaveLength(2);
+  });
+
+  it("renders video poster previews in the comparison cards and queue", async () => {
+    groupsData = [buildVideoGroup("group-video", "video-main.mp4", ["video-copy.mp4"])];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+
+    renderPage();
+
+    expect((await screen.findAllByText("video-main.mp4")).length).toBeGreaterThan(0);
+
+    const previewImages = screen.getAllByRole("img", { name: "video-main.mp4" });
+    expect(previewImages.some((image) => image.getAttribute("src") === "/api/video-thumbnail/group-video-canonical")).toBe(true);
+
+    const duplicatePreviews = screen.getAllByRole("img", { name: "video-copy.mp4" });
+    expect(duplicatePreviews.some((image) => image.getAttribute("src") === "/api/video-thumbnail/group-video-duplicate-0")).toBe(true);
+  });
+
+  it("falls back to the video placeholder when a video preview is unavailable", async () => {
+    groupsData = [
+      {
+        group_id: "group-video-missing",
+        hash: "group-video-missing-hash",
+        canonical_path: "/library/video-main.mp4",
+        duplicates: [
+          {
+            file_instance_id: "group-video-missing-canonical",
+            path: "/library/video-main.mp4",
+            media_type: "VID",
+            is_image: false,
+            media_url: null,
+            preview_url: null,
+            thumbnail_url: null,
+            is_canonical: true,
+          },
+          {
+            file_instance_id: "group-video-missing-duplicate-0",
+            path: "/library/video-copy.mp4",
+            media_type: "VID",
+            is_image: false,
+            media_url: null,
+            preview_url: null,
+            thumbnail_url: null,
+            is_canonical: false,
+          },
+        ],
+      },
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+
+    renderPage();
+
+    expect((await screen.findAllByText("video-main.mp4")).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("img", { name: "video-main.mp4" })).toBeNull();
+    expect(screen.queryByRole("img", { name: "video-copy.mp4" })).toBeNull();
+    expect(screen.getAllByText("Video").length).toBeGreaterThan(0);
   });
 });

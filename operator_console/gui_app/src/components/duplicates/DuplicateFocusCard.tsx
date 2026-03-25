@@ -30,6 +30,8 @@ export function DuplicateFocusCard({
   previewClassName,
   previewFit,
 }: DuplicateFocusCardProps) {
+  const previewSrc = file.preview_url ?? (file.is_image ? file.media_url ?? file.thumbnail_url : null);
+
   return (
     <Card
       className={
@@ -44,7 +46,7 @@ export function DuplicateFocusCard({
     >
       <CardContent className="space-y-4 p-4">
         <DuplicateMediaPreview
-          src={file.media_url ?? file.thumbnail_url}
+          src={previewSrc}
           alt={basename(file.path)}
           isImage={file.is_image}
           mediaType={file.media_type}
