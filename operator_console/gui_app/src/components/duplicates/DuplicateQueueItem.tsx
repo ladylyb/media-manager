@@ -32,7 +32,7 @@ export function DuplicateQueueItem({
   markSeverity,
   onSelect,
 }: DuplicateQueueItemProps) {
-  const previewFiles = group.duplicates.filter((file) => file.thumbnail_url).slice(0, 3);
+  const previewFiles = group.duplicates.filter((file) => file.preview_url).slice(0, 3);
   const duplicateCount = group.duplicates.filter((file) => !file.is_canonical).length;
 
   return (
@@ -57,7 +57,7 @@ export function DuplicateQueueItem({
                   index > 0 && "-ml-3",
                 )}
               >
-                <img src={file.thumbnail_url ?? ""} alt={basename(file.path)} className="h-full w-full object-cover" />
+                <img src={file.preview_url ?? ""} alt={basename(file.path)} className="h-full w-full object-cover" />
               </div>
             ))
           ) : (

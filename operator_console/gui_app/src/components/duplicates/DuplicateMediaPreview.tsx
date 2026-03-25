@@ -22,6 +22,7 @@ export function DuplicateMediaPreview({
   fit = "cover",
 }: DuplicateMediaPreviewProps) {
   const [imageSrc, setImageSrc] = useState(src ?? null);
+  const isVideo = !isImage && ["vid", "video"].includes(mediaType.toLowerCase());
 
   useEffect(() => {
     setImageSrc(src ?? null);
@@ -45,7 +46,7 @@ export function DuplicateMediaPreview({
         <div className="flex h-full min-h-36 items-center justify-center">
           {isImage ? (
             <ImageIcon className="h-10 w-10 text-muted-foreground" />
-          ) : mediaType.toLowerCase() === "video" ? (
+          ) : isVideo ? (
             <Video className="h-10 w-10 text-muted-foreground" />
           ) : (
             <FileIcon className="h-10 w-10 text-muted-foreground" />
@@ -54,7 +55,7 @@ export function DuplicateMediaPreview({
       )}
       <div className="absolute left-3 top-3">
         <StatusBadge
-          label={isImage ? "Image" : mediaType.toLowerCase() === "video" ? "Video" : "File"}
+          label={isImage ? "Image" : isVideo ? "Video" : "File"}
           severity="neutral"
           className="border-white/30 bg-background/85 text-foreground"
         />

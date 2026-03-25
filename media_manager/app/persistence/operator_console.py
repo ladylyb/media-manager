@@ -181,6 +181,7 @@ class DuplicateFileItem:
     media_type: str
     is_image: bool
     media_url: str | None
+    preview_url: str | None
     thumbnail_url: str | None
 
     def to_dict(self) -> dict[str, str | bool | int | None]:
@@ -193,6 +194,7 @@ class DuplicateFileItem:
             "media_type": self.media_type,
             "is_image": self.is_image,
             "media_url": self.media_url,
+            "preview_url": self.preview_url,
             "thumbnail_url": self.thumbnail_url,
         }
 
@@ -634,6 +636,11 @@ class OperatorConsoleReadService:
             instance_id_str = str(file_instance_id)
             media_type = infer_media_type_from_extension(Path(absolute_path)) or "OTHER"
             is_image = media_type == "IMG"
+            thumbnail_url = f"/api/thumbnail/{instance_id_str}" if is_image else None
+            media_url = f"/media/{instance_id_str}" if is_image else None
+            preview_url = thumbnail_url
+            if media_type == "VID" and _video_thumbnails_enabled():
+                preview_url = f"/api/video-thumbnail/{instance_id_str}"
             canonical_instance_id = latest_canonical_by_content.get(content_id)
             existing_group = grouped.setdefault(content_id, [])
             duplicate_index = None
@@ -648,8 +655,9 @@ class OperatorConsoleReadService:
                 duplicate_index=duplicate_index,
                 media_type=media_type,
                 is_image=is_image,
-                media_url=f"/media/{instance_id_str}" if is_image else None,
-                thumbnail_url=f"/api/thumbnail/{instance_id_str}" if is_image else None,
+                media_url=media_url,
+                preview_url=preview_url,
+                thumbnail_url=thumbnail_url,
             )
             existing_group.append(file_item)
             by_group_by_instance.setdefault(content_id, {})[instance_id_str] = file_item

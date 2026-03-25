@@ -41,6 +41,7 @@ export interface DuplicateFile {
   media_type: string;
   is_image: boolean;
   media_url?: string | null;
+  preview_url?: string | null;
   thumbnail_url?: string | null;
   is_canonical: boolean;
 }
