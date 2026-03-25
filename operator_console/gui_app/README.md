@@ -36,11 +36,14 @@ npm run build
 ```
 
 Build output is written directly to:
-- `operator_console/static_v2/`
+- `operator_console/gui_app/dist/`
 
 Serve via FastAPI route:
 - `/`
 - and the canonical operator-console routes such as `/operations`, `/admin/diagnostics`, `/gallery`, and `/admin`
+
+FastAPI prefers `gui_app/dist/` at runtime and temporarily falls back to the checked-in
+`operator_console/static_v2/` snapshot when a local build is not present.
 
 ## Architecture
 

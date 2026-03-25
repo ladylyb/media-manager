@@ -20,7 +20,7 @@ export default defineConfig(({ mode }) => ({
     },
   },
   build: {
-    outDir: "../static_v2",
+    outDir: "./dist",
     emptyOutDir: true,
   },
 }));

@@ -19,10 +19,12 @@ from media_manager.app.core.errors import (
     ApplyTargetParentInvalidError,
     ApplyTargetOccupiedError,
     CanonicalUnreadableError,
+    CollisionResolutionError,
     RunNotFoundError,
 )
 from media_manager.app.core.logging_config import get_logger
 from media_manager.app.core.state_machine import RunState, validate_transition
+from media_manager.app.core.path_resolver import collision_filename
 from media_manager.app.observability import record_apply_metrics
 from media_manager.app.persistence.base import transactional_session
 from media_manager.app.persistence.models import (
@@ -42,6 +44,7 @@ from media_manager.app.persistence.models import (
 logger = get_logger(__name__)
 _WINDOWS_DRIVE_PATH_RE = re.compile(r"^([A-Za-z]):[\\/](.*)$")
 _APPLY_PROGRESS_EVERY = 100
+_MAX_COLLISION_RESOLUTION_ATTEMPTS = 999
 
 CollisionMode = Literal["rename", "skip", "fail"]
 
@@ -327,12 +330,12 @@ class ApplyService:
     def _create_audit_run(self, run_id: uuid.UUID) -> tuple[uuid.UUID, int]:
         with transactional_session(self._session_factory) as session:
             run = self._lock_run(session, run_id)
-            if run.state != RunStateDB.PLANNED:
-                raise ApplyStateError(f"Apply is only allowed from PLANNED. Current state: {run.state.value}")
+            if run.state not in {RunStateDB.PLANNED, RunStateDB.FAILED}:
+                raise ApplyStateError(
+                    f"Apply is only allowed from PLANNED or FAILED. Current state: {run.state.value}"
+                )
 
-            total_actions = int(
-                session.scalar(select(func.count()).select_from(PlannedAction).where(PlannedAction.run_id == run_id)) or 0
-            )
+            total_actions = self._count_pending_actions(session, run_id)
             audit = ApplyAuditRun(
                 run_id=run_id,
                 started_at=_utcnow(),
@@ -350,8 +353,10 @@ class ApplyService:
     def _mark_applying(self, run_id: uuid.UUID, audit_run_id: uuid.UUID) -> None:
         with transactional_session(self._session_factory) as session:
             run = self._lock_run(session, run_id)
-            if run.state != RunStateDB.PLANNED:
-                raise ApplyStateError(f"Apply is only allowed from PLANNED. Current state: {run.state.value}")
+            if run.state not in {RunStateDB.PLANNED, RunStateDB.FAILED}:
+                raise ApplyStateError(
+                    f"Apply is only allowed from PLANNED or FAILED. Current state: {run.state.value}"
+                )
 
             old_state = run.state.value
             validate_transition(RunState(run.state.value), RunState.APPLYING)
@@ -378,15 +383,59 @@ class ApplyService:
         # target_path ASC NULLS LAST, file_instance_id ASC, planned_action_id ASC.
         # planned_actions.file_id is the persisted file_instance_id.
         with transactional_session(self._session_factory) as session:
+            applied_action_ids = (
+                select(ApplyAuditItem.planned_action_id)
+                .join(ApplyAuditRun, ApplyAuditRun.id == ApplyAuditItem.run_id)
+                .where(
+                    ApplyAuditRun.run_id == run_id,
+                    ApplyAuditItem.result == "APPLIED",
+                )
+            )
             return session.scalars(
                 select(PlannedAction)
-                .where(PlannedAction.run_id == run_id)
+                .where(
+                    PlannedAction.run_id == run_id,
+                    ~PlannedAction.id.in_(applied_action_ids),
+                )
                 .order_by(
                     PlannedAction.target_path.asc().nulls_last(),
                     PlannedAction.file_id.asc(),
                     PlannedAction.id.asc(),
                 )
             ).all()
+
+    def _count_pending_actions(self, session: Session, run_id: uuid.UUID) -> int:
+        applied_action_ids = (
+            select(ApplyAuditItem.planned_action_id)
+            .join(ApplyAuditRun, ApplyAuditRun.id == ApplyAuditItem.run_id)
+            .where(
+                ApplyAuditRun.run_id == run_id,
+                ApplyAuditItem.result == "APPLIED",
+            )
+        )
+        return int(
+            session.scalar(
+                select(func.count())
+                .select_from(PlannedAction)
+                .where(
+                    PlannedAction.run_id == run_id,
+                    ~PlannedAction.id.in_(applied_action_ids),
+                )
+            )
+            or 0
+        )
+
+    def _resolve_collision_destination(self, destination: Path) -> Path:
+        base_name = destination.name
+        for attempt in range(1, _MAX_COLLISION_RESOLUTION_ATTEMPTS + 1):
+            candidate = destination.with_name(collision_filename(base_name, attempt))
+            if not candidate.exists():
+                return candidate
+        raise CollisionResolutionError(
+            original_target_path=str(destination.resolve(strict=False)),
+            collision_mode="rename",
+            attempt_count=_MAX_COLLISION_RESOLUTION_ATTEMPTS,
+        )
 
     def _execute_action(self, run_id: uuid.UUID, action: PlannedAction, collision_mode: CollisionMode) -> ActionOutcome:
         source = Path(action.source_path)
@@ -504,20 +553,69 @@ class ApplyService:
                 planned_action_id=action.id,
             )
         collision_detected = destination.exists()
+        final_destination = destination
+        collision_resolved = False
         if collision_detected:
-            self._record_target_occupied_event(run_id, str(destination_resolved))
+            if collision_mode == "rename":
+                final_destination = self._resolve_collision_destination(destination)
+                collision_resolved = True
+            elif collision_mode == "skip":
+                self._record_target_occupied_event(run_id, str(destination_resolved))
+                return ActionOutcome(
+                    result="SKIPPED",
+                    source_path=str(source_resolved),
+                    target_path=str(destination_resolved),
+                    error_message=(
+                        f"{ApplyTargetOccupiedError(str(destination_resolved))} "
+                        "(skipped because collision_mode=skip)"
+                    ),
+                    collision_detected=True,
+                    collision_resolved=False,
+                    file_instance_id=action.file_id,
+                    planned_action_id=action.id,
+                )
+            else:
+                self._record_target_occupied_event(run_id, str(destination_resolved))
+                return ActionOutcome(
+                    result="FAILED",
+                    source_path=str(source_resolved),
+                    target_path=str(destination_resolved),
+                    error_message=str(ApplyTargetOccupiedError(str(destination_resolved))),
+                    collision_detected=True,
+                    collision_resolved=False,
+                    file_instance_id=action.file_id,
+                    planned_action_id=action.id,
+                )
+
+        final_destination_resolved = final_destination.resolve(strict=False)
+        if source_resolved == final_destination_resolved:
+            return ActionOutcome(
+                result="SKIPPED",
+                source_path=str(source_resolved),
+                target_path=str(final_destination_resolved),
+                error_message="source equals target",
+                collision_detected=collision_detected,
+                collision_resolved=collision_resolved,
+                file_instance_id=action.file_id,
+                planned_action_id=action.id,
+            )
+
+        final_parent_error = None
+        if final_destination != destination:
+            final_parent_error = self._ensure_target_parent(run_id, final_destination)
+        if final_parent_error is not None:
             return ActionOutcome(
                 result="FAILED",
                 source_path=str(source_resolved),
-                target_path=str(destination_resolved),
-                error_message=str(ApplyTargetOccupiedError(str(destination_resolved))),
-                collision_detected=True,
+                target_path=str(final_destination_resolved),
+                error_message=str(final_parent_error),
+                collision_detected=collision_detected,
                 collision_resolved=False,
                 file_instance_id=action.file_id,
                 planned_action_id=action.id,
             )
 
-        source.rename(destination)
+        source.rename(final_destination)
         logger.info(
             "File renamed",
             extra={
@@ -525,20 +623,22 @@ class ApplyService:
                 "phase": "apply",
                 "planned_action_id": str(action.id),
                 "file_instance_id": str(action.file_id),
-                "target_filename": destination.name,
+                "target_filename": final_destination.name,
                 "action_type": action.action_type,
                 "action": action.action_type,
                 "role": action.role,
                 "duplicate_index": action.duplicate_index,
+                "collision_detected": collision_detected,
+                "collision_resolved": collision_resolved,
             },
         )
         return ActionOutcome(
             result="APPLIED",
             source_path=str(source_resolved),
-            target_path=str(destination.resolve(strict=False)),
+            target_path=str(final_destination_resolved),
             error_message=None,
             collision_detected=collision_detected,
-            collision_resolved=False,
+            collision_resolved=collision_resolved,
             file_instance_id=action.file_id,
             planned_action_id=action.id,
         )

@@ -44,6 +44,12 @@ npm ci
 npm run build
 ```
 
+The supported build now writes runtime assets into:
+- `operator_console/gui_app/dist/`
+
+FastAPI serves that directory first and keeps `operator_console/static_v2/` only as a
+temporary local fallback for older environments that have not rebuilt yet.
+
 4. Validate the canonical FastAPI operator-console routes render the React shell.
 
 The March 2026 upstream refresh and selective-adaptation sequence is complete.

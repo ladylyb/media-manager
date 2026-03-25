@@ -128,6 +128,12 @@ function parseError(err: unknown): string {
   return String(err);
 }
 
+function buildApplyErrorMessage(err: unknown, runId: string | null): string {
+  const baseMessage = parseError(err);
+  if (!runId) return baseMessage;
+  return `${baseMessage} Retry the same durable run ID (${runId}) after fixing the root cause.`;
+}
+
 function toExecuteOperationStatus(state: ExecuteState): ProgressOperationStatus {
   if (state.loading) return "running";
   if (state.error) return "error";
@@ -511,7 +517,11 @@ export default function OperationsPage() {
       setApplyState({ loading: false, error: null, result: response.data });
       await invalidateReadsAfterOperation(queryClient, "apply");
     } catch (err) {
-      setApplyState({ loading: false, error: parseError(err), result: null });
+      setApplyState({
+        loading: false,
+        error: buildApplyErrorMessage(err, activeApplyRunId),
+        result: null,
+      });
     } finally {
       setConfirmingAction(null);
     }
@@ -717,7 +727,7 @@ export default function OperationsPage() {
                     className="font-mono"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Use this only when you already know the exact durable run ID you want to apply.
+                    Use this when you already know the durable run ID you want to apply, including retrying a failed apply after the underlying problem has been fixed.
                   </p>
                 </div>
               ) : null}
@@ -741,13 +751,18 @@ export default function OperationsPage() {
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
                       Durable Run ID
                     </p>
-                    <p className="mt-1 break-all font-mono text-xs text-foreground">
+                  <p className="mt-1 break-all font-mono text-xs text-foreground">
                       {selectedPlan.linked_run_id ?? "Not available for this saved plan."}
                     </p>
                   </div>
                   <p className="text-sm text-muted-foreground">
                     Completed {new Date(selectedPlan.completed_at ?? selectedPlan.started_at).toLocaleString()}
                   </p>
+                  {selectedPlan.linked_run_id ? (
+                    <p className="text-xs text-muted-foreground">
+                      If Apply fails, fix the issue and retry this same durable run ID instead of starting ingest and plan again.
+                    </p>
+                  ) : null}
                 </div>
               </div>
             ) : null}

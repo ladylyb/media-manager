@@ -75,22 +75,42 @@ def test_favicon_route_serves_built_asset() -> None:
     assert len(response.content) > 0
 
 
-def test_favicon_route_returns_404_when_asset_missing(monkeypatch) -> None:
-    favicon_path = Path(main_module.__file__).parent / "static_v2" / "favicon.ico"
-    original_exists = Path.exists
-
-    def _fake_exists(path: Path) -> bool:
-        if path == favicon_path:
-            return False
-        return original_exists(path)
-
-    monkeypatch.setattr(Path, "exists", _fake_exists)
+def test_favicon_route_returns_404_when_asset_missing(tmp_path: Path, monkeypatch) -> None:
+    missing_dir = tmp_path / "dist"
+    missing_dir.mkdir()
+    (missing_dir / "index.html").write_text("<html>dist</html>", encoding="utf-8")
+    monkeypatch.setattr(main_module, "_resolve_console_static_dir", lambda _package_root: missing_dir)
     client = TestClient(create_app())
 
     response = client.get("/favicon.ico")
 
     assert response.status_code == 404
     assert response.json() == {"detail": "favicon.ico was not found."}
+
+
+def test_resolve_console_static_dir_prefers_gui_dist(tmp_path: Path) -> None:
+    package_root = tmp_path / "operator_console"
+    dist_dir = package_root / "gui_app" / "dist"
+    static_dir = package_root / "static_v2"
+    dist_dir.mkdir(parents=True)
+    static_dir.mkdir(parents=True)
+    (dist_dir / "index.html").write_text("<html>dist</html>", encoding="utf-8")
+    (static_dir / "index.html").write_text("<html>static</html>", encoding="utf-8")
+
+    resolved = main_module._resolve_console_static_dir(package_root)
+
+    assert resolved == dist_dir
+
+
+def test_resolve_console_static_dir_falls_back_to_static_v2(tmp_path: Path) -> None:
+    package_root = tmp_path / "operator_console"
+    static_dir = package_root / "static_v2"
+    static_dir.mkdir(parents=True)
+    (static_dir / "index.html").write_text("<html>static</html>", encoding="utf-8")
+
+    resolved = main_module._resolve_console_static_dir(package_root)
+
+    assert resolved == static_dir
 
 
 def test_logs_endpoint_returns_recent_log_lines() -> None:
