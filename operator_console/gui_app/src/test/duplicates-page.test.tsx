@@ -114,6 +114,7 @@ function renderPage(initialEntry = "/duplicates") {
 
 describe("DuplicatesPage", () => {
   let groupsData: ReturnType<typeof buildGroup>[];
+  let reclaimItemsData: Array<Record<string, unknown>>;
 
   beforeEach(() => {
     groupsData = [
@@ -121,19 +122,37 @@ describe("DuplicatesPage", () => {
       buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
       buildGroup("group-gamma", "gamma-main.jpg", ["gamma-copy.jpg"]),
     ];
+    reclaimItemsData = [];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
     mocks.getPolicy.mockResolvedValue({
       data: {
         duplicate_reclaim: {
+          archive_root: "/tmp/media-manager/reclaim",
           default_retention_days: 21,
         },
       },
     });
-    mocks.getDuplicateReclaimItems.mockResolvedValue({ data: { items: [] } });
+    mocks.getDuplicateReclaimItems.mockImplementation(async () => ({ data: { items: reclaimItemsData } }));
     mocks.getIntegrityIssues.mockResolvedValue({ data: { items: [] } });
-    mocks.executeDuplicateReclaim.mockResolvedValue({ data: {} });
-    mocks.restoreDuplicateReclaim.mockResolvedValue({ data: {} });
-    mocks.setDuplicateReclaim.mockResolvedValue({ data: {} });
+    mocks.executeDuplicateReclaim.mockResolvedValue({
+      data: { summary: { applied_count: 1, skipped_count: 0, moves_count: 1 } },
+    });
+    mocks.restoreDuplicateReclaim.mockResolvedValue({
+      data: { summary: { applied_count: 1, skipped_count: 0, moves_count: 1 } },
+    });
+    mocks.setDuplicateReclaim.mockImplementation(
+      async (payload: { content_id: string; reclaim_status: string }) => {
+        groupsData = groupsData.map((group) =>
+          group.group_id === payload.content_id
+            ? {
+                ...group,
+                reclaim_status: payload.reclaim_status,
+              }
+            : group,
+        );
+        return { data: { reclaim_status: payload.reclaim_status } };
+      },
+    );
     mocks.setDuplicateReview.mockImplementation(
       async (payload: { content_id: string; review_status: string; reviewed_canonical_instance_id: string }) => {
         groupsData = groupsData.map((group) =>
@@ -166,7 +185,7 @@ describe("DuplicatesPage", () => {
     expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Next" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Mark as looks right" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Move ready duplicates to bin" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Move eligible duplicates" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Mark safe to remove" })).not.toBeInTheDocument();
   });
 
@@ -217,7 +236,13 @@ describe("DuplicatesPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Mark as looks right" }));
 
-    await waitFor(() => expect(screen.getByText("2 of 3")).toBeInTheDocument());
+    await waitFor(() => {
+      expect(screen.getByText("2 of 3")).toBeInTheDocument();
+      expect(mocks.setDuplicateReclaim).toHaveBeenCalledWith({
+        content_id: "group-alpha",
+        reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
+      });
+    });
   });
 
   it("filters the review queue by review mark after a group has been reviewed", async () => {
@@ -288,7 +313,7 @@ describe("DuplicatesPage", () => {
     groupsData = [
       {
         ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
-        reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
+        review_status: "looks_right",
       },
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
@@ -296,64 +321,213 @@ describe("DuplicatesPage", () => {
     renderPage("/duplicates?tab=removal");
 
     expect(await screen.findByRole("heading", { name: "Recycle Bin" })).toBeInTheDocument();
-    expect(screen.getAllByText("Ready to move to bin").length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "Move ready duplicates to bin" })).toBeInTheDocument();
-    expect(screen.getByText("Move safe extra copies out of the main library, restore them if needed, and keep track of the retention window.")).toBeInTheDocument();
+    expect(screen.getAllByText("Ready to move").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Move eligible duplicates" })).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Move eligible extra copies into the configured duplicate holding area, restore them if needed, and keep later retention steps separate.",
+      ),
+    ).toBeInTheDocument();
   });
 
-  it("keeps recycle-bin actions in distinct operator-facing sections", async () => {
+  it("uses Looks right groups as the only move-eligible groups and shows move and restore feedback", async () => {
     groupsData = [
       {
         ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
-        reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
+        review_status: "looks_right",
       },
       buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
-    mocks.getDuplicateReclaimItems.mockResolvedValue({
-      data: {
-        items: [
-          {
-            file_instance_id: "archived-1",
-            content_id: "group-archived",
-            original_path: "/library/archived-copy.jpg",
-            archive_path: "/archive/archived-copy.jpg",
-            item_status: "ARCHIVED",
-            expires_at: "2026-04-10T10:00:00+00:00",
-          },
-        ],
+    reclaimItemsData = [
+      {
+        file_instance_id: "archived-1",
+        content_id: "group-archived",
+        original_path: "/library/archived-copy.jpg",
+        archive_path: "/archive/archived-copy.jpg",
+        item_status: "ARCHIVED",
+        expires_at: "2026-04-10T10:00:00+00:00",
       },
+    ];
+    mocks.executeDuplicateReclaim.mockImplementation(async () => {
+      groupsData = groupsData.map((group) =>
+        group.group_id === "group-alpha"
+          ? {
+              ...group,
+              reclaim_status: "ARCHIVED",
+            }
+          : group,
+      );
+      reclaimItemsData = [
+        ...reclaimItemsData,
+        {
+          file_instance_id: "group-alpha-duplicate-0",
+          content_id: "group-alpha",
+          original_path: "/library/alpha-copy.jpg",
+          archive_path: "/tmp/media-manager/reclaim/group-alpha/group-alpha-duplicate-0-alpha-copy.jpg",
+          item_status: "ARCHIVED",
+          expires_at: "2026-04-10T10:00:00+00:00",
+        },
+      ];
+      return { data: { summary: { applied_count: 1, skipped_count: 0, moves_count: 1 } } };
+    });
+    mocks.restoreDuplicateReclaim.mockImplementation(async () => {
+      groupsData = groupsData.map((group) =>
+        group.group_id === "group-alpha"
+          ? {
+              ...group,
+              reclaim_status: "RESTORED",
+            }
+          : group,
+      );
+      reclaimItemsData = reclaimItemsData.map((item) =>
+        item.file_instance_id === "group-alpha-duplicate-0"
+          ? {
+              ...item,
+              item_status: "RESTORED",
+            }
+          : item,
+      );
+      return { data: { summary: { applied_count: 1, skipped_count: 0, moves_count: 1 } } };
     });
 
     renderPage("/duplicates?tab=removal");
 
-    expect(await screen.findByText("Needs review before moving to bin")).toBeInTheDocument();
-    expect(screen.getAllByText("In the bin").length).toBeGreaterThan(0);
-    expect(screen.getByText("Items in the bin can be restored before they are permanently deleted.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Only groups marked “Looks right” can be moved from this page. The keep copy stays in place."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Mark safe to remove" })).not.toBeInTheDocument();
+    expect(screen.getByText("alpha-main.jpg")).toBeInTheDocument();
+    expect(screen.getByText("beta-main.jpg")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Mark safe to remove" }));
+    fireEvent.click(screen.getByRole("button", { name: "Move eligible duplicates" }));
 
-    await waitFor(() =>
+    await waitFor(() => {
       expect(mocks.setDuplicateReclaim).toHaveBeenCalledWith({
-        content_id: "group-beta",
+        content_id: "group-alpha",
         reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
-      }),
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Move ready duplicates to bin" }));
-
-    await waitFor(() =>
+      });
       expect(mocks.executeDuplicateReclaim).toHaveBeenCalledWith({
         content_ids: ["group-alpha"],
         retention_days: 21,
-      }),
-    );
+      });
+      expect(
+        screen.getByText("1 duplicate file moved to the configured holding area. The keep copy stayed in place."),
+      ).toBeInTheDocument();
+    });
 
-    fireEvent.click(screen.getByRole("button", { name: "Restore from bin" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Restore" }).at(-1)!);
+
+    await waitFor(() => {
+      expect(mocks.restoreDuplicateReclaim).toHaveBeenCalledWith({
+        file_instance_ids: ["group-alpha-duplicate-0"],
+      });
+      expect(
+        screen.getByText(
+          "1 file restored from the configured holding area. Restored groups stay out of Ready to move until they are reviewed again.",
+        ),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "1 restored file already left the holding area. Those groups stay out of Ready to move until they are reviewed again.",
+        ),
+      ).toBeInTheDocument();
+      expect(screen.queryByText("alpha-main.jpg")).not.toBeInTheDocument();
+      expect(screen.getByText("archived-copy.jpg")).toBeInTheDocument();
+    });
+  });
+
+  it("shows explicit sync failure feedback and blocks the move action when the bridge update fails", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        review_status: "looks_right",
+      },
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+    mocks.setDuplicateReclaim.mockRejectedValue(new Error("bridge failed"));
+
+    renderPage("/duplicates?tab=removal");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Move eligible duplicates" }));
+
+    await waitFor(() => {
+      expect(mocks.setDuplicateReclaim).toHaveBeenCalledWith({
+        content_id: "group-alpha",
+        reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
+      });
+      expect(mocks.executeDuplicateReclaim).not.toHaveBeenCalled();
+      expect(
+        screen.getAllByText(
+          "Saved “Looks right” for alpha-main.jpg, but the app could not confirm move eligibility. Try again before moving duplicates.",
+        ).length,
+      ).toBeGreaterThan(0);
+    });
+  });
+
+  it("shows explicit no-op feedback when no new files are moved", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        review_status: "looks_right",
+        reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
+      },
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+    mocks.executeDuplicateReclaim.mockResolvedValue({
+      data: { summary: { applied_count: 0, skipped_count: 1, moves_count: 0 } },
+    });
+
+    renderPage("/duplicates?tab=removal");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Move eligible duplicates" }));
+
+    await waitFor(() => {
+      expect(mocks.executeDuplicateReclaim).toHaveBeenCalledWith({
+        content_ids: ["group-alpha"],
+        retention_days: 21,
+      });
+      expect(
+        screen.getByText(
+          "No new files were moved. Eligible duplicates were already processed or were no longer available to move.",
+        ),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("shows a config warning instead of vague retention claims when policy details are unavailable", async () => {
+    mocks.getPolicy.mockRejectedValue(new Error("policy unavailable"));
+
+    renderPage("/duplicates?tab=removal");
+
+    expect(
+      await screen.findByText(
+        "Recycle Bin details are unavailable right now. The app cannot confirm the configured holding area or retention window for this page.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Move eligible duplicates" })).toBeDisabled();
+    expect(screen.queryByText(/Holding area:/)).not.toBeInTheDocument();
+  });
+
+  it("moves a reviewed group back out of Ready to move when its review state changes", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        review_status: "looks_right",
+        reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
+      },
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Looks right" }));
+    fireEvent.click(await screen.findByTestId("review-mark-needs-review"));
 
     await waitFor(() =>
-      expect(mocks.restoreDuplicateReclaim).toHaveBeenCalledWith({
-        file_instance_ids: ["archived-1"],
+      expect(mocks.setDuplicateReclaim).toHaveBeenCalledWith({
+        content_id: "group-alpha",
+        reclaim_status: "UNREVIEWED",
       }),
     );
   });

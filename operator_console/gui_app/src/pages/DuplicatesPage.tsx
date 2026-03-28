@@ -35,6 +35,19 @@ import type { DuplicateFile, DuplicateGroup, DuplicateReclaimItem, IntegrityIssu
 type ReviewMark = "looks_right" | "needs_review" | "not_sure";
 type ReviewFilter = "all" | "unreviewed" | ReviewMark;
 type DuplicatesTab = "review" | "removal" | "playback-issues";
+type ReclaimSyncStatus = "UNREVIEWED" | "REVIEWED_SAFE_TO_RECLAIM";
+type FeedbackTone = "success" | "warning";
+
+interface MutationSummary {
+  applied_count?: number;
+  skipped_count?: number;
+  moves_count?: number;
+}
+
+interface RecycleBinFeedback {
+  tone: FeedbackTone;
+  message: string;
+}
 
 const reviewOptions: Array<{ value: ReviewFilter; label: string }> = [
   { value: "all", label: "All" },
@@ -45,12 +58,12 @@ const reviewOptions: Array<{ value: ReviewFilter; label: string }> = [
 ];
 
 const binStateLabels = {
-  ready: "Ready to move to bin",
-  inBin: "In the bin",
+  ready: "Ready to move",
+  inBin: "In the holding area",
   needsReview: "Needs review",
   safeToRemove: "Safe to remove",
   restore: "Restore",
-  moveToBin: "Move ready duplicates to bin",
+  moveToBin: "Move eligible duplicates",
   daysRemaining: "Days remaining",
   approachingExpiry: "Approaching permanent deletion",
   needsChecking: "Needs checking",
@@ -164,11 +177,24 @@ function getPlaybackStatusLabel(issue: IntegrityIssue): string {
   return issue.status === "BROKEN" ? binStateLabels.wontPlay : binStateLabels.needsChecking;
 }
 
+function getMutationSummary(payload: unknown): MutationSummary {
+  if (!payload || typeof payload !== "object") return {};
+  const summary = (payload as { summary?: MutationSummary }).summary;
+  return summary && typeof summary === "object" ? summary : {};
+}
+
+function isPendingRemovalStatus(status: DuplicateGroup["reclaim_status"] | undefined | null) {
+  return status === "ARCHIVED" || status === "RESTORED" || status === "SCHEDULED_FOR_DELETE";
+}
+
 export default function DuplicatesPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedDuplicateId, setSelectedDuplicateId] = useState<string | null>(null);
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("unreviewed");
   const [isReviewQueueOpen, setIsReviewQueueOpen] = useState(false);
+  const [reclaimBridgeBlockedIds, setReclaimBridgeBlockedIds] = useState<string[]>([]);
+  const [reclaimBridgeWarning, setReclaimBridgeWarning] = useState<string | null>(null);
+  const [recycleBinFeedback, setRecycleBinFeedback] = useState<RecycleBinFeedback | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = getDuplicatesTab(searchParams.get("tab"));
   const queryClient = useQueryClient();
@@ -335,15 +361,29 @@ export default function DuplicatesPage() {
     selectedDuplicates.find((file) => file.file_instance_id === selectedDuplicateId) ?? selectedDuplicates[0] ?? null;
   const reclaimItems = ((reclaimItemsQuery.data?.items ?? []) as DuplicateReclaimItem[]) ?? [];
   const archivedItems = reclaimItems.filter((item) => item.item_status === "ARCHIVED");
-  const readyGroups = sortedGroups.filter((group) => group.reclaim_status === "REVIEWED_SAFE_TO_RECLAIM");
+  const restoredItems = reclaimItems.filter((item) => item.item_status === "RESTORED");
+  const readyGroups = sortedGroups.filter(
+    (group) =>
+      currentReviewMark(group) === "looks_right" &&
+      (group.reclaimable_file_count ?? 0) > 0 &&
+      !isPendingRemovalStatus(group.reclaim_status) &&
+      !reclaimBridgeBlockedIds.includes(group.group_id),
+  );
   const readyExtraCopyCount = readyGroups.reduce((sum, group) => sum + (group.reclaimable_file_count ?? 0), 0);
   const readyEstimatedBytes = readyGroups.reduce((sum, group) => sum + (group.estimated_reclaim_bytes ?? 0), 0);
+  const readyGroupIds = new Set(readyGroups.map((group) => group.group_id));
   const removalReviewGroups = sortedGroups.filter(
     (group) =>
       (group.reclaimable_file_count ?? 0) > 0 &&
-      group.reclaim_status !== "REVIEWED_SAFE_TO_RECLAIM" &&
-      group.reclaim_status !== "ARCHIVED",
+      !readyGroupIds.has(group.group_id) &&
+      !isPendingRemovalStatus(group.reclaim_status),
   );
+  const archiveRoot = policy?.duplicate_reclaim.archive_root?.trim() ?? "";
+  const archiveRetentionDays = policy?.duplicate_reclaim.default_retention_days ?? null;
+  const recycleConfigWarning =
+    policyQuery.error || !archiveRoot || !archiveRetentionDays
+      ? "Recycle Bin details are unavailable right now. The app cannot confirm the configured holding area or retention window for this page."
+      : null;
 
   const integrityIssues = ((playbackIssuesQuery.data?.items ?? []) as IntegrityIssue[]) ?? [];
   const issuesByFileId = useMemo(
@@ -400,6 +440,117 @@ export default function DuplicatesPage() {
     setSelectedId(filteredGroups[nextIndex].group_id);
   }
 
+  function markBridgeBlocked(groupId: string, blocked: boolean) {
+    setReclaimBridgeBlockedIds((current) => {
+      const next = new Set(current);
+      if (blocked) {
+        next.add(groupId);
+      } else {
+        next.delete(groupId);
+      }
+      return [...next];
+    });
+  }
+
+  async function syncReclaimBridge(group: DuplicateGroup, reclaim_status: ReclaimSyncStatus, failureMessage: string) {
+    try {
+      await reclaimMutation.mutateAsync({
+        content_id: group.group_id,
+        reclaim_status,
+      });
+      markBridgeBlocked(group.group_id, false);
+      setReclaimBridgeWarning((current) => (current && current.includes(group.group_id) ? null : current));
+      return true;
+    } catch {
+      markBridgeBlocked(group.group_id, true);
+      setReclaimBridgeWarning(failureMessage);
+      setRecycleBinFeedback({ tone: "warning", message: failureMessage });
+      return false;
+    }
+  }
+
+  async function runPreflightReclaimSync(groupsToSync: DuplicateGroup[]) {
+    for (const group of groupsToSync) {
+      const synced = await syncReclaimBridge(
+        group,
+        "REVIEWED_SAFE_TO_RECLAIM",
+        `Saved “Looks right” for ${basename(group.canonical_path)}, but the app could not confirm move eligibility. Try again before moving duplicates.`,
+      );
+      if (!synced) return false;
+    }
+    return true;
+  }
+
+  async function handleMoveEligibleDuplicates() {
+    setRecycleBinFeedback(null);
+    if (recycleConfigWarning) {
+      setRecycleBinFeedback({ tone: "warning", message: recycleConfigWarning });
+      return;
+    }
+    if (!readyGroups.length) {
+      setRecycleBinFeedback({
+        tone: "warning",
+        message: "No new files were moved. No eligible extra copies are left to move from the main library.",
+      });
+      return;
+    }
+
+    const groupsNeedingSync = readyGroups.filter((group) => group.reclaim_status !== "REVIEWED_SAFE_TO_RECLAIM");
+    const synced = await runPreflightReclaimSync(groupsNeedingSync);
+    if (!synced) return;
+
+    try {
+      const result = await executeReclaimMutation.mutateAsync({
+        content_ids: readyGroups.map((group) => group.group_id),
+        retention_days: archiveRetentionDays ?? 14,
+      });
+      const summary = getMutationSummary(result.data);
+      const applied = Number(summary.applied_count ?? 0);
+      setRecycleBinFeedback(
+        applied > 0
+          ? {
+              tone: "success",
+              message: `${applied} duplicate file${applied === 1 ? "" : "s"} moved to the configured holding area. The keep copy stayed in place.`,
+            }
+          : {
+              tone: "warning",
+              message:
+                "No new files were moved. Eligible duplicates were already processed or were no longer available to move.",
+            },
+      );
+    } catch {
+      setRecycleBinFeedback({
+        tone: "warning",
+        message: "The move action did not complete. No result was confirmed on this page.",
+      });
+    }
+  }
+
+  async function handleRestore(item: DuplicateReclaimItem) {
+    setRecycleBinFeedback(null);
+    try {
+      const result = await restoreReclaimMutation.mutateAsync(item.file_instance_id);
+      const summary = getMutationSummary(result.data);
+      const applied = Number(summary.applied_count ?? 0);
+      setRecycleBinFeedback(
+        applied > 0
+          ? {
+              tone: "success",
+              message: `${applied} file${applied === 1 ? "" : "s"} restored from the configured holding area. Restored groups stay out of Ready to move until they are reviewed again.`,
+            }
+          : {
+              tone: "warning",
+              message: "No files were restored. These items are no longer available to restore from the holding area.",
+            },
+      );
+    } catch {
+      setRecycleBinFeedback({
+        tone: "warning",
+        message: "The restore action did not complete. No result was confirmed on this page.",
+      });
+    }
+  }
+
   function applyReviewMark(mark: ReviewMark) {
     if (!selected || !selectedCanonical) return;
 
@@ -418,6 +569,28 @@ export default function DuplicatesPage() {
       review_status: mark,
       reviewed_canonical_instance_id: selectedCanonical.file_instance_id,
     });
+    setRecycleBinFeedback(null);
+
+    if (isPendingRemovalStatus(selected.reclaim_status)) {
+      markBridgeBlocked(selected.group_id, false);
+    } else if (mark === "looks_right") {
+      void syncReclaimBridge(
+        selected,
+        "REVIEWED_SAFE_TO_RECLAIM",
+        `Saved “Looks right” for ${basename(selected.canonical_path)}, but the app could not add it to Ready to move. Try again from the Recycle Bin tab.`,
+      );
+    } else if (
+      selected.reclaim_status === "REVIEWED_SAFE_TO_RECLAIM" ||
+      reclaimBridgeBlockedIds.includes(selected.group_id)
+    ) {
+      void syncReclaimBridge(
+        selected,
+        "UNREVIEWED",
+        `Saved the review change for ${basename(selected.canonical_path)}, but the app could not remove it from Ready to move.`,
+      );
+    } else {
+      markBridgeBlocked(selected.group_id, false);
+    }
 
     if (nextSelectedId && nextSelectedId !== selected.group_id) {
       setSelectedId(nextSelectedId);
@@ -472,7 +645,7 @@ export default function DuplicatesPage() {
       <TopSurfaceHeader
         badge="Duplicate Review"
         title="Work duplicate decisions in focused steps."
-        description="Compare duplicates, move safe extra copies to the Recycle Bin, and check playback problems without mixing those jobs together."
+        description="Compare duplicates, move eligible extra copies into the configured holding area, and check playback problems without mixing those jobs together."
         icon={Copy}
         density={activeTab === "review" ? "compact" : "default"}
         className={activeTab === "review" ? "rounded-[24px]" : undefined}
@@ -486,7 +659,7 @@ export default function DuplicatesPage() {
         <ErrorAlert message={getErrorMessage(reviewMutation.error) || "Failed to save duplicate review"} />
       )}
       {reclaimMutation.error && (
-        <ErrorAlert message={getErrorMessage(reclaimMutation.error) || "Failed to update Safe to remove"} />
+        <ErrorAlert message={getErrorMessage(reclaimMutation.error) || "Failed to update move eligibility"} />
       )}
       {executeReclaimMutation.error && (
         <ErrorAlert message={getErrorMessage(executeReclaimMutation.error) || "Failed to move duplicates to the Recycle Bin"} />
@@ -497,6 +670,7 @@ export default function DuplicatesPage() {
       {playbackIssuesQuery.error && activeTab === "playback-issues" ? (
         <ErrorAlert message={getErrorMessage(playbackIssuesQuery.error) || "Failed to load playback issues for duplicates"} />
       ) : null}
+      {reclaimBridgeWarning && activeTab === "removal" ? <ErrorAlert message={reclaimBridgeWarning} /> : null}
 
       {duplicatesQuery.isLoading ? (
         <div className="space-y-4">
@@ -537,7 +711,7 @@ export default function DuplicatesPage() {
                 <div className="space-y-2">
                   <h2 className="text-xl font-semibold tracking-tight text-foreground">Recycle Bin</h2>
                   <p className="text-sm text-muted-foreground">
-                    Move safe extra copies out of the main library, restore them if needed, and keep track of the retention window.
+                    Move eligible extra copies into the configured duplicate holding area, restore them if needed, and keep later retention steps separate.
                   </p>
                 </div>
               </TabsContent>
@@ -836,10 +1010,10 @@ export default function DuplicatesPage() {
               <div className="grid gap-3 md:grid-cols-3">
                 <Card className="rounded-[22px] border-border/70 bg-card/95 shadow-sm">
                   <CardContent className="space-y-1 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Ready to move to bin</p>
+                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Ready to move</p>
                     <p className="text-2xl font-semibold text-foreground">{readyGroups.length}</p>
                     <p className="text-sm text-muted-foreground">
-                      {readyExtraCopyCount} extra copies are currently marked {binStateLabels.safeToRemove.toLowerCase()}.
+                      {readyExtraCopyCount} extra copies are in groups currently marked Looks right.
                     </p>
                   </CardContent>
                 </Card>
@@ -852,39 +1026,57 @@ export default function DuplicatesPage() {
                 </Card>
                 <Card className="rounded-[22px] border-border/70 bg-card/95 shadow-sm">
                   <CardContent className="space-y-1 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">In the bin</p>
+                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">In the holding area</p>
                     <p className="text-2xl font-semibold text-foreground">{archivedItems.length}</p>
-                    <p className="text-sm text-muted-foreground">Items in the bin can be restored before the retention window ends.</p>
+                    <p className="text-sm text-muted-foreground">These files can be restored from the holding area before later retention steps happen elsewhere.</p>
                   </CardContent>
                 </Card>
               </div>
 
               <Card className="rounded-[24px] border-border/70 bg-card/95 shadow-sm">
                 <CardContent className="space-y-4 p-4">
+                  {recycleBinFeedback ? (
+                    <div
+                      className={cn(
+                        "rounded-[18px] border px-4 py-3 text-sm",
+                        recycleBinFeedback.tone === "success"
+                          ? "border-success/30 bg-success/10 text-foreground"
+                          : "border-caution/30 bg-caution/10 text-foreground",
+                      )}
+                    >
+                      {recycleBinFeedback.message}
+                    </div>
+                  ) : null}
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div>
-                      <p className="text-sm font-semibold text-foreground">Ready to move to bin</p>
+                      <p className="text-sm font-semibold text-foreground">Ready to move</p>
                       <p className="text-sm text-muted-foreground">
-                        These extra copies have already been marked safe to remove from the main library.
+                        Only groups marked “Looks right” can be moved from this page. The keep copy stays in place.
                       </p>
                     </div>
                     <Button
                       type="button"
-                      onClick={() =>
-                        executeReclaimMutation.mutate({
-                          content_ids: readyGroups.map((group) => group.group_id),
-                          retention_days: policy?.duplicate_reclaim.default_retention_days ?? 14,
-                        })
-                      }
-                      disabled={executeReclaimMutation.isPending || readyGroups.length === 0}
+                      onClick={() => void handleMoveEligibleDuplicates()}
+                      disabled={executeReclaimMutation.isPending || readyGroups.length === 0 || Boolean(recycleConfigWarning)}
                     >
-                      Move ready duplicates to bin
+                      Move eligible duplicates
                     </Button>
                   </div>
-
+                  <div className="rounded-[18px] border border-border/70 bg-background/70 px-4 py-3 text-sm text-muted-foreground">
+                    <p>Only extra copies move from this page. They go into the configured duplicate holding area, and restore is supported from that stage.</p>
+                    {recycleConfigWarning ? (
+                      <p className="mt-2 text-caution">{recycleConfigWarning}</p>
+                    ) : (
+                      <p className="mt-2">
+                        Holding area: <span className="font-mono text-foreground">{archiveRoot}</span>. Current holding window: {archiveRetentionDays} day{archiveRetentionDays === 1 ? "" : "s"}. Later recycle/purge remains a separate manual workflow.
+                      </p>
+                    )}
+                  </div>
                   {!readyGroups.length ? (
-                    <p className="text-sm text-muted-foreground">No duplicate groups are marked ready to move to the bin.</p>
-                  ) : (
+                    <p className="text-sm text-muted-foreground">No eligible extra copies are left to move from the main library.</p>
+                  ) : null}
+
+                  {readyGroups.length ? (
                     <div className="space-y-3">
                       {readyGroups.map((group) => (
                         <div
@@ -902,28 +1094,13 @@ export default function DuplicatesPage() {
                             </div>
                             <p className="truncate text-sm font-semibold text-foreground">{basename(group.canonical_path)}</p>
                             <p className="text-xs text-muted-foreground">
-                              Review state: {getReviewPresentation(currentReviewMark(group), Boolean(group.is_stale)).label}
+                              Review state: Looks right
                             </p>
-                          </div>
-                          <div className="flex gap-2">
-                            <Button
-                              type="button"
-                              variant="outline"
-                              onClick={() =>
-                                reclaimMutation.mutate({
-                                  content_id: group.group_id,
-                                  reclaim_status: "UNREVIEWED",
-                                })
-                              }
-                              disabled={reclaimMutation.isPending}
-                            >
-                              Remove from ready list
-                            </Button>
                           </div>
                         </div>
                       ))}
                     </div>
-                  )}
+                  ) : null}
                 </CardContent>
               </Card>
 
@@ -932,12 +1109,12 @@ export default function DuplicatesPage() {
                   <div>
                     <p className="text-sm font-semibold text-foreground">Needs review before moving to bin</p>
                     <p className="text-sm text-muted-foreground">
-                      Review these groups before deciding whether the extra copies are safe to remove.
+                      Groups must be reviewed again before they can re-enter Ready to move. Restored groups stay out until the operator marks Looks right again.
                     </p>
                   </div>
 
                   {!removalReviewGroups.length ? (
-                    <p className="text-sm text-muted-foreground">No additional duplicate groups are waiting for bin review.</p>
+                    <p className="text-sm text-muted-foreground">No additional duplicate groups are waiting for review.</p>
                   ) : (
                     <div className="space-y-3">
                       {removalReviewGroups.map((group) => (
@@ -957,21 +1134,10 @@ export default function DuplicatesPage() {
                             <p className="truncate text-sm font-semibold text-foreground">{basename(group.canonical_path)}</p>
                             <p className="text-xs text-muted-foreground">
                               Review state: {getReviewPresentation(currentReviewMark(group), Boolean(group.is_stale)).label}
+                              {reclaimBridgeBlockedIds.includes(group.group_id)
+                                ? " • Eligibility sync needs attention before this group can move."
+                                : ""}
                             </p>
-                          </div>
-                          <div className="flex gap-2">
-                            <Button
-                              type="button"
-                              onClick={() =>
-                                reclaimMutation.mutate({
-                                  content_id: group.group_id,
-                                  reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
-                                })
-                              }
-                              disabled={reclaimMutation.isPending}
-                            >
-                              Mark safe to remove
-                            </Button>
                           </div>
                         </div>
                       ))}
@@ -983,14 +1149,14 @@ export default function DuplicatesPage() {
               <Card className="rounded-[24px] border-border/70 bg-card/95 shadow-sm">
                 <CardContent className="space-y-4 p-4">
                   <div>
-                    <p className="text-sm font-semibold text-foreground">In the bin</p>
+                    <p className="text-sm font-semibold text-foreground">In the holding area</p>
                     <p className="text-sm text-muted-foreground">
-                      Items in the bin can be restored before they are permanently deleted.
+                      These extra copies have already moved into the configured holding area. Restore is available here. Later retention recycle/purge happens elsewhere.
                     </p>
                   </div>
 
                   {!archivedItems.length ? (
-                    <p className="text-sm text-muted-foreground">No duplicate files are in the bin right now.</p>
+                    <p className="text-sm text-muted-foreground">No duplicate files are in the holding area right now.</p>
                   ) : (
                     <div className="space-y-3">
                       {archivedItems.map((item) => (
@@ -1001,7 +1167,7 @@ export default function DuplicatesPage() {
                           <div className="min-w-0 space-y-2">
                             <div className="flex flex-wrap items-center gap-2">
                               <StatusBadge label={binStateLabels.inBin} severity="neutral" />
-                              {item.expires_at ? <StatusBadge label={formatDaysRemaining(item.expires_at) ?? binStateLabels.approachingExpiry} severity="info" /> : null}
+                              {item.expires_at ? <StatusBadge label={formatDaysRemaining(item.expires_at) ?? binStateLabels.daysRemaining} severity="info" /> : null}
                             </div>
                             <p className="truncate text-sm font-semibold text-foreground">{basename(item.original_path)}</p>
                             <p className="truncate text-xs text-muted-foreground">{item.archive_path}</p>
@@ -1009,15 +1175,20 @@ export default function DuplicatesPage() {
                           <Button
                             type="button"
                             variant="outline"
-                            onClick={() => restoreReclaimMutation.mutate(item.file_instance_id)}
+                            onClick={() => void handleRestore(item)}
                             disabled={restoreReclaimMutation.isPending}
                           >
-                            Restore from bin
+                            Restore
                           </Button>
                         </div>
                       ))}
                     </div>
                   )}
+                  {restoredItems.length ? (
+                    <div className="rounded-[18px] border border-border/70 bg-background/70 px-4 py-3 text-sm text-muted-foreground">
+                      {restoredItems.length} restored file{restoredItems.length === 1 ? "" : "s"} already left the holding area. Those groups stay out of Ready to move until they are reviewed again.
+                    </div>
+                  ) : null}
                 </CardContent>
               </Card>
             </div>

@@ -21,12 +21,14 @@ interface DuplicateReviewActionBarProps {
 
 function ActionChoice({
   active,
+  actionId,
   icon: Icon,
   label,
   onClick,
   tone,
 }: {
   active: boolean;
+  actionId: string;
   icon: typeof CheckCircle2;
   label: string;
   onClick: () => void;
@@ -38,6 +40,7 @@ function ActionChoice({
       variant={active ? "default" : "outline"}
       onClick={onClick}
       aria-label={`Mark as ${label.toLowerCase()}`}
+      data-testid={`review-mark-${actionId}`}
       className={cn(
         "justify-start rounded-full px-4",
         active && tone === "success" && "bg-success text-success-foreground hover:bg-success/90",
@@ -92,6 +95,7 @@ export function DuplicateReviewActionBar({
         <div className="flex flex-wrap gap-2">
           <ActionChoice
             active={activeMark === "looks_right"}
+            actionId="looks-right"
             icon={CheckCircle2}
             label="Looks right"
             onClick={() => onMark("looks_right")}
@@ -99,6 +103,7 @@ export function DuplicateReviewActionBar({
           />
           <ActionChoice
             active={activeMark === "needs_review"}
+            actionId="needs-review"
             icon={AlertCircle}
             label="Needs review"
             onClick={() => onMark("needs_review")}
@@ -106,6 +111,7 @@ export function DuplicateReviewActionBar({
           />
           <ActionChoice
             active={activeMark === "not_sure"}
+            actionId="not-sure"
             icon={HelpCircle}
             label="Not sure"
             onClick={() => onMark("not_sure")}
