@@ -29,6 +29,20 @@ vi.mock("@/lib/api/endpoints", () => ({
   restoreIntegrityFile: mocks.restoreIntegrityFile,
 }));
 
+vi.mock("@/components/progress/LiveProgressPanel", () => ({
+  LiveProgressPanel: ({
+    operationKind,
+    operationStatus,
+  }: {
+    operationKind?: string;
+    operationStatus?: string;
+  }) => (
+    <div data-testid="live-progress-panel">
+      Live progress panel {operationKind ?? "none"} {operationStatus ?? "idle"}
+    </div>
+  ),
+}));
+
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -139,6 +153,10 @@ describe("IntegrityPage", () => {
     renderPage();
 
     expect(await screen.findByText("Integrity Review")).toBeInTheDocument();
+    expect(screen.getByText("Integrity Scan Status")).toBeInTheDocument();
+    expect(
+      screen.getByText("Start a Quick Scan or Deep Scan above. Live activity and the latest scan summary will appear here."),
+    ).toBeInTheDocument();
     expect(screen.getByText("Playback Issues")).toBeInTheDocument();
     expect(await screen.findByText("problem.mp4")).toBeInTheDocument();
     expect(screen.getAllByText("ffprobe_failed").length).toBeGreaterThan(0);
@@ -152,7 +170,9 @@ describe("IntegrityPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Quick Scan" }));
 
     expect(await screen.findByRole("button", { name: "Running Quick Scan..." })).toBeDisabled();
-    expect(screen.getByText("Quick scan started")).toBeInTheDocument();
+    expect(screen.getByText("Scan Running")).toBeInTheDocument();
+    expect(screen.getByText("Quick scan started.")).toBeInTheDocument();
+    expect(screen.getByTestId("live-progress-panel")).toHaveTextContent("Live progress panel integrity running");
     deferred.resolve({
       data: {
         run_id: "run-1",
@@ -163,12 +183,16 @@ describe("IntegrityPage", () => {
       },
     });
     await waitFor(() => expect(mocks.startIntegrityScan).toHaveBeenCalledWith({ mode: "FAST" }));
-    expect(await screen.findByText("Last scan summary")).toBeInTheDocument();
-    expect(screen.getByText("Quick scan completed")).toBeInTheDocument();
-    expect(screen.getByText("Mode used: Quick")).toBeInTheDocument();
-    expect(screen.getByText("Eligible files: 12")).toBeInTheDocument();
-    expect(screen.getByText("Files scanned: 12")).toBeInTheDocument();
-    expect(screen.getByText("Issues found: 3")).toBeInTheDocument();
+    expect(await screen.findByText("Integrity Scan Result")).toBeInTheDocument();
+    expect(screen.getByText("Scan Complete")).toBeInTheDocument();
+    expect(screen.getByText("Quick scan completed and refreshed the dashboard, review queue, and selected file detail.")).toBeInTheDocument();
+    expect(screen.getByText("Run ID")).toBeInTheDocument();
+    expect(screen.getByText("Eligible files")).toBeInTheDocument();
+    expect(screen.getByText("Files scanned")).toBeInTheDocument();
+    expect(screen.getByText("Issues found")).toBeInTheDocument();
+    expect(screen.getAllByText("Quick").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("12").length).toBeGreaterThan(1);
+    expect(screen.getAllByText("3").length).toBeGreaterThan(0);
   });
 
   it("deep scan shows in-flight state and then success summary", async () => {
@@ -180,7 +204,8 @@ describe("IntegrityPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Deep Scan" }));
 
     expect(await screen.findByRole("button", { name: "Running Deep Scan..." })).toBeDisabled();
-    expect(screen.getByText("Deep scan started")).toBeInTheDocument();
+    expect(screen.getByText("Deep scan started.")).toBeInTheDocument();
+    expect(screen.getByTestId("live-progress-panel")).toHaveTextContent("Live progress panel integrity running");
     deferred.resolve({
       data: {
         run_id: "run-2",
@@ -192,11 +217,13 @@ describe("IntegrityPage", () => {
     });
 
     await waitFor(() => expect(mocks.startIntegrityScan).toHaveBeenCalledWith({ mode: "DEEP" }));
-    expect(await screen.findByText("Deep scan completed")).toBeInTheDocument();
-    expect(screen.getByText("Mode used: Deep")).toBeInTheDocument();
-    expect(screen.getByText("Eligible files: 12")).toBeInTheDocument();
-    expect(screen.getByText("Files scanned: 12")).toBeInTheDocument();
-    expect(screen.getByText("Issues found: 4")).toBeInTheDocument();
+    expect(await screen.findByText("Deep scan completed and refreshed the dashboard, review queue, and selected file detail.")).toBeInTheDocument();
+    expect(screen.getByText("Eligible files")).toBeInTheDocument();
+    expect(screen.getByText("Files scanned")).toBeInTheDocument();
+    expect(screen.getByText("Issues found")).toBeInTheDocument();
+    expect(screen.getAllByText("Deep").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("12").length).toBeGreaterThan(1);
+    expect(screen.getByText("4")).toBeInTheDocument();
   });
 
   it("shows a visible message when no eligible files were scanned", async () => {
@@ -235,9 +262,9 @@ describe("IntegrityPage", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Quick Scan" }));
 
-    expect(await screen.findByText("Quick scan failed: ffprobe unavailable")).toBeInTheDocument();
-    expect(screen.getByText("Last scan summary")).toBeInTheDocument();
-    expect(screen.getByText("Status: failed")).toBeInTheDocument();
+    expect(await screen.findByText("Scan Failed")).toBeInTheDocument();
+    expect(screen.getByText("Quick scan failed before the page could refresh with new results.")).toBeInTheDocument();
+    expect(screen.getByText("ffprobe unavailable")).toBeInTheDocument();
   });
 
   it("keeps the last scan summary visible after completion", async () => {
@@ -245,9 +272,9 @@ describe("IntegrityPage", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Quick Scan" }));
 
-    expect(await screen.findByText("Last scan summary")).toBeInTheDocument();
-    expect(screen.getByText("Quick scan completed")).toBeInTheDocument();
-    expect(screen.getByText("Mode used: Quick")).toBeInTheDocument();
+    expect(await screen.findByText("Integrity Scan Result")).toBeInTheDocument();
+    expect(screen.getByText("Quick scan completed and refreshed the dashboard, review queue, and selected file detail.")).toBeInTheDocument();
+    expect(screen.getAllByText("Quick").length).toBeGreaterThan(0);
   });
 
   it("submits mark as ok review decisions", async () => {

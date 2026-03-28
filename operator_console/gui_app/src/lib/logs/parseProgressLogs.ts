@@ -11,7 +11,7 @@ function extractNumber(line: string, field: string): number | null {
 }
 
 function extractPhase(line: string): LogPhase {
-  const match = line.match(/phase=(ingest|plan|apply|canonical|tag_enrichment|tag)\b/);
+  const match = line.match(/phase=(ingest|plan|apply|canonical|integrity|tag_enrichment|tag)\b/);
   const phase = match?.[1];
   if (phase === "tag_enrichment") return "tag";
   return (phase as LogPhase | undefined) ?? null;

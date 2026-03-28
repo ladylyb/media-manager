@@ -52,6 +52,9 @@ describe("parseProgressLogs", () => {
     const tagResult = parseProgressLogs([
       "2026-03-21 INFO media_manager.app.persistence.tag_enrichment phase=tag_enrichment stage=enrich processed_count=2 total_count=5 progress_percent=40.0 throughput_fps=10.0 Progress: 2/5 items (40.0%) | 10.0 items/sec | elapsed 0.2s",
     ]);
+    const integrityResult = parseProgressLogs([
+      "2026-03-21 INFO media_manager.app.persistence.integrity phase=integrity stage=scan_active_files processed_count=4 total_count=10 progress_percent=40.0 throughput_fps=2.0 Progress: 4/10 files (40.0%) | 2.0 files/sec | elapsed 2.0s",
+    ]);
 
     expect(applyResult.phase).toBe("apply");
     expect(applyResult.stage).toBe("execute_actions");
@@ -59,6 +62,8 @@ describe("parseProgressLogs", () => {
     expect(canonicalResult.stage).toBe("recompute");
     expect(tagResult.phase).toBe("tag");
     expect(tagResult.stage).toBe("enrich");
+    expect(integrityResult.phase).toBe("integrity");
+    expect(integrityResult.stage).toBe("scan_active_files");
   });
 
   it("marks warning and error lines for highlighting", () => {
