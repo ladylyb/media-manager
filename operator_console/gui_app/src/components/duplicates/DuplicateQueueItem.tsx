@@ -59,7 +59,7 @@ export function DuplicateQueueItem({
           {truncateMiddle(group.canonical_path, 40)}
         </p>
         <p className="text-[11px] text-muted-foreground">
-          {markLabel} • {duplicateCount === 1 ? "1 matching copy" : `${duplicateCount} matching copies`}
+          {markLabel} • {duplicateCount === 1 ? "1 extra copy" : `${duplicateCount} extra copies`}
         </p>
         <div data-testid="review-queue-no-thumbnails" className="hidden" />
       </div>

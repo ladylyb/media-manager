@@ -166,8 +166,8 @@ describe("DuplicatesPage", () => {
     expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Next" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Mark as looks right" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Archive reclaimable" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Mark safe to reclaim" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Move ready duplicates to bin" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Mark safe to remove" })).not.toBeInTheDocument();
   });
 
   it("toggles the side navigation open and closed without breaking the comparison area", async () => {
@@ -257,13 +257,13 @@ describe("DuplicatesPage", () => {
   it("updates the active comparison pane when a duplicate thumbnail is selected", async () => {
     renderPage();
 
-    expect(await screen.findByTestId("secondary-comparison-title")).toHaveTextContent("Selected copy: alpha-copy.jpg");
+    expect(await screen.findByTestId("secondary-comparison-title")).toHaveTextContent("Extra copy: alpha-copy.jpg");
 
     fireEvent.click(screen.getByRole("button", { name: "Compare duplicate 2: alpha-copy-2.jpg" }));
 
     await waitFor(() => {
-      expect(screen.getByTestId("secondary-comparison-title")).toHaveTextContent("Selected copy: alpha-copy-2.jpg");
-      expect(screen.getByTestId("active-duplicate-caption")).toHaveTextContent("Active: alpha-copy-2.jpg");
+      expect(screen.getByTestId("secondary-comparison-title")).toHaveTextContent("Extra copy: alpha-copy-2.jpg");
+      expect(screen.getByTestId("active-duplicate-caption")).toHaveTextContent("Comparing: alpha-copy-2.jpg");
       expect(screen.getByRole("button", { name: "Compare duplicate 2: alpha-copy-2.jpg" })).toHaveAttribute("aria-pressed", "true");
     });
 
@@ -295,12 +295,12 @@ describe("DuplicatesPage", () => {
 
     renderPage("/duplicates?tab=removal");
 
-    expect(await screen.findByRole("heading", { name: "Removal review" })).toBeInTheDocument();
-    expect(screen.getAllByText("Ready to archive").length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "Archive reclaimable" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Recycle Bin" })).toBeInTheDocument();
+    expect(screen.getAllByText("Ready to move to bin").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Move ready duplicates to bin" })).toBeInTheDocument();
   });
 
-  it("keeps reclaim actions in removal review with explicit queue sections", async () => {
+  it("keeps recycle-bin actions in distinct operator-facing sections", async () => {
     groupsData = [
       {
         ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
@@ -326,10 +326,10 @@ describe("DuplicatesPage", () => {
 
     renderPage("/duplicates?tab=removal");
 
-    expect(await screen.findByText("Needs removal review")).toBeInTheDocument();
-    expect(screen.getByText("Archived items / restore candidates")).toBeInTheDocument();
+    expect(await screen.findByText("Needs review before moving to bin")).toBeInTheDocument();
+    expect(screen.getByText("In the bin")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Mark safe to reclaim" }));
+    fireEvent.click(screen.getByRole("button", { name: "Mark safe to remove" }));
 
     await waitFor(() =>
       expect(mocks.setDuplicateReclaim).toHaveBeenCalledWith({
@@ -338,7 +338,7 @@ describe("DuplicatesPage", () => {
       }),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Archive reclaimable" }));
+    fireEvent.click(screen.getByRole("button", { name: "Move ready duplicates to bin" }));
 
     await waitFor(() =>
       expect(mocks.executeDuplicateReclaim).toHaveBeenCalledWith({
@@ -347,7 +347,7 @@ describe("DuplicatesPage", () => {
       }),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    fireEvent.click(screen.getByRole("button", { name: "Restore from bin" }));
 
     await waitFor(() =>
       expect(mocks.restoreDuplicateReclaim).toHaveBeenCalledWith({
@@ -401,9 +401,10 @@ describe("DuplicatesPage", () => {
     renderPage("/duplicates?tab=playback-issues");
 
     expect(await screen.findByRole("heading", { name: "Playback issues" })).toBeInTheDocument();
-    expect(screen.getByText("Duplicate-related playback exceptions")).toBeInTheDocument();
+    expect(screen.getByText("Playback issues in duplicate groups")).toBeInTheDocument();
     expect(screen.getAllByText("alpha-main.jpg").length).toBeGreaterThan(0);
-    expect(screen.getByText("Blocks removal in this view")).toBeInTheDocument();
+    expect(screen.getByText("Playback issue")).toBeInTheDocument();
+    expect(screen.getByText("Needs checking")).toBeInTheDocument();
     expect(screen.queryByText("unrelated.jpg")).not.toBeInTheDocument();
     expect(screen.queryByText("Quick")).not.toBeInTheDocument();
   });
@@ -482,7 +483,7 @@ describe("DuplicatesPage", () => {
     expect(secondaryTitle).toHaveClass("truncate");
     expect(reviewTitle).toHaveAttribute("title", longName);
     expect(primaryTitle).toHaveAttribute("title", longName);
-    expect(secondaryTitle).toHaveAttribute("title", `Selected copy: copy-${longName}`);
+    expect(secondaryTitle).toHaveAttribute("title", `Extra copy: copy-${longName}`);
   });
 
   it("constrains long filenames safely inside the side navigation", async () => {

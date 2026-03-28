@@ -44,6 +44,19 @@ const reviewOptions: Array<{ value: ReviewFilter; label: string }> = [
   { value: "not_sure", label: "Not sure" },
 ];
 
+const binStateLabels = {
+  ready: "Ready to move to bin",
+  inBin: "In the bin",
+  needsReview: "Safe to remove",
+  restore: "Restore",
+  moveToBin: "Move ready duplicates to bin",
+  daysRemaining: "Days remaining",
+  approachingExpiry: "Approaching permanent deletion",
+  needsChecking: "Needs checking",
+  playbackIssue: "Playback issue",
+  wontPlay: "Won't play",
+} as const;
+
 function getErrorMessage(err: unknown): string | null {
   if (!err) return null;
   if (err instanceof Error) return err.message;
@@ -59,6 +72,14 @@ function formatBytes(value: number): string {
   if (value >= 1024 ** 3) return `${(value / (1024 ** 3)).toFixed(2)} GB`;
   if (value >= 1024 ** 2) return `${(value / (1024 ** 2)).toFixed(1)} MB`;
   return `${value} B`;
+}
+
+function formatDaysRemaining(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const milliseconds = new Date(value).getTime() - Date.now();
+  if (Number.isNaN(milliseconds)) return null;
+  const days = Math.max(Math.ceil(milliseconds / (1000 * 60 * 60 * 24)), 0);
+  return days === 1 ? "1 day remaining" : `${days} days remaining`;
 }
 
 function getReviewPresentation(mark?: ReviewMark, isStale = false) {
@@ -136,6 +157,10 @@ function getDuplicatesTab(value: string | null): DuplicatesTab {
 
 function isIssueBlocking(issue: IntegrityIssue): boolean {
   return issue.status === "BROKEN";
+}
+
+function getPlaybackStatusLabel(issue: IntegrityIssue): string {
+  return issue.status === "BROKEN" ? binStateLabels.wontPlay : binStateLabels.needsChecking;
 }
 
 export default function DuplicatesPage() {
@@ -289,7 +314,6 @@ export default function DuplicatesPage() {
   const selectedIndex = selected ? filteredGroups.findIndex((group) => group.group_id === selected.group_id) : -1;
   const selectedOverallIndex = selected ? sortedGroups.findIndex((group) => group.group_id === selected.group_id) : -1;
   const reviewedCount = sortedGroups.filter((group) => currentReviewMark(group)).length;
-  const reclaimReadyCount = sortedGroups.filter((group) => group.reclaim_status === "REVIEWED_SAFE_TO_RECLAIM").length;
   const totalReclaimableFiles = sortedGroups.reduce((sum, group) => sum + (group.reclaimable_file_count ?? 0), 0);
   const totalEstimatedBytes = sortedGroups.reduce((sum, group) => sum + (group.estimated_reclaim_bytes ?? 0), 0);
   const selectedCanonical = selected?.duplicates.find((file) => file.is_canonical) ?? null;
@@ -310,7 +334,6 @@ export default function DuplicatesPage() {
 
   const selectedDuplicate =
     selectedDuplicates.find((file) => file.file_instance_id === selectedDuplicateId) ?? selectedDuplicates[0] ?? null;
-  const selectedReview = selected ? getReviewPresentation(currentReviewMark(selected), Boolean(selected.is_stale)) : null;
   const reclaimItems = ((reclaimItemsQuery.data?.items ?? []) as DuplicateReclaimItem[]) ?? [];
   const archivedItems = reclaimItems.filter((item) => item.item_status === "ARCHIVED");
   const readyGroups = sortedGroups.filter((group) => group.reclaim_status === "REVIEWED_SAFE_TO_RECLAIM");
@@ -448,7 +471,7 @@ export default function DuplicatesPage() {
       <TopSurfaceHeader
         badge="Duplicate Review"
         title="Work duplicate decisions in focused steps."
-        description="Compare groups, review removal workflow, and inspect playback exceptions without mixing those jobs together."
+        description="Compare duplicates, move safe extra copies to the Recycle Bin, and check playback problems without mixing those jobs together."
         icon={Copy}
         density={activeTab === "review" ? "compact" : "default"}
         className={activeTab === "review" ? "rounded-[24px]" : undefined}
@@ -461,16 +484,16 @@ export default function DuplicatesPage() {
         <ErrorAlert message={getErrorMessage(reviewMutation.error) || "Failed to save duplicate review"} />
       )}
       {reclaimMutation.error && (
-        <ErrorAlert message={getErrorMessage(reclaimMutation.error) || "Failed to save reclaim readiness"} />
+        <ErrorAlert message={getErrorMessage(reclaimMutation.error) || "Failed to update Safe to remove"} />
       )}
       {executeReclaimMutation.error && (
-        <ErrorAlert message={getErrorMessage(executeReclaimMutation.error) || "Failed to archive reclaimable duplicates"} />
+        <ErrorAlert message={getErrorMessage(executeReclaimMutation.error) || "Failed to move duplicates to the Recycle Bin"} />
       )}
       {restoreReclaimMutation.error && (
-        <ErrorAlert message={getErrorMessage(restoreReclaimMutation.error) || "Failed to restore archived duplicate"} />
+        <ErrorAlert message={getErrorMessage(restoreReclaimMutation.error) || "Failed to restore duplicate from the Recycle Bin"} />
       )}
       {playbackIssuesQuery.error && activeTab === "playback-issues" ? (
-        <ErrorAlert message={getErrorMessage(playbackIssuesQuery.error) || "Failed to load duplicate playback issues"} />
+        <ErrorAlert message={getErrorMessage(playbackIssuesQuery.error) || "Failed to load playback issues for duplicates"} />
       ) : null}
 
       {duplicatesQuery.isLoading ? (
@@ -482,7 +505,7 @@ export default function DuplicatesPage() {
         <EmptyState
           icon={<Copy className="h-10 w-10" />}
           title="No duplicate groups to review"
-          description="Once the library finds matching files, they will appear here for side-by-side review."
+          description="When duplicate files are found, they will appear here for side-by-side review."
         />
       ) : (
         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as DuplicatesTab)} className="space-y-4">
@@ -490,7 +513,7 @@ export default function DuplicatesPage() {
             <CardContent className={cn("space-y-4 p-4", activeTab === "review" && "space-y-3 p-3")}>
               <TabsList className="flex h-auto w-full flex-wrap justify-start gap-2 rounded-[18px] bg-muted/60 p-1">
                 <TabsTrigger value="review">Review duplicates</TabsTrigger>
-                <TabsTrigger value="removal">Removal review</TabsTrigger>
+                <TabsTrigger value="removal">Recycle Bin</TabsTrigger>
                 <TabsTrigger value="playback-issues">Playback issues</TabsTrigger>
               </TabsList>
 
@@ -500,7 +523,7 @@ export default function DuplicatesPage() {
                     <div>
                       <h2 className="text-lg font-semibold tracking-tight text-foreground">Review duplicates</h2>
                       <p className="mt-1 text-sm text-muted-foreground">
-                        Compare one group at a time, mark the human review state, and move on.
+                        Compare one group at a time, decide whether the extra copies look safe to remove, and move on.
                       </p>
                     </div>
                     <p className="text-sm text-muted-foreground">{reviewProgressLabel} in sequence</p>
@@ -510,9 +533,9 @@ export default function DuplicatesPage() {
 
               <TabsContent value="removal" className="mt-0">
                 <div className="space-y-2">
-                  <h2 className="text-xl font-semibold tracking-tight text-foreground">Removal review</h2>
+                  <h2 className="text-xl font-semibold tracking-tight text-foreground">Recycle Bin</h2>
                   <p className="text-sm text-muted-foreground">
-                    Work the existing reclaim workflow from an explicit operational queue.
+                    Move safe extra copies out of the main library, restore them if needed, and keep track of the retention window.
                   </p>
                 </div>
               </TabsContent>
@@ -521,7 +544,7 @@ export default function DuplicatesPage() {
                 <div className="space-y-2">
                   <h2 className="text-xl font-semibold tracking-tight text-foreground">Playback issues</h2>
                   <p className="text-sm text-muted-foreground">
-                    Inspect duplicate-related blockers and warnings, then continue review here or in Integrity Review.
+                    Check duplicate-related playback problems here, then continue reviewing duplicates or open Integrity Review for more detail.
                   </p>
                 </div>
               </TabsContent>
@@ -568,7 +591,7 @@ export default function DuplicatesPage() {
                     <CardContent className="space-y-3 p-3">
                       <div className="space-y-1">
                         <p className="text-sm font-semibold text-foreground">Group navigation</p>
-                        <p className="text-sm text-muted-foreground">Jump to a group without interrupting the main review loop.</p>
+                        <p className="text-sm text-muted-foreground">Jump to a different duplicate group without interrupting the main review loop.</p>
                       </div>
 
                       <ScrollArea className="h-[40rem] pr-2">
@@ -608,7 +631,7 @@ export default function DuplicatesPage() {
                               >
                                 {basename(selected.canonical_path)}
                               </p>
-                              <p className="text-sm text-muted-foreground">{reviewMetaLine}</p>
+                              <p className="text-sm text-muted-foreground">{reviewMetaLine.replace("matching copies", "extra copies").replace("matching copy", "extra copy")}</p>
                             </div>
                           </div>
                           <DuplicateReviewActionBar
@@ -626,12 +649,12 @@ export default function DuplicatesPage() {
                             <div className="flex flex-col gap-2 rounded-[18px] border border-caution/30 bg-caution/10 px-3 py-2.5 lg:flex-row lg:items-center lg:justify-between">
                               <div className="min-w-0">
                                 <p className="text-sm text-muted-foreground">
-                                  {selected.integrity_issue_count} playback issue{selected.integrity_issue_count === 1 ? "" : "s"} may affect this decision. Check Playback Issues if you need more detail.
+                                  {selected.integrity_issue_count} {binStateLabels.playbackIssue.toLowerCase()}{selected.integrity_issue_count === 1 ? "" : "s"} may affect this decision. Open Playback issues if something needs checking.
                                 </p>
                               </div>
                               <div className="flex gap-2">
                                 <Button type="button" variant="outline" size="sm" onClick={() => setActiveTab("playback-issues")}>
-                                  Open playback issues
+                                  Open Playback issues
                                 </Button>
                                 <Button asChild type="button" variant="outline" size="sm">
                                   <Link to="/integrity">
@@ -646,8 +669,8 @@ export default function DuplicatesPage() {
 
                         <div className="grid gap-3 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1.1fr)]">
                           <DuplicateFocusCard
-                            badge="Main"
-                            description="Anchor this comparison against the selected duplicate."
+                            badge="Keep copy"
+                            description="Use this copy as the point of comparison for the current review."
                             emphasis="success"
                             file={selectedCanonical}
                             previewClassName="h-[26rem] sm:h-[34rem] lg:h-[44rem]"
@@ -658,11 +681,11 @@ export default function DuplicatesPage() {
 
                           {selectedDuplicate ? (
                             <DuplicateFocusCard
-                              badge="Selected copy"
-                              description={`Selected duplicate ${selectedDuplicates.findIndex((file) => file.file_instance_id === selectedDuplicate.file_instance_id) + 1} updates this pane immediately.`}
+                              badge="Extra copy"
+                              description={`Selected extra copy ${selectedDuplicates.findIndex((file) => file.file_instance_id === selectedDuplicate.file_instance_id) + 1} updates this pane immediately.`}
                               emphasis="info"
                               file={selectedDuplicate}
-                              title={`Selected copy: ${basename(selectedDuplicate.path)}`}
+                              title={`Extra copy: ${basename(selectedDuplicate.path)}`}
                               previewClassName="h-[26rem] sm:h-[34rem] lg:h-[44rem]"
                               previewFit="contain"
                               previewTestId="secondary-comparison-preview"
@@ -673,7 +696,7 @@ export default function DuplicatesPage() {
                               <CardContent className="flex h-full min-h-[14rem] items-center justify-center p-6 text-center">
                                 <div className="space-y-2">
                                   <StatusBadge label="No extra copies" severity="neutral" />
-                                  <p className="text-sm text-muted-foreground">Nothing else to compare in this group.</p>
+                                  <p className="text-sm text-muted-foreground">There are no other copies to compare in this group.</p>
                                 </div>
                               </CardContent>
                             </Card>
@@ -684,7 +707,7 @@ export default function DuplicatesPage() {
                           <section className="space-y-2.5">
                             <div className="flex items-center justify-between gap-3">
                               <h3 className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                                Select the duplicate to compare
+                                Select the extra copy to compare
                               </h3>
                               {selectedDuplicate ? (
                                 <p
@@ -692,7 +715,7 @@ export default function DuplicatesPage() {
                                   title={basename(selectedDuplicate.path)}
                                   data-testid="active-duplicate-caption"
                                 >
-                                  Active: {basename(selectedDuplicate.path)}
+                                  Comparing: {basename(selectedDuplicate.path)}
                                 </p>
                               ) : null}
                             </div>
@@ -749,7 +772,7 @@ export default function DuplicatesPage() {
                             <div>
                               <p className="text-sm font-semibold text-foreground">Technical details</p>
                               <p className="mt-1 text-sm text-muted-foreground">
-                                Paths and reference IDs for moments when visual review is not enough.
+                                Paths and reference IDs for moments when side-by-side review is not enough.
                               </p>
                             </div>
                           </button>
@@ -764,7 +787,7 @@ export default function DuplicatesPage() {
                             </div>
                             <div className="space-y-2">
                               <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-                                Main version path
+                                Keep copy path
                               </p>
                               <p className="break-all font-mono text-xs text-foreground">{selected.canonical_path}</p>
                             </div>
@@ -781,7 +804,7 @@ export default function DuplicatesPage() {
                                 >
                                   <div className="flex flex-wrap items-center gap-2">
                                     <StatusBadge
-                                      label={file.is_canonical ? "Main version" : "Matching file"}
+                                      label={file.is_canonical ? "Keep copy" : "Extra copy"}
                                       severity={file.is_canonical ? "success" : "neutral"}
                                     />
                                     <StatusBadge label={file.file_instance_id || "No file ID"} severity="neutral" />
@@ -797,7 +820,7 @@ export default function DuplicatesPage() {
                   ) : (
                     <EmptyState
                       title="Select a group to compare"
-                      description="Choose a duplicate group from the active filter to compare the main version against a matching file."
+                      description="Choose a duplicate group from the current filter to compare the keep copy against an extra copy."
                     />
                   )}
                 </CardContent>
@@ -811,23 +834,23 @@ export default function DuplicatesPage() {
               <div className="grid gap-3 md:grid-cols-3">
                 <Card className="rounded-[22px] border-border/70 bg-card/95 shadow-sm">
                   <CardContent className="space-y-1 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Ready groups</p>
+                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Ready to move to bin</p>
                     <p className="text-2xl font-semibold text-foreground">{readyGroups.length}</p>
-                    <p className="text-sm text-muted-foreground">{totalReclaimableFiles} files reclaimable across duplicate groups.</p>
+                    <p className="text-sm text-muted-foreground">{totalReclaimableFiles} extra copies are currently marked safe to remove.</p>
                   </CardContent>
                 </Card>
                 <Card className="rounded-[22px] border-border/70 bg-card/95 shadow-sm">
                   <CardContent className="space-y-1 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Estimated savings</p>
+                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Space you could free up</p>
                     <p className="text-2xl font-semibold text-foreground">{formatBytes(totalEstimatedBytes)}</p>
-                    <p className="text-sm text-muted-foreground">Operational estimate based on existing duplicate read models.</p>
+                    <p className="text-sm text-muted-foreground">Estimated space if the ready extra copies move out of the main library.</p>
                   </CardContent>
                 </Card>
                 <Card className="rounded-[22px] border-border/70 bg-card/95 shadow-sm">
                   <CardContent className="space-y-1 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Archived items</p>
+                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">In the bin</p>
                     <p className="text-2xl font-semibold text-foreground">{archivedItems.length}</p>
-                    <p className="text-sm text-muted-foreground">Restore candidates remain grouped separately below.</p>
+                    <p className="text-sm text-muted-foreground">Items in the bin can be restored before the retention window ends.</p>
                   </CardContent>
                 </Card>
               </div>
@@ -836,9 +859,9 @@ export default function DuplicatesPage() {
                 <CardContent className="space-y-4 p-4">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div>
-                      <p className="text-sm font-semibold text-foreground">Ready to archive</p>
+                      <p className="text-sm font-semibold text-foreground">Ready to move to bin</p>
                       <p className="text-sm text-muted-foreground">
-                        Groups already marked safe in the current reclaim workflow.
+                        These extra copies have already been marked safe to remove from the main library.
                       </p>
                     </div>
                     <Button
@@ -851,12 +874,12 @@ export default function DuplicatesPage() {
                       }
                       disabled={executeReclaimMutation.isPending || readyGroups.length === 0}
                     >
-                      Archive reclaimable
+                      Move ready duplicates to bin
                     </Button>
                   </div>
 
                   {!readyGroups.length ? (
-                    <p className="text-sm text-muted-foreground">No groups are currently marked safe to reclaim.</p>
+                    <p className="text-sm text-muted-foreground">No duplicate groups are marked ready to move to the bin.</p>
                   ) : (
                     <div className="space-y-3">
                       {readyGroups.map((group) => (
@@ -866,9 +889,9 @@ export default function DuplicatesPage() {
                         >
                           <div className="min-w-0 space-y-2">
                             <div className="flex flex-wrap items-center gap-2">
-                              <StatusBadge label="Ready to archive" severity="success" />
+                              <StatusBadge label={binStateLabels.ready} severity="success" />
                               <StatusBadge
-                                label={`${group.reclaimable_file_count ?? 0} reclaimable file${(group.reclaimable_file_count ?? 0) === 1 ? "" : "s"}`}
+                                label={`${group.reclaimable_file_count ?? 0} extra cop${(group.reclaimable_file_count ?? 0) === 1 ? "y" : "ies"}`}
                                 severity="neutral"
                               />
                               <StatusBadge label={formatBytes(group.estimated_reclaim_bytes ?? 0)} severity="info" />
@@ -890,7 +913,7 @@ export default function DuplicatesPage() {
                               }
                               disabled={reclaimMutation.isPending}
                             >
-                              Undo ready state
+                              Remove from ready list
                             </Button>
                           </div>
                         </div>
@@ -903,14 +926,14 @@ export default function DuplicatesPage() {
               <Card className="rounded-[24px] border-border/70 bg-card/95 shadow-sm">
                 <CardContent className="space-y-4 p-4">
                   <div>
-                    <p className="text-sm font-semibold text-foreground">Needs removal review</p>
+                    <p className="text-sm font-semibold text-foreground">Needs review before moving to bin</p>
                     <p className="text-sm text-muted-foreground">
-                      Groups that can enter the reclaim workflow but are not yet marked safe.
+                      Review these groups before deciding whether the extra copies are safe to remove.
                     </p>
                   </div>
 
                   {!removalReviewGroups.length ? (
-                    <p className="text-sm text-muted-foreground">No additional groups are waiting for reclaim review.</p>
+                    <p className="text-sm text-muted-foreground">No additional duplicate groups are waiting for bin review.</p>
                   ) : (
                     <div className="space-y-3">
                       {removalReviewGroups.map((group) => (
@@ -920,9 +943,9 @@ export default function DuplicatesPage() {
                         >
                           <div className="min-w-0 space-y-2">
                             <div className="flex flex-wrap items-center gap-2">
-                              <StatusBadge label="Needs reclaim decision" severity="caution" />
+                              <StatusBadge label={binStateLabels.needsReview} severity="caution" />
                               <StatusBadge
-                                label={`${group.reclaimable_file_count ?? 0} reclaimable file${(group.reclaimable_file_count ?? 0) === 1 ? "" : "s"}`}
+                                label={`${group.reclaimable_file_count ?? 0} extra cop${(group.reclaimable_file_count ?? 0) === 1 ? "y" : "ies"}`}
                                 severity="neutral"
                               />
                               <StatusBadge label={formatBytes(group.estimated_reclaim_bytes ?? 0)} severity="info" />
@@ -943,7 +966,7 @@ export default function DuplicatesPage() {
                               }
                               disabled={reclaimMutation.isPending}
                             >
-                              Mark safe to reclaim
+                              Mark safe to remove
                             </Button>
                           </div>
                         </div>
@@ -956,14 +979,14 @@ export default function DuplicatesPage() {
               <Card className="rounded-[24px] border-border/70 bg-card/95 shadow-sm">
                 <CardContent className="space-y-4 p-4">
                   <div>
-                    <p className="text-sm font-semibold text-foreground">Archived items / restore candidates</p>
+                    <p className="text-sm font-semibold text-foreground">In the bin</p>
                     <p className="text-sm text-muted-foreground">
-                      Files already archived in the existing duplicate reclaim workflow.
+                      Items in the bin can be restored before they are permanently deleted.
                     </p>
                   </div>
 
                   {!archivedItems.length ? (
-                    <p className="text-sm text-muted-foreground">No duplicate files are archived yet.</p>
+                    <p className="text-sm text-muted-foreground">No duplicate files are in the bin right now.</p>
                   ) : (
                     <div className="space-y-3">
                       {archivedItems.map((item) => (
@@ -973,10 +996,8 @@ export default function DuplicatesPage() {
                         >
                           <div className="min-w-0 space-y-2">
                             <div className="flex flex-wrap items-center gap-2">
-                              <StatusBadge label="Archived" severity="neutral" />
-                              {item.expires_at ? (
-                                <StatusBadge label={`Expires ${new Date(item.expires_at).toLocaleDateString()}`} severity="info" />
-                              ) : null}
+                              <StatusBadge label={binStateLabels.inBin} severity="neutral" />
+                              {item.expires_at ? <StatusBadge label={formatDaysRemaining(item.expires_at) ?? binStateLabels.approachingExpiry} severity="info" /> : null}
                             </div>
                             <p className="truncate text-sm font-semibold text-foreground">{basename(item.original_path)}</p>
                             <p className="truncate text-xs text-muted-foreground">{item.archive_path}</p>
@@ -987,7 +1008,7 @@ export default function DuplicatesPage() {
                             onClick={() => restoreReclaimMutation.mutate(item.file_instance_id)}
                             disabled={restoreReclaimMutation.isPending}
                           >
-                            Restore
+                            Restore from bin
                           </Button>
                         </div>
                       ))}
@@ -1004,9 +1025,9 @@ export default function DuplicatesPage() {
                 <CardContent className="space-y-3 p-4">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div>
-                      <p className="text-sm font-semibold text-foreground">Duplicate-related playback exceptions</p>
+                      <p className="text-sm font-semibold text-foreground">Playback issues in duplicate groups</p>
                       <p className="text-sm text-muted-foreground">
-                        This view stays limited to issues attached to files in duplicate groups.
+                        This view only shows duplicate groups where a file has a playback issue or needs checking.
                       </p>
                     </div>
                     <div className="flex gap-2">
@@ -1022,13 +1043,13 @@ export default function DuplicatesPage() {
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <StatusBadge label={`${duplicatePlaybackGroups.length} affected group${duplicatePlaybackGroups.length === 1 ? "" : "s"}`} severity="neutral" />
+                    <StatusBadge label={`${duplicatePlaybackGroups.length} group${duplicatePlaybackGroups.length === 1 ? "" : "s"} with playback issues`} severity="neutral" />
                     <StatusBadge
-                      label={`${duplicatePlaybackGroups.filter((entry) => entry.brokenCount > 0).length} blocker cue${duplicatePlaybackGroups.filter((entry) => entry.brokenCount > 0).length === 1 ? "" : "s"}`}
+                      label={`${duplicatePlaybackGroups.filter((entry) => entry.brokenCount > 0).length} won't play${duplicatePlaybackGroups.filter((entry) => entry.brokenCount > 0).length === 1 ? "" : " items"}`}
                       severity="destructive"
                     />
                     <StatusBadge
-                      label={`${duplicatePlaybackGroups.filter((entry) => entry.brokenCount === 0 && entry.suspectCount > 0).length} warning cue${duplicatePlaybackGroups.filter((entry) => entry.brokenCount === 0 && entry.suspectCount > 0).length === 1 ? "" : "s"}`}
+                      label={`${duplicatePlaybackGroups.filter((entry) => entry.brokenCount === 0 && entry.suspectCount > 0).length} need checking${duplicatePlaybackGroups.filter((entry) => entry.brokenCount === 0 && entry.suspectCount > 0).length === 1 ? "" : " items"}`}
                       severity="caution"
                     />
                   </div>
@@ -1040,8 +1061,8 @@ export default function DuplicatesPage() {
               ) : !duplicatePlaybackGroups.length ? (
                 <EmptyState
                   icon={<ShieldAlert className="h-10 w-10" />}
-                  title="No duplicate-related playback issues"
-                  description="Integrity review can still show unrelated file-health findings, but none are attached to the current duplicate groups."
+                  title="No playback issues in duplicate groups"
+                  description="Integrity Review can still show unrelated file-health findings, but none are attached to the current duplicate groups."
                 />
               ) : (
                 <div className="space-y-4">
@@ -1054,17 +1075,17 @@ export default function DuplicatesPage() {
                             <div className="min-w-0 space-y-2">
                               <div className="flex flex-wrap gap-2">
                                 <StatusBadge
-                                  label={hasBlockingCue ? "Blocks removal in this view" : "Warning in this view"}
+                                  label={hasBlockingCue ? "Playback issue" : "Needs checking"}
                                   severity={hasBlockingCue ? "destructive" : "caution"}
                                 />
-                                {brokenCount > 0 ? <StatusBadge label={`${brokenCount} broken`} severity="destructive" /> : null}
-                                {suspectCount > 0 ? <StatusBadge label={`${suspectCount} suspect`} severity="caution" /> : null}
+                                {brokenCount > 0 ? <StatusBadge label={`${brokenCount} ${binStateLabels.wontPlay.toLowerCase()}`} severity="destructive" /> : null}
+                                {suspectCount > 0 ? <StatusBadge label={`${suspectCount} ${binStateLabels.needsChecking.toLowerCase()}`} severity="caution" /> : null}
                               </div>
                               <p className="truncate text-lg font-semibold text-foreground">{basename(group.canonical_path)}</p>
                               <p className="text-sm text-muted-foreground">
                                 {hasBlockingCue
-                                  ? "Use this as a blocker cue while reviewing duplicates here. This does not change backend reclaim eligibility."
-                                  : "Use this as a warning cue while reviewing duplicates here. Deeper diagnosis still belongs in Integrity Review."}
+                                  ? "A copy in this group may not play. You can keep reviewing here, but this does not change the current removal rules."
+                                  : "A copy in this group needs checking. Deeper diagnosis still belongs in Integrity Review."}
                               </p>
                             </div>
                             <div className="flex gap-2">
@@ -1103,7 +1124,7 @@ export default function DuplicatesPage() {
                                         {fileIssues.map((issue) => (
                                           <StatusBadge
                                             key={issue.check_id}
-                                            label={issue.status === "BROKEN" ? "Broken" : "Suspect"}
+                                            label={getPlaybackStatusLabel(issue)}
                                             severity={issue.status === "BROKEN" ? "destructive" : "caution"}
                                           />
                                         ))}
@@ -1119,17 +1140,17 @@ export default function DuplicatesPage() {
                               <div className="mt-3 rounded-2xl border border-border/70 bg-card/80 p-3">
                                 <p className="text-sm text-foreground">
                                   {hasBlockingCue
-                                    ? "Pause reclaim decisions for this group in the UI until the broken playback issue is understood."
-                                    : "You can continue duplicate review here, but keep the warning in mind before acting in the reclaim workflow."}
+                                    ? "Review this playback issue before moving extra copies to the Recycle Bin."
+                                    : "You can continue reviewing duplicates here, but keep this item in mind before moving anything to the Recycle Bin."}
                                 </p>
                                 <p className="mt-2 text-xs text-muted-foreground">
-                                  This cue is scoped to this page only and does not redefine backend workflow policy.
+                                  This note only helps explain what you are seeing here. It does not change the current product behavior.
                                 </p>
                               </div>
                               <div className="mt-3 flex items-start gap-2 rounded-2xl border border-border/70 bg-card/80 p-3">
                                 <AlertTriangle className="mt-0.5 h-4 w-4 text-caution" />
                                 <p className="text-xs text-muted-foreground">
-                                  Integrity Review remains the place for deeper diagnosis, file-level detail, and non-duplicate playback health work.
+                                  Integrity Review remains the place for deeper diagnosis, file-level detail, and playback health work outside duplicate review.
                                 </p>
                               </div>
                             </div>
