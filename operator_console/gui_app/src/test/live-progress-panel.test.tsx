@@ -144,6 +144,24 @@ describe("LiveProgressPanel", () => {
     expect(screen.getByText("2850 / 2850")).toBeInTheDocument();
   });
 
+  it("uses the integrity completion summary instead of the last 100-file checkpoint", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => [
+        "2026-03-28 13:37:10,000 INFO media_manager.app.service_layer.operations phase=integrity stage=manual_scan status=running action=manual_integrity_scan_progress processed_count=6800 total_count=6860 progress_percent=99.1 throughput_fps=5.3 scope=DEFAULT_ACTIVE_LIBRARY filename=operations.py Manual integrity scan progress: mode=FAST scan_scope=DEFAULT_ACTIVE_LIBRARY processed_count=6800/6860 issues_found_so_far=0 elapsed_seconds=1284.0 Progress: 6800/6860 files (99.1%) | 5.3 files/sec | elapsed 1284.0s",
+        "2026-03-28 13:38:29,541 INFO media_manager.app.service_layer.operations phase=integrity stage=manual_scan status=completed action_type=INTEGRITY_SCAN action=manual_integrity_scan_completed scope=DEFAULT_ACTIVE_LIBRARY filename=operations.py Manual integrity scan completed: mode=FAST scan_scope=DEFAULT_ACTIVE_LIBRARY eligible_file_count=6860 scanned_count=0 issues_found=0 skipped_count=6860 full_rescan=False duration_ms=125550.23",
+      ],
+    } as Response);
+
+    renderWithQuery(<LiveProgressPanel operationKind="integrity" operationStatus="running" />);
+
+    expect(await screen.findByText("[ FINALIZING INTEGRITY ]")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show live progress" }));
+    expect(await screen.findByText("100.0%")).toBeInTheDocument();
+    expect(screen.getByText("6860 / 6860")).toBeInTheDocument();
+    expect(screen.getByText("54.6 files/sec")).toBeInTheDocument();
+  });
+
   it("shows explicit completion state even when logs are quiet", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,

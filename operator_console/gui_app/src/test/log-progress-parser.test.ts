@@ -42,6 +42,32 @@ describe("parseProgressLogs", () => {
     expect(result.status).toBe("idle");
   });
 
+  it("parses integrity completion summaries into final KPI values", () => {
+    const result = parseProgressLogs([
+      "2026-03-28 13:38:29,541 INFO media_manager.app.service_layer.operations phase=integrity stage=manual_scan status=completed action_type=INTEGRITY_SCAN action=manual_integrity_scan_completed scope=DEFAULT_ACTIVE_LIBRARY filename=operations.py Manual integrity scan completed: mode=FAST scan_scope=DEFAULT_ACTIVE_LIBRARY eligible_file_count=6860 scanned_count=0 issues_found=0 skipped_count=6860 full_rescan=False duration_ms=125550.23",
+    ]);
+
+    expect(result.phase).toBe("integrity");
+    expect(result.stage).toBe("manual_scan");
+    expect(result.processedCount).toBe(6860);
+    expect(result.totalCount).toBe(6860);
+    expect(result.progressPercent).toBe(100);
+    expect(result.throughputFps).toBe(54.6);
+    expect(result.status).toBe("idle");
+  });
+
+  it("uses the newest integrity completion summary instead of an older 100-file checkpoint", () => {
+    const result = parseProgressLogs([
+      "2026-03-28 13:37:10,000 INFO media_manager.app.service_layer.operations phase=integrity stage=manual_scan status=running action=manual_integrity_scan_progress processed_count=6800 total_count=6860 progress_percent=99.1 throughput_fps=5.3 scope=DEFAULT_ACTIVE_LIBRARY filename=operations.py Manual integrity scan progress: mode=FAST scan_scope=DEFAULT_ACTIVE_LIBRARY processed_count=6800/6860 issues_found_so_far=0 elapsed_seconds=1284.0 Progress: 6800/6860 files (99.1%) | 5.3 files/sec | elapsed 1284.0s",
+      "2026-03-28 13:38:29,541 INFO media_manager.app.service_layer.operations phase=integrity stage=manual_scan status=completed action_type=INTEGRITY_SCAN action=manual_integrity_scan_completed scope=DEFAULT_ACTIVE_LIBRARY filename=operations.py Manual integrity scan completed: mode=FAST scan_scope=DEFAULT_ACTIVE_LIBRARY eligible_file_count=6860 scanned_count=0 issues_found=0 skipped_count=6860 full_rescan=False duration_ms=125550.23",
+    ]);
+
+    expect(result.processedCount).toBe(6860);
+    expect(result.totalCount).toBe(6860);
+    expect(result.progressPercent).toBe(100);
+    expect(result.status).toBe("idle");
+  });
+
   it("maps apply, canonical, and tag enrichment phases with stage-aware parsing", () => {
     const applyResult = parseProgressLogs([
       "2026-03-21 INFO media_manager.app.persistence.apply phase=apply stage=execute_actions processed_count=100 total_count=120 progress_percent=83.3 throughput_fps=40.0 Progress: 100/120 items (83.3%) | 40.0 items/sec | elapsed 2.5s",
