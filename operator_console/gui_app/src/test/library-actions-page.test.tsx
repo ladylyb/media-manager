@@ -95,6 +95,25 @@ describe("Import page", () => {
           selected_policy: "FIRST_SEEN",
           preferred_roots: [],
         },
+        integrity: {
+          default_scan_mode: "DEEP",
+          issue_min_confidence: 0.9,
+          notify_on_high_confidence: true,
+        },
+        duplicate_reclaim: {
+          archive_root: "/tmp/media-manager/reclaim",
+          default_retention_days: 21,
+          notify_on_reviewed_safe: true,
+        },
+        retention: {
+          quarantine_root: "/tmp/media-manager/quarantine",
+          recycle_bin_root: "/tmp/media-manager/recycle-bin",
+          quarantine_retention_days: 14,
+          recycle_purge_days: 30,
+        },
+        automation: {
+          mode: "NOTIFY_ONLY",
+        },
         naming: {
           strategy: "DUPLICATE_OWNS_DATE_STANDARDIZED",
         },
@@ -341,7 +360,7 @@ describe("Import page", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
 
     await waitFor(() =>
-      expect(mocks.runIntegrityScan).toHaveBeenCalledWith({ mode: "FAST", file_instance_ids: [] }),
+      expect(mocks.runIntegrityScan).toHaveBeenCalledWith({ mode: "DEEP", file_instance_ids: [] }),
     );
   });
 

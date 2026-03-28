@@ -47,6 +47,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -820,6 +821,17 @@ function LibraryRulesTab() {
       selected_policy: policy.canonical_priority.selected_policy,
       naming_strategy: policy.naming.strategy,
       preferred_roots: policy.canonical_priority.preferred_roots,
+      integrity_scan_default_mode: policy.integrity.default_scan_mode,
+      integrity_issue_min_confidence: policy.integrity.issue_min_confidence,
+      integrity_notify_on_high_confidence: policy.integrity.notify_on_high_confidence,
+      duplicate_reclaim_archive_root: policy.duplicate_reclaim.archive_root,
+      duplicate_reclaim_default_retention_days: policy.duplicate_reclaim.default_retention_days,
+      duplicate_reclaim_notify_on_reviewed_safe: policy.duplicate_reclaim.notify_on_reviewed_safe,
+      integrity_quarantine_root: policy.retention.quarantine_root,
+      integrity_quarantine_retention_days: policy.retention.quarantine_retention_days,
+      recycle_bin_root: policy.retention.recycle_bin_root,
+      recycle_purge_days: policy.retention.recycle_purge_days,
+      automation_mode: policy.automation.mode,
       recanonicalization_enabled: policy.recanonicalization.enabled,
       version: policy.metadata.version,
     });
@@ -836,6 +848,17 @@ function LibraryRulesTab() {
         selected_policy: res.data.canonical_priority.selected_policy,
         naming_strategy: res.data.naming.strategy,
         preferred_roots: res.data.canonical_priority.preferred_roots,
+        integrity_scan_default_mode: res.data.integrity.default_scan_mode,
+        integrity_issue_min_confidence: res.data.integrity.issue_min_confidence,
+        integrity_notify_on_high_confidence: res.data.integrity.notify_on_high_confidence,
+        duplicate_reclaim_archive_root: res.data.duplicate_reclaim.archive_root,
+        duplicate_reclaim_default_retention_days: res.data.duplicate_reclaim.default_retention_days,
+        duplicate_reclaim_notify_on_reviewed_safe: res.data.duplicate_reclaim.notify_on_reviewed_safe,
+        integrity_quarantine_root: res.data.retention.quarantine_root,
+        integrity_quarantine_retention_days: res.data.retention.quarantine_retention_days,
+        recycle_bin_root: res.data.retention.recycle_bin_root,
+        recycle_purge_days: res.data.retention.recycle_purge_days,
+        automation_mode: res.data.automation.mode,
         recanonicalization_enabled: res.data.recanonicalization.enabled,
         version: res.data.metadata.version,
       });
@@ -883,6 +906,17 @@ function LibraryRulesTab() {
         selected_policy: policy.canonical_priority.selected_policy,
         naming_strategy: policy.naming.strategy,
         preferred_roots: policy.canonical_priority.preferred_roots,
+        integrity_scan_default_mode: policy.integrity.default_scan_mode,
+        integrity_issue_min_confidence: policy.integrity.issue_min_confidence,
+        integrity_notify_on_high_confidence: policy.integrity.notify_on_high_confidence,
+        duplicate_reclaim_archive_root: policy.duplicate_reclaim.archive_root,
+        duplicate_reclaim_default_retention_days: policy.duplicate_reclaim.default_retention_days,
+        duplicate_reclaim_notify_on_reviewed_safe: policy.duplicate_reclaim.notify_on_reviewed_safe,
+        integrity_quarantine_root: policy.retention.quarantine_root,
+        integrity_quarantine_retention_days: policy.retention.quarantine_retention_days,
+        recycle_bin_root: policy.retention.recycle_bin_root,
+        recycle_purge_days: policy.retention.recycle_purge_days,
+        automation_mode: policy.automation.mode,
         recanonicalization_enabled: policy.recanonicalization.enabled,
         version: policy.metadata.version,
       });
@@ -947,6 +981,30 @@ function LibraryRulesTab() {
           value={hasChanges ? "Unsaved edits" : "In sync"}
           subtitle={`Rules version ${policy.metadata.version}`}
           icon={<GitCompareArrows className="h-4 w-4" />}
+        />
+        <MetricCard
+          title="Integrity default"
+          value={draft.integrity_scan_default_mode}
+          subtitle={`Queue threshold ${(draft.integrity_issue_min_confidence * 100).toFixed(0)}%`}
+          icon={<AlertTriangle className="h-4 w-4" />}
+        />
+        <MetricCard
+          title="Reclaim retention"
+          value={`${draft.duplicate_reclaim_default_retention_days} days`}
+          subtitle={draft.duplicate_reclaim_notify_on_reviewed_safe ? "Notify when safe-to-reclaim" : "No reclaim notifications"}
+          icon={<FolderClock className="h-4 w-4" />}
+        />
+        <MetricCard
+          title="Recycle purge"
+          value={`${draft.recycle_purge_days} days`}
+          subtitle="Manual CTA only"
+          icon={<Trash2 className="h-4 w-4" />}
+        />
+        <MetricCard
+          title="Automation"
+          value="Notify Only"
+          subtitle="No file mutations run automatically"
+          icon={<Workflow className="h-4 w-4" />}
         />
       </div>
 
@@ -1098,6 +1156,185 @@ function LibraryRulesTab() {
           </Card>
         </div>
       </div>
+
+      <div className="grid gap-4 xl:grid-cols-3">
+        <Card className="rounded-[28px] border-border/70 shadow-sm">
+          <CardHeader className="pb-3">
+            <CardDescription>Integrity Defaults</CardDescription>
+            <CardTitle className="text-xl">How should integrity review start?</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <p className="text-sm font-semibold text-foreground">Default scan mode</p>
+              <div className="flex gap-2">
+                {(["FAST", "DEEP"] as const).map((mode) => (
+                  <Button
+                    key={mode}
+                    type="button"
+                    variant={draft.integrity_scan_default_mode === mode ? "default" : "outline"}
+                    onClick={() => setDraft((prev) => (prev ? { ...prev, integrity_scan_default_mode: mode } : prev))}
+                  >
+                    {mode}
+                  </Button>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="integrity-min-confidence">Queue threshold</Label>
+              <Input
+                id="integrity-min-confidence"
+                type="number"
+                min="0"
+                max="1"
+                step="0.01"
+                value={draft.integrity_issue_min_confidence}
+                onChange={(event) =>
+                  setDraft((prev) =>
+                    prev ? { ...prev, integrity_issue_min_confidence: Number(event.target.value || 0) } : prev,
+                  )
+                }
+              />
+              <p className="text-xs text-muted-foreground">Unreviewed issues at or above this confidence are highlighted as high-confidence recommendations.</p>
+            </div>
+            <div className="flex items-center justify-between gap-4 rounded-[24px] border border-border/70 bg-background/80 p-4">
+              <div>
+                <p className="text-sm font-semibold text-foreground">Notify on high-confidence issues</p>
+                <p className="mt-1 text-sm leading-6 text-muted-foreground">Show stronger recommendations, but do not quarantine files automatically.</p>
+              </div>
+              <Switch
+                checked={draft.integrity_notify_on_high_confidence}
+                onCheckedChange={(checked) =>
+                  setDraft((prev) => (prev ? { ...prev, integrity_notify_on_high_confidence: checked } : prev))
+                }
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-[28px] border-border/70 shadow-sm">
+          <CardHeader className="pb-3">
+            <CardDescription>Reclaim Defaults</CardDescription>
+            <CardTitle className="text-xl">How should duplicate reclaim be prepared?</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="reclaim-archive-root">Archive root</Label>
+              <Input
+                id="reclaim-archive-root"
+                value={draft.duplicate_reclaim_archive_root}
+                onChange={(event) =>
+                  setDraft((prev) => (prev ? { ...prev, duplicate_reclaim_archive_root: event.target.value } : prev))
+                }
+                className="font-mono"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="reclaim-retention-days">Default retention days</Label>
+              <Input
+                id="reclaim-retention-days"
+                type="number"
+                min="1"
+                step="1"
+                value={draft.duplicate_reclaim_default_retention_days}
+                onChange={(event) =>
+                  setDraft((prev) =>
+                    prev ? { ...prev, duplicate_reclaim_default_retention_days: Number(event.target.value || 1) } : prev,
+                  )
+                }
+              />
+            </div>
+            <div className="flex items-center justify-between gap-4 rounded-[24px] border border-border/70 bg-background/80 p-4">
+              <div>
+                <p className="text-sm font-semibold text-foreground">Notify when reviewed-safe groups are ready</p>
+                <p className="mt-1 text-sm leading-6 text-muted-foreground">Surface reclaim-ready groups clearly, but keep the archive move manual.</p>
+              </div>
+              <Switch
+                checked={draft.duplicate_reclaim_notify_on_reviewed_safe}
+                onCheckedChange={(checked) =>
+                  setDraft((prev) => (prev ? { ...prev, duplicate_reclaim_notify_on_reviewed_safe: checked } : prev))
+                }
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-[28px] border-border/70 shadow-sm">
+          <CardHeader className="pb-3">
+            <CardDescription>Retention Defaults</CardDescription>
+            <CardTitle className="text-xl">Where should reversible file actions live?</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="integrity-quarantine-root">Integrity quarantine root</Label>
+              <Input
+                id="integrity-quarantine-root"
+                value={draft.integrity_quarantine_root}
+                onChange={(event) =>
+                  setDraft((prev) => (prev ? { ...prev, integrity_quarantine_root: event.target.value } : prev))
+                }
+                className="font-mono"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="recycle-bin-root">Recycle bin root</Label>
+              <Input
+                id="recycle-bin-root"
+                value={draft.recycle_bin_root}
+                onChange={(event) =>
+                  setDraft((prev) => (prev ? { ...prev, recycle_bin_root: event.target.value } : prev))
+                }
+                className="font-mono"
+              />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="quarantine-retention-days">Quarantine retention days</Label>
+                <Input
+                  id="quarantine-retention-days"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={draft.integrity_quarantine_retention_days}
+                  onChange={(event) =>
+                    setDraft((prev) =>
+                      prev ? { ...prev, integrity_quarantine_retention_days: Number(event.target.value || 1) } : prev,
+                    )
+                  }
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="recycle-purge-days">Recycle purge days</Label>
+                <Input
+                  id="recycle-purge-days"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={draft.recycle_purge_days}
+                  onChange={(event) =>
+                    setDraft((prev) => (prev ? { ...prev, recycle_purge_days: Number(event.target.value || 1) } : prev))
+                  }
+                />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card className="rounded-[28px] border-border/70 shadow-sm">
+        <CardHeader className="pb-3">
+          <CardDescription>Automation Status</CardDescription>
+          <CardTitle className="text-xl">Notify only</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center gap-2">
+            <StatusBadge label={draft.automation_mode.replaceAll("_", " ")} severity="info" />
+            <StatusBadge label="Manual file actions only" severity="success" />
+          </div>
+          <p className="text-sm leading-6 text-muted-foreground">
+            These settings control defaults, recommendations, and preselected values. They do not quarantine, reclaim, recycle, or purge files automatically.
+          </p>
+        </CardContent>
+      </Card>
 
       <Collapsible className="rounded-[28px] border border-border/70 bg-card/95 shadow-sm">
         <CollapsibleTrigger asChild>

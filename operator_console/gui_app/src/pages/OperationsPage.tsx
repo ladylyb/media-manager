@@ -338,6 +338,11 @@ export default function OperationsPage() {
 
   const policy = (policyQuery.data as Policy | undefined) ?? null;
 
+  useEffect(() => {
+    if (!policy) return;
+    setIntegrityMode(policy.integrity.default_scan_mode);
+  }, [policy]);
+
   const runs = ((runsQuery.data as PaginatedResponse<Run> | undefined)?.items ?? []).filter(
     (run) => run.status === "COMPLETED",
   );

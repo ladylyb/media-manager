@@ -6,13 +6,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import DuplicatesPage from "@/pages/DuplicatesPage";
 
 const mocks = vi.hoisted(() => ({
+  executeDuplicateReclaim: vi.fn(),
   getDuplicates: vi.fn(),
+  getDuplicateReclaimItems: vi.fn(),
+  getPolicy: vi.fn(),
+  restoreDuplicateReclaim: vi.fn(),
   setDuplicateReclaim: vi.fn(),
   setDuplicateReview: vi.fn(),
 }));
 
 vi.mock("@/lib/api/endpoints", () => ({
+  executeDuplicateReclaim: mocks.executeDuplicateReclaim,
   getDuplicates: mocks.getDuplicates,
+  getDuplicateReclaimItems: mocks.getDuplicateReclaimItems,
+  getPolicy: mocks.getPolicy,
+  restoreDuplicateReclaim: mocks.restoreDuplicateReclaim,
   setDuplicateReclaim: mocks.setDuplicateReclaim,
   setDuplicateReview: mocks.setDuplicateReview,
 }));
@@ -108,6 +116,16 @@ describe("DuplicatesPage", () => {
       buildGroup("group-gamma", "gamma-main.jpg", ["gamma-copy.jpg"]),
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+    mocks.getPolicy.mockResolvedValue({
+      data: {
+        duplicate_reclaim: {
+          default_retention_days: 21,
+        },
+      },
+    });
+    mocks.getDuplicateReclaimItems.mockResolvedValue({ data: { items: [] } });
+    mocks.executeDuplicateReclaim.mockResolvedValue({ data: {} });
+    mocks.restoreDuplicateReclaim.mockResolvedValue({ data: {} });
     mocks.setDuplicateReclaim.mockResolvedValue({ data: {} });
     mocks.setDuplicateReview.mockImplementation(async (payload: { content_id: string; review_status: string; reviewed_canonical_instance_id: string }) => {
       groupsData = groupsData.map((group) =>
@@ -227,6 +245,27 @@ describe("DuplicatesPage", () => {
     expect(await screen.findByText("2 integrity issues")).toBeInTheDocument();
     expect(screen.getByText("1 broken")).toBeInTheDocument();
     expect(screen.getByText("1 suspect")).toBeInTheDocument();
+  });
+
+  it("uses the policy default reclaim retention when archiving reclaimable groups", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
+      },
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Archive reclaimable" }));
+
+    await waitFor(() =>
+      expect(mocks.executeDuplicateReclaim).toHaveBeenCalledWith({
+        content_ids: ["group-alpha"],
+        retention_days: 21,
+      }),
+    );
   });
 
   it("renders video poster previews in the comparison cards and queue", async () => {

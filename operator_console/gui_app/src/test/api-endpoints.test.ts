@@ -95,11 +95,39 @@ describe("api endpoints", () => {
       schema_version: "schema-1",
       generated_at: "2026-03-14T00:00:00+00:00",
       data: {
-        selected_policy: "FIRST_SEEN",
-        naming_strategy: "SHARED_CANONICAL_NAME",
-        preferred_roots: ["/media"],
-        recanonicalization_enabled: true,
-        version: 7,
+        canonical_priority: {
+          selected_policy: "FIRST_SEEN",
+          preferred_roots: ["/media"],
+        },
+        naming: {
+          strategy: "SHARED_CANONICAL_NAME",
+        },
+        integrity: {
+          default_scan_mode: "FAST",
+          issue_min_confidence: 0.9,
+          notify_on_high_confidence: true,
+        },
+        duplicate_reclaim: {
+          archive_root: "/tmp/media-manager/reclaim",
+          default_retention_days: 14,
+          notify_on_reviewed_safe: true,
+        },
+        retention: {
+          quarantine_root: "/tmp/media-manager/quarantine",
+          recycle_bin_root: "/tmp/media-manager/recycle-bin",
+          quarantine_retention_days: 14,
+          recycle_purge_days: 30,
+        },
+        automation: {
+          mode: "NOTIFY_ONLY",
+        },
+        recanonicalization: {
+          enabled: true,
+        },
+        metadata: {
+          version: 7,
+          updated_at: null,
+        },
       },
       errors: [],
     });
@@ -109,11 +137,39 @@ describe("api endpoints", () => {
       schema_version: "schema-1",
       generated_at: "2026-03-14T00:00:00+00:00",
       data: {
-        selected_policy: "PREFER_ROOT",
-        naming_strategy: "DUPLICATE_OWNS_DATE_STANDARDIZED",
-        preferred_roots: ["/archive"],
-        recanonicalization_enabled: false,
-        version: 8,
+        canonical_priority: {
+          selected_policy: "PREFER_ROOT",
+          preferred_roots: ["/archive"],
+        },
+        naming: {
+          strategy: "DUPLICATE_OWNS_DATE_STANDARDIZED",
+        },
+        integrity: {
+          default_scan_mode: "FAST",
+          issue_min_confidence: 0.9,
+          notify_on_high_confidence: true,
+        },
+        duplicate_reclaim: {
+          archive_root: "/tmp/media-manager/reclaim",
+          default_retention_days: 14,
+          notify_on_reviewed_safe: true,
+        },
+        retention: {
+          quarantine_root: "/tmp/media-manager/quarantine",
+          recycle_bin_root: "/tmp/media-manager/recycle-bin",
+          quarantine_retention_days: 14,
+          recycle_purge_days: 30,
+        },
+        automation: {
+          mode: "NOTIFY_ONLY",
+        },
+        recanonicalization: {
+          enabled: false,
+        },
+        metadata: {
+          version: 8,
+          updated_at: null,
+        },
       },
       errors: [],
     });
@@ -130,6 +186,17 @@ describe("api endpoints", () => {
       selected_policy: "PREFER_ROOT",
       naming_strategy: "DUPLICATE_OWNS_DATE_STANDARDIZED",
       preferred_roots: ["/archive"],
+      integrity_scan_default_mode: "FAST",
+      integrity_issue_min_confidence: 0.9,
+      integrity_notify_on_high_confidence: true,
+      duplicate_reclaim_archive_root: "/tmp/media-manager/reclaim",
+      duplicate_reclaim_default_retention_days: 14,
+      duplicate_reclaim_notify_on_reviewed_safe: true,
+      integrity_quarantine_root: "/tmp/media-manager/quarantine",
+      integrity_quarantine_retention_days: 14,
+      recycle_bin_root: "/tmp/media-manager/recycle-bin",
+      recycle_purge_days: 30,
+      automation_mode: "NOTIFY_ONLY",
       recanonicalization_enabled: false,
       version: 7,
     });

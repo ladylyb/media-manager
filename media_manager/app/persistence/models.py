@@ -1264,6 +1264,70 @@ class OperatorPolicySetting(Base):
         server_default=text("'SHARED_CANONICAL_NAME'"),
     )
     preferred_roots_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default=text("'[]'"))
+    integrity_scan_default_mode: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="FAST",
+        server_default=text("'FAST'"),
+    )
+    integrity_issue_min_confidence: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=0.9,
+        server_default=text("0.9"),
+    )
+    duplicate_reclaim_default_retention_days: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=14,
+        server_default=text("14"),
+    )
+    integrity_quarantine_retention_days: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=14,
+        server_default=text("14"),
+    )
+    recycle_purge_days: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=30,
+        server_default=text("30"),
+    )
+    recycle_bin_root: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="/tmp/media-manager/recycle-bin",
+        server_default=text("'/tmp/media-manager/recycle-bin'"),
+    )
+    duplicate_reclaim_archive_root: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="/tmp/media-manager/reclaim",
+        server_default=text("'/tmp/media-manager/reclaim'"),
+    )
+    integrity_quarantine_root: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="/tmp/media-manager/quarantine",
+        server_default=text("'/tmp/media-manager/quarantine'"),
+    )
+    integrity_notify_on_high_confidence: Mapped[bool] = mapped_column(
+        nullable=False,
+        default=True,
+        server_default=text("true"),
+    )
+    duplicate_reclaim_notify_on_reviewed_safe: Mapped[bool] = mapped_column(
+        nullable=False,
+        default=True,
+        server_default=text("true"),
+    )
+    automation_mode: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="NOTIFY_ONLY",
+        server_default=text("'NOTIFY_ONLY'"),
+    )
     recanonicalization_enabled: Mapped[bool] = mapped_column(
         nullable=False,
         default=False,

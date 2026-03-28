@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import os
 from pathlib import Path
 import re
 from uuid import UUID
@@ -28,11 +27,6 @@ from media_manager.app.service_layer.cache import ServiceCache
 
 _WINDOWS_DRIVE_PATH_RE = re.compile(r"^([A-Za-z]):[\\/](.*)$")
 _MNT_DRIVE_PATH_RE = re.compile(r"^/mnt/([A-Z])(?:/(.*))?$")
-
-
-def _import_integrity_scan_mode() -> str | None:
-    raw = (os.getenv("MEDIA_MANAGER_IMPORT_INTEGRITY_SCAN_MODE", "") or "").strip().upper()
-    return raw if raw in {"FAST", "DEEP"} else None
 
 
 def _strip_wrapping_quotes(value: str) -> str:
@@ -104,6 +98,9 @@ class OperationServices:
     def _op_runs(self) -> OperationRunService:
         return OperationRunService(self.session_factory)
 
+    def _policy(self):
+        return PolicySettingsService(self.session_factory).get_settings()
+
     def _run_integrity_scan_for_paths(
         self,
         *,
@@ -151,8 +148,8 @@ class OperationServices:
                 "operation_run_id": run_log.operation_run_id,
                 "summary": service.ingest_path(folder).to_dict(),
             }
-            import_integrity_mode = _import_integrity_scan_mode()
-            if import_integrity_mode is not None:
+            import_integrity_mode = self._policy().integrity_scan_default_mode
+            if import_integrity_mode in {"FAST", "DEEP"}:
                 imported_paths = [str(path.resolve(strict=False)) for path in service.collect_files(folder)]
                 if imported_paths:
                     result["post_ingest_integrity_scan"] = self._run_integrity_scan_for_paths(
@@ -396,8 +393,8 @@ class OperationServices:
         plan_summary = PlanningService(self.session_factory).plan_run(run.id, files, ingest_if_needed=False)
         apply_summary = ApplyService(self.session_factory).apply_run(run.id)
         import_integrity_scan: dict[str, object] | None = None
-        import_integrity_mode = _import_integrity_scan_mode()
-        if import_integrity_mode is not None:
+        import_integrity_mode = self._policy().integrity_scan_default_mode
+        if import_integrity_mode in {"FAST", "DEEP"}:
             import_integrity_scan = self._run_integrity_scan_for_paths(
                 mode=import_integrity_mode,
                 absolute_paths=[str(path.resolve(strict=False)) for path in files],
@@ -562,6 +559,17 @@ class OperationServices:
         selected_policy: str,
         naming_strategy: str,
         preferred_roots: tuple[str, ...],
+        integrity_scan_default_mode: str,
+        integrity_issue_min_confidence: float,
+        integrity_notify_on_high_confidence: bool,
+        duplicate_reclaim_archive_root: str,
+        duplicate_reclaim_default_retention_days: int,
+        duplicate_reclaim_notify_on_reviewed_safe: bool,
+        integrity_quarantine_root: str,
+        integrity_quarantine_retention_days: int,
+        recycle_bin_root: str,
+        recycle_purge_days: int,
+        automation_mode: str,
         recanonicalization_enabled: bool,
         version: int,
     ) -> dict[str, object]:
@@ -570,6 +578,17 @@ class OperationServices:
                 selected_policy=selected_policy,
                 naming_strategy=naming_strategy,
                 preferred_roots=preferred_roots,
+                integrity_scan_default_mode=integrity_scan_default_mode,
+                integrity_issue_min_confidence=integrity_issue_min_confidence,
+                integrity_notify_on_high_confidence=integrity_notify_on_high_confidence,
+                duplicate_reclaim_archive_root=duplicate_reclaim_archive_root,
+                duplicate_reclaim_default_retention_days=duplicate_reclaim_default_retention_days,
+                duplicate_reclaim_notify_on_reviewed_safe=duplicate_reclaim_notify_on_reviewed_safe,
+                integrity_quarantine_root=integrity_quarantine_root,
+                integrity_quarantine_retention_days=integrity_quarantine_retention_days,
+                recycle_bin_root=recycle_bin_root,
+                recycle_purge_days=recycle_purge_days,
+                automation_mode=automation_mode,
                 recanonicalization_enabled=recanonicalization_enabled,
                 version=version,
             )
@@ -737,7 +756,8 @@ class OperationServices:
             self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))
             raise
 
-    def duplicate_reclaim_execute(self, *, content_ids: list[str] | None = None, retention_days: int = 14) -> dict[str, object]:
+    def duplicate_reclaim_execute(self, *, content_ids: list[str] | None = None, retention_days: int | None = None) -> dict[str, object]:
+        effective_retention_days = retention_days or self._policy().duplicate_reclaim_default_retention_days
         parsed_content_ids: list[UUID] | None = None
         if content_ids:
             parsed_content_ids = []
@@ -750,20 +770,20 @@ class OperationServices:
             operation_type=OperationRunType.DUPLICATE_RECLAIM_EXECUTE,
             context={
                 "content_ids": [str(item) for item in parsed_content_ids or []],
-                "retention_days": retention_days,
+                "retention_days": effective_retention_days,
             },
         )
         try:
             result = Phase3ActionService(self.session_factory).execute_duplicate_reclaim(
                 content_ids=parsed_content_ids,
-                retention_days=retention_days,
+                retention_days=effective_retention_days,
             )
             linked_run_id = result.get("run_id")
             if isinstance(linked_run_id, str):
                 self._op_runs().link_run(UUID(run_log.operation_run_id), linked_run_id=UUID(linked_run_id))
             self._op_runs().complete(UUID(run_log.operation_run_id))
             self.cache.invalidate("duplicates", "duplicate_reclaim_items", "analytics")
-            return result
+            return {**result, "retention_days": effective_retention_days}
         except Exception as exc:
             self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))
             raise

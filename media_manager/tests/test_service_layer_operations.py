@@ -52,6 +52,25 @@ def _install_fake_operation_run_service(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(operations_module, "OperationRunService", _FakeOperationRunService)
 
 
+def _install_fake_policy_settings_service(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    integrity_scan_default_mode: str = "",
+    duplicate_reclaim_default_retention_days: int = 14,
+) -> None:
+    class _FakePolicySettingsService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def get_settings(self):  # type: ignore[no-untyped-def]
+            return SimpleNamespace(
+                integrity_scan_default_mode=integrity_scan_default_mode,
+                duplicate_reclaim_default_retention_days=duplicate_reclaim_default_retention_days,
+            )
+
+    monkeypatch.setattr(operations_module, "PolicySettingsService", _FakePolicySettingsService)
+
+
 def test_ingest_dry_run_is_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     dataset = tmp_path / "dataset"
     dataset.mkdir()
@@ -65,6 +84,7 @@ def test_ingest_dry_run_is_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(operations_module, "IngestService", _FakeIngestService)
     _install_fake_operation_run_service(monkeypatch)
+    _install_fake_policy_settings_service(monkeypatch)
     cache = _FakeCache(invalidations=[])
     services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
 
@@ -95,6 +115,7 @@ def test_ingest_execute_invalidates_caches(tmp_path: Path, monkeypatch: pytest.M
 
     monkeypatch.setattr(operations_module, "IngestService", _FakeIngestService)
     _install_fake_operation_run_service(monkeypatch)
+    _install_fake_policy_settings_service(monkeypatch)
     cache = _FakeCache(invalidations=[])
     services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
 
@@ -158,8 +179,8 @@ def test_ingest_execute_runs_post_ingest_integrity_scan_when_enabled(
 
     monkeypatch.setattr(operations_module, "IngestService", _FakeIngestService)
     monkeypatch.setattr(operations_module, "IntegrityService", _FakeIntegrityService)
-    monkeypatch.setenv("MEDIA_MANAGER_IMPORT_INTEGRITY_SCAN_MODE", "FAST")
     _install_fake_operation_run_service(monkeypatch)
+    _install_fake_policy_settings_service(monkeypatch, integrity_scan_default_mode="FAST")
 
     cache = _FakeCache(invalidations=[])
     services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
@@ -191,6 +212,7 @@ def test_integrity_playback_failure_uses_fast_scan_trigger(monkeypatch: pytest.M
 
     monkeypatch.setattr(operations_module, "IntegrityService", _FakeIntegrityService)
     _install_fake_operation_run_service(monkeypatch)
+    _install_fake_policy_settings_service(monkeypatch, integrity_scan_default_mode="FAST")
 
     cache = _FakeCache(invalidations=[])
     services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
@@ -244,6 +266,7 @@ def test_plan_returns_run_and_summary(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setattr(operations_module, "RunService", _FakeRunService)
     monkeypatch.setattr(operations_module, "PlanningService", _FakePlanner)
     _install_fake_operation_run_service(monkeypatch)
+    _install_fake_policy_settings_service(monkeypatch)
 
     cache = _FakeCache(invalidations=[])
     services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
@@ -287,6 +310,7 @@ def test_canonical_recompute_apply_invalidates_cache(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(operations_module, "build_canonical_policy", _fake_build_policy)
     monkeypatch.setattr(operations_module, "recompute_canonical_assignments", _fake_recompute)
     _install_fake_operation_run_service(monkeypatch)
+    _install_fake_policy_settings_service(monkeypatch)
 
     cache = _FakeCache(invalidations=[])
     services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
@@ -458,6 +482,7 @@ def test_run_execution_flows_through_service_layer_and_links_run(tmp_path: Path,
     monkeypatch.setattr(operations_module, "ApplyService", _FakeApplyService)
     monkeypatch.setattr(operations_module, "build_canonical_policy", _fake_build_policy)
     monkeypatch.setattr(operations_module, "recompute_canonical_assignments", _fake_recompute)
+    _install_fake_policy_settings_service(monkeypatch)
 
     cache = _FakeCache(invalidations=[])
     services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]

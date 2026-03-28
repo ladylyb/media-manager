@@ -102,6 +102,7 @@ export function mapIntegrityDashboard(payload: Record<string, unknown>): Integri
     suspect_count: Number(payload.suspect_count ?? 0),
     ignored_count: Number(payload.ignored_count ?? 0),
     marked_ok_count: Number(payload.marked_ok_count ?? 0),
+    high_confidence_unresolved_count: Number(payload.high_confidence_unresolved_count ?? 0),
   };
 }
 

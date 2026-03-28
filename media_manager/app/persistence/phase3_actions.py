@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-import os
 from pathlib import Path
 from uuid import UUID
 
@@ -30,41 +29,11 @@ from media_manager.app.persistence.models import (
     RunStateDB,
 )
 from media_manager.app.persistence.runs import RunService
+from media_manager.app.persistence.policy_settings import PolicySettingsService
 
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
-
-
-def _reclaim_root() -> Path:
-    raw = (os.getenv("MEDIA_MANAGER_RECLAIM_ROOT", "") or "").strip()
-    return Path(raw) if raw else Path("/tmp/media-manager/reclaim")
-
-
-def _quarantine_root() -> Path:
-    raw = (os.getenv("MEDIA_MANAGER_QUARANTINE_ROOT", "") or "").strip()
-    return Path(raw) if raw else Path("/tmp/media-manager/quarantine")
-
-
-def _recycle_root() -> Path:
-    raw = (os.getenv("MEDIA_MANAGER_RECYCLE_BIN_ROOT", "") or "").strip()
-    return Path(raw) if raw else Path("/tmp/media-manager/recycle-bin")
-
-
-def _quarantine_retention_days() -> int:
-    raw = (os.getenv("MEDIA_MANAGER_QUARANTINE_RETENTION_DAYS", "") or "").strip()
-    try:
-        return max(1, int(raw)) if raw else 14
-    except ValueError:
-        return 14
-
-
-def _recycle_purge_days() -> int:
-    raw = (os.getenv("MEDIA_MANAGER_RECYCLE_PURGE_DAYS", "") or "").strip()
-    try:
-        return max(1, int(raw)) if raw else 30
-    except ValueError:
-        return 30
 
 
 class Phase3ActionService:
@@ -72,6 +41,9 @@ class Phase3ActionService:
 
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
+
+    def _policy(self):
+        return PolicySettingsService(self._session_factory).get_settings()
 
     def execute_duplicate_reclaim(self, *, content_ids: list[UUID] | None = None, retention_days: int = 14) -> dict[str, object]:
         run_id = self._plan_duplicate_reclaim(content_ids=content_ids, retention_days=retention_days)
@@ -115,7 +87,7 @@ class Phase3ActionService:
 
     def _plan_duplicate_reclaim(self, *, content_ids: list[UUID] | None, retention_days: int) -> UUID:
         run = RunService(self._session_factory).create_run(owner="SYSTEM", context="DuplicateReclaim")
-        reclaim_root = _reclaim_root()
+        reclaim_root = Path(self._policy().duplicate_reclaim_archive_root)
         expires_at = _utcnow() + timedelta(days=max(1, retention_days))
         with transactional_session(self._session_factory) as session:
             run_row = session.get(Run, run.id)
@@ -217,7 +189,8 @@ class Phase3ActionService:
 
     def _plan_integrity_quarantine(self, *, check_id: UUID) -> UUID:
         run = RunService(self._session_factory).create_run(owner="SYSTEM", context="IntegrityQuarantine")
-        quarantine_root = _quarantine_root()
+        policy = self._policy()
+        quarantine_root = Path(policy.integrity_quarantine_root)
         with transactional_session(self._session_factory) as session:
             run_row = session.get(Run, run.id)
             assert run_row is not None
@@ -234,7 +207,7 @@ class Phase3ActionService:
                 raise ValueError(f"file instance not found: {check.file_instance_id}")
             quarantine_path = str(quarantine_root / f"{file_instance.file_instance_id}-{Path(file_instance.absolute_path).name}")
             now = _utcnow()
-            expires_at = now + timedelta(days=_quarantine_retention_days())
+            expires_at = now + timedelta(days=policy.integrity_quarantine_retention_days)
             record = session.get(IntegrityQuarantineRecord, file_instance.file_instance_id)
             if record is None:
                 session.add(
@@ -309,8 +282,9 @@ class Phase3ActionService:
 
     def _plan_duplicate_recycle(self, *, file_instance_ids: list[UUID] | None) -> UUID:
         run = RunService(self._session_factory).create_run(owner="SYSTEM", context="DuplicateRecycle")
-        recycle_root = _recycle_root()
-        purge_after_at = _utcnow() + timedelta(days=_recycle_purge_days())
+        policy = self._policy()
+        recycle_root = Path(policy.recycle_bin_root)
+        purge_after_at = _utcnow() + timedelta(days=policy.recycle_purge_days)
         with transactional_session(self._session_factory) as session:
             run_row = session.get(Run, run.id)
             assert run_row is not None
@@ -351,8 +325,9 @@ class Phase3ActionService:
 
     def _plan_integrity_recycle(self, *, file_instance_ids: list[UUID] | None) -> UUID:
         run = RunService(self._session_factory).create_run(owner="SYSTEM", context="IntegrityRecycle")
-        recycle_root = _recycle_root()
-        purge_after_at = _utcnow() + timedelta(days=_recycle_purge_days())
+        policy = self._policy()
+        recycle_root = Path(policy.recycle_bin_root)
+        purge_after_at = _utcnow() + timedelta(days=policy.recycle_purge_days)
         with transactional_session(self._session_factory) as session:
             run_row = session.get(Run, run.id)
             assert run_row is not None

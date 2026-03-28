@@ -584,6 +584,24 @@ class _FakePolicyService:
                     "selected_policy": "PREFER_ROOT",
                     "preferred_roots": ["/archive", "/media"],
                 },
+                "integrity": {
+                    "default_scan_mode": "FAST",
+                    "issue_min_confidence": 0.9,
+                    "notify_on_high_confidence": True,
+                },
+                "duplicate_reclaim": {
+                    "archive_root": "/tmp/media-manager/reclaim",
+                    "default_retention_days": 14,
+                    "notify_on_reviewed_safe": True,
+                },
+                "retention": {
+                    "quarantine_root": "/tmp/media-manager/quarantine",
+                    "recycle_bin_root": "/tmp/media-manager/recycle-bin",
+                    "quarantine_retention_days": 14,
+                    "recycle_purge_days": 30,
+                },
+                "automation": {"mode": "NOTIFY_ONLY"},
+                "naming": {"strategy": "SHARED_CANONICAL_NAME"},
                 "tie_breaker_rules": {
                     "effective_order": [
                         "preferred_root_match DESC",
@@ -615,6 +633,24 @@ class _FakePolicyService:
                     "selected_policy": command.selected_policy,
                     "preferred_roots": list(command.preferred_roots),
                 },
+                "integrity": {
+                    "default_scan_mode": command.integrity_scan_default_mode,
+                    "issue_min_confidence": command.integrity_issue_min_confidence,
+                    "notify_on_high_confidence": command.integrity_notify_on_high_confidence,
+                },
+                "duplicate_reclaim": {
+                    "archive_root": command.duplicate_reclaim_archive_root,
+                    "default_retention_days": command.duplicate_reclaim_default_retention_days,
+                    "notify_on_reviewed_safe": command.duplicate_reclaim_notify_on_reviewed_safe,
+                },
+                "retention": {
+                    "quarantine_root": command.integrity_quarantine_root,
+                    "recycle_bin_root": command.recycle_bin_root,
+                    "quarantine_retention_days": command.integrity_quarantine_retention_days,
+                    "recycle_purge_days": command.recycle_purge_days,
+                },
+                "automation": {"mode": command.automation_mode},
+                "naming": {"strategy": command.naming_strategy},
                 "tie_breaker_rules": {
                     "effective_order": [
                         "preferred_root_match DESC",
@@ -1547,6 +1583,23 @@ class _FakeOperationServices:
                 "selected_policy": "PREFER_ROOT",
                 "preferred_roots": ["/archive", "/media"],
             },
+            "integrity": {
+                "default_scan_mode": "FAST",
+                "issue_min_confidence": 0.9,
+                "notify_on_high_confidence": True,
+            },
+            "duplicate_reclaim": {
+                "archive_root": "/tmp/media-manager/reclaim",
+                "default_retention_days": 14,
+                "notify_on_reviewed_safe": True,
+            },
+            "retention": {
+                "quarantine_root": "/tmp/media-manager/quarantine",
+                "recycle_bin_root": "/tmp/media-manager/recycle-bin",
+                "quarantine_retention_days": 14,
+                "recycle_purge_days": 30,
+            },
+            "automation": {"mode": "NOTIFY_ONLY"},
             "naming": {
                 "strategy": "SHARED_CANONICAL_NAME",
             },
@@ -1572,6 +1625,17 @@ class _FakeOperationServices:
         selected_policy: str,
         naming_strategy: str = "SHARED_CANONICAL_NAME",
         preferred_roots: tuple[str, ...],
+        integrity_scan_default_mode: str = "FAST",
+        integrity_issue_min_confidence: float = 0.9,
+        integrity_notify_on_high_confidence: bool = True,
+        duplicate_reclaim_archive_root: str = "/tmp/media-manager/reclaim",
+        duplicate_reclaim_default_retention_days: int = 14,
+        duplicate_reclaim_notify_on_reviewed_safe: bool = True,
+        integrity_quarantine_root: str = "/tmp/media-manager/quarantine",
+        integrity_quarantine_retention_days: int = 14,
+        recycle_bin_root: str = "/tmp/media-manager/recycle-bin",
+        recycle_purge_days: int = 30,
+        automation_mode: str = "NOTIFY_ONLY",
         recanonicalization_enabled: bool,
         version: int,
     ) -> dict[str, object]:
@@ -1586,6 +1650,23 @@ class _FakeOperationServices:
                 "selected_policy": selected_policy,
                 "preferred_roots": list(preferred_roots),
             },
+            "integrity": {
+                "default_scan_mode": integrity_scan_default_mode,
+                "issue_min_confidence": integrity_issue_min_confidence,
+                "notify_on_high_confidence": integrity_notify_on_high_confidence,
+            },
+            "duplicate_reclaim": {
+                "archive_root": duplicate_reclaim_archive_root,
+                "default_retention_days": duplicate_reclaim_default_retention_days,
+                "notify_on_reviewed_safe": duplicate_reclaim_notify_on_reviewed_safe,
+            },
+            "retention": {
+                "quarantine_root": integrity_quarantine_root,
+                "recycle_bin_root": recycle_bin_root,
+                "quarantine_retention_days": integrity_quarantine_retention_days,
+                "recycle_purge_days": recycle_purge_days,
+            },
+            "automation": {"mode": automation_mode},
             "naming": {
                 "strategy": naming_strategy,
             },
@@ -2819,6 +2900,8 @@ def test_get_policy_endpoint_returns_structured_json() -> None:
     payload = response.json()["data"]["result"]
     assert payload["canonical_priority"]["selected_policy"] == "PREFER_ROOT"
     assert payload["canonical_priority"]["preferred_roots"] == ["/archive", "/media"]
+    assert payload["integrity"]["default_scan_mode"] == "FAST"
+    assert payload["automation"]["mode"] == "NOTIFY_ONLY"
     assert payload["recanonicalization"]["enabled"] is True
     assert payload["metadata"]["version"] == 7
 
@@ -2833,6 +2916,17 @@ def test_post_policy_endpoint_updates_settings() -> None:
             json={
                 "selected_policy": "PREFER_ROOT",
                 "preferred_roots": ["/a", "/b"],
+                "integrity_scan_default_mode": "DEEP",
+                "integrity_issue_min_confidence": 0.85,
+                "integrity_notify_on_high_confidence": True,
+                "duplicate_reclaim_archive_root": "/archive/reclaim",
+                "duplicate_reclaim_default_retention_days": 21,
+                "duplicate_reclaim_notify_on_reviewed_safe": True,
+                "integrity_quarantine_root": "/archive/quarantine",
+                "integrity_quarantine_retention_days": 10,
+                "recycle_bin_root": "/archive/recycle",
+                "recycle_purge_days": 45,
+                "automation_mode": "NOTIFY_ONLY",
                 "recanonicalization_enabled": False,
                 "version": 7,
             },
@@ -2843,6 +2937,8 @@ def test_post_policy_endpoint_updates_settings() -> None:
     assert response.status_code == 200
     payload = response.json()["data"]["result"]
     assert payload["canonical_priority"]["preferred_roots"] == ["/a", "/b"]
+    assert payload["integrity"]["default_scan_mode"] == "DEEP"
+    assert payload["duplicate_reclaim"]["default_retention_days"] == 21
     assert payload["metadata"]["version"] == 8
 
 
@@ -2856,6 +2952,17 @@ def test_post_policy_endpoint_returns_version_conflict() -> None:
             json={
                 "selected_policy": "FIRST_SEEN",
                 "preferred_roots": [],
+                "integrity_scan_default_mode": "FAST",
+                "integrity_issue_min_confidence": 0.9,
+                "integrity_notify_on_high_confidence": True,
+                "duplicate_reclaim_archive_root": "/tmp/media-manager/reclaim",
+                "duplicate_reclaim_default_retention_days": 14,
+                "duplicate_reclaim_notify_on_reviewed_safe": True,
+                "integrity_quarantine_root": "/tmp/media-manager/quarantine",
+                "integrity_quarantine_retention_days": 14,
+                "recycle_bin_root": "/tmp/media-manager/recycle-bin",
+                "recycle_purge_days": 30,
+                "automation_mode": "NOTIFY_ONLY",
                 "recanonicalization_enabled": False,
                 "version": 6,
             },

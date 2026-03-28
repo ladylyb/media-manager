@@ -19,6 +19,7 @@ import {
   executeDuplicateReclaim,
   getDuplicateReclaimItems,
   getDuplicates,
+  getPolicy,
   restoreDuplicateReclaim,
   setDuplicateReclaim,
   setDuplicateReview,
@@ -26,7 +27,7 @@ import {
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
 import { cn } from "@/lib/utils";
-import type { DuplicateFile, DuplicateGroup, DuplicateReclaimItem } from "@/types";
+import type { DuplicateFile, DuplicateGroup, DuplicateReclaimItem, Policy } from "@/types";
 
 type ReviewMark = "looks_right" | "needs_review" | "not_sure";
 type ReviewFilter = "all" | "unreviewed" | ReviewMark;
@@ -129,6 +130,11 @@ export default function DuplicatesPage() {
     queryFn: async () => (await getDuplicates()).data,
     staleTime: queryOptions.duplicates.staleTime,
   });
+  const policyQuery = useQuery({
+    queryKey: queryKeys.policy,
+    queryFn: async () => (await getPolicy()).data,
+    staleTime: queryOptions.policy.staleTime,
+  });
 
   const reviewMutation = useMutation({
     mutationFn: (payload: {
@@ -215,6 +221,7 @@ export default function DuplicatesPage() {
   });
 
   const groups = (duplicatesQuery.data as DuplicateGroup[] | undefined) ?? [];
+  const policy = (policyQuery.data as Policy | undefined) ?? null;
   const sortedGroups = useMemo(
     () =>
       [...groups].sort((left, right) => {
@@ -456,7 +463,7 @@ export default function DuplicatesPage() {
                         content_ids: sortedGroups
                           .filter((group) => group.reclaim_status === "REVIEWED_SAFE_TO_RECLAIM")
                           .map((group) => group.group_id),
-                        retention_days: 14,
+                        retention_days: policy?.duplicate_reclaim.default_retention_days ?? 14,
                       })
                     }
                     disabled={executeReclaimMutation.isPending || reclaimReadyCount === 0}
@@ -521,6 +528,11 @@ export default function DuplicatesPage() {
               <p className="text-sm text-muted-foreground">
                 Integrity signals are surfaced here so reclaim decisions stay aligned with playback-health review.
               </p>
+              {policy ? (
+                <p className="text-xs text-muted-foreground">
+                  Notify-only defaults: archive reclaimable duplicates for {policy.duplicate_reclaim.default_retention_days} days. No duplicate files move automatically.
+                </p>
+              ) : null}
             </CardContent>
           </Card>
 

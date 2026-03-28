@@ -6,6 +6,7 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -26,6 +27,17 @@ class PolicySettingsSnapshot:
     selected_policy: str
     naming_strategy: str
     preferred_roots: tuple[str, ...]
+    integrity_scan_default_mode: str
+    integrity_issue_min_confidence: float
+    integrity_notify_on_high_confidence: bool
+    duplicate_reclaim_archive_root: str
+    duplicate_reclaim_default_retention_days: int
+    duplicate_reclaim_notify_on_reviewed_safe: bool
+    integrity_quarantine_root: str
+    integrity_quarantine_retention_days: int
+    recycle_bin_root: str
+    recycle_purge_days: int
+    automation_mode: str
     recanonicalization_enabled: bool
     updated_at: datetime
     version: int
@@ -70,6 +82,25 @@ class PolicySettingsSnapshot:
                 "selected_policy": self.selected_policy,
                 "preferred_roots": list(self.preferred_roots),
             },
+            "integrity": {
+                "default_scan_mode": self.integrity_scan_default_mode,
+                "issue_min_confidence": self.integrity_issue_min_confidence,
+                "notify_on_high_confidence": self.integrity_notify_on_high_confidence,
+            },
+            "duplicate_reclaim": {
+                "archive_root": self.duplicate_reclaim_archive_root,
+                "default_retention_days": self.duplicate_reclaim_default_retention_days,
+                "notify_on_reviewed_safe": self.duplicate_reclaim_notify_on_reviewed_safe,
+            },
+            "retention": {
+                "quarantine_root": self.integrity_quarantine_root,
+                "recycle_bin_root": self.recycle_bin_root,
+                "quarantine_retention_days": self.integrity_quarantine_retention_days,
+                "recycle_purge_days": self.recycle_purge_days,
+            },
+            "automation": {
+                "mode": self.automation_mode,
+            },
             "naming": {
                 "strategy": self.naming_strategy,
             },
@@ -91,6 +122,17 @@ class UpdatePolicySettingsCommand:
     selected_policy: str
     naming_strategy: str
     preferred_roots: tuple[str, ...]
+    integrity_scan_default_mode: str
+    integrity_issue_min_confidence: float
+    integrity_notify_on_high_confidence: bool
+    duplicate_reclaim_archive_root: str
+    duplicate_reclaim_default_retention_days: int
+    duplicate_reclaim_notify_on_reviewed_safe: bool
+    integrity_quarantine_root: str
+    integrity_quarantine_retention_days: int
+    recycle_bin_root: str
+    recycle_purge_days: int
+    automation_mode: str
     recanonicalization_enabled: bool
     version: int
 
@@ -130,6 +172,17 @@ class PolicySettingsService:
                     selected_policy=validated.selected_policy,
                     naming_strategy=validated.naming_strategy,
                     preferred_roots_json=self._serialize_roots(validated.preferred_roots),
+                    integrity_scan_default_mode=validated.integrity_scan_default_mode,
+                    integrity_issue_min_confidence=validated.integrity_issue_min_confidence,
+                    duplicate_reclaim_default_retention_days=validated.duplicate_reclaim_default_retention_days,
+                    integrity_quarantine_retention_days=validated.integrity_quarantine_retention_days,
+                    recycle_purge_days=validated.recycle_purge_days,
+                    recycle_bin_root=validated.recycle_bin_root,
+                    duplicate_reclaim_archive_root=validated.duplicate_reclaim_archive_root,
+                    integrity_quarantine_root=validated.integrity_quarantine_root,
+                    integrity_notify_on_high_confidence=validated.integrity_notify_on_high_confidence,
+                    duplicate_reclaim_notify_on_reviewed_safe=validated.duplicate_reclaim_notify_on_reviewed_safe,
+                    automation_mode=validated.automation_mode,
                     recanonicalization_enabled=validated.recanonicalization_enabled,
                     version=1,
                     updated_at=now,
@@ -146,6 +199,17 @@ class PolicySettingsService:
             row.selected_policy = validated.selected_policy
             row.naming_strategy = validated.naming_strategy
             row.preferred_roots_json = self._serialize_roots(validated.preferred_roots)
+            row.integrity_scan_default_mode = validated.integrity_scan_default_mode
+            row.integrity_issue_min_confidence = validated.integrity_issue_min_confidence
+            row.duplicate_reclaim_default_retention_days = validated.duplicate_reclaim_default_retention_days
+            row.integrity_quarantine_retention_days = validated.integrity_quarantine_retention_days
+            row.recycle_purge_days = validated.recycle_purge_days
+            row.recycle_bin_root = validated.recycle_bin_root
+            row.duplicate_reclaim_archive_root = validated.duplicate_reclaim_archive_root
+            row.integrity_quarantine_root = validated.integrity_quarantine_root
+            row.integrity_notify_on_high_confidence = validated.integrity_notify_on_high_confidence
+            row.duplicate_reclaim_notify_on_reviewed_safe = validated.duplicate_reclaim_notify_on_reviewed_safe
+            row.automation_mode = validated.automation_mode
             row.recanonicalization_enabled = validated.recanonicalization_enabled
             row.version += 1
             row.updated_at = now
@@ -171,6 +235,23 @@ class PolicySettingsService:
             selected_policy=selected_policy,
             naming_strategy=self._validate_naming_strategy(command.naming_strategy),
             preferred_roots=normalized_roots,
+            integrity_scan_default_mode=self._validate_scan_mode(command.integrity_scan_default_mode),
+            integrity_issue_min_confidence=self._validate_confidence(command.integrity_issue_min_confidence),
+            integrity_notify_on_high_confidence=bool(command.integrity_notify_on_high_confidence),
+            duplicate_reclaim_archive_root=self._validate_absolute_path(command.duplicate_reclaim_archive_root, "duplicate_reclaim_archive_root"),
+            duplicate_reclaim_default_retention_days=self._validate_positive_int(
+                command.duplicate_reclaim_default_retention_days,
+                "duplicate_reclaim_default_retention_days",
+            ),
+            duplicate_reclaim_notify_on_reviewed_safe=bool(command.duplicate_reclaim_notify_on_reviewed_safe),
+            integrity_quarantine_root=self._validate_absolute_path(command.integrity_quarantine_root, "integrity_quarantine_root"),
+            integrity_quarantine_retention_days=self._validate_positive_int(
+                command.integrity_quarantine_retention_days,
+                "integrity_quarantine_retention_days",
+            ),
+            recycle_bin_root=self._validate_absolute_path(command.recycle_bin_root, "recycle_bin_root"),
+            recycle_purge_days=self._validate_positive_int(command.recycle_purge_days, "recycle_purge_days"),
+            automation_mode=self._validate_automation_mode(command.automation_mode),
             recanonicalization_enabled=bool(command.recanonicalization_enabled),
             version=int(command.version),
         )
@@ -184,6 +265,17 @@ class PolicySettingsService:
                 else str(row.naming_strategy).strip().upper()
             ),
             preferred_roots=self._deserialize_roots(row.preferred_roots_json),
+            integrity_scan_default_mode=str(row.integrity_scan_default_mode).strip().upper(),
+            integrity_issue_min_confidence=float(row.integrity_issue_min_confidence),
+            integrity_notify_on_high_confidence=bool(row.integrity_notify_on_high_confidence),
+            duplicate_reclaim_archive_root=str(row.duplicate_reclaim_archive_root),
+            duplicate_reclaim_default_retention_days=int(row.duplicate_reclaim_default_retention_days),
+            duplicate_reclaim_notify_on_reviewed_safe=bool(row.duplicate_reclaim_notify_on_reviewed_safe),
+            integrity_quarantine_root=str(row.integrity_quarantine_root),
+            integrity_quarantine_retention_days=int(row.integrity_quarantine_retention_days),
+            recycle_bin_root=str(row.recycle_bin_root),
+            recycle_purge_days=int(row.recycle_purge_days),
+            automation_mode=str(row.automation_mode).strip().upper(),
             recanonicalization_enabled=bool(row.recanonicalization_enabled),
             updated_at=row.updated_at,
             version=int(row.version),
@@ -198,6 +290,17 @@ class PolicySettingsService:
             selected_policy=selected_policy,
             naming_strategy=NamingStrategyDB.SHARED_CANONICAL_NAME.value,
             preferred_roots=normalized,
+            integrity_scan_default_mode=self._default_scan_mode(),
+            integrity_issue_min_confidence=0.9,
+            integrity_notify_on_high_confidence=True,
+            duplicate_reclaim_archive_root=self._default_path("MEDIA_MANAGER_RECLAIM_ROOT", "/tmp/media-manager/reclaim"),
+            duplicate_reclaim_default_retention_days=14,
+            duplicate_reclaim_notify_on_reviewed_safe=True,
+            integrity_quarantine_root=self._default_path("MEDIA_MANAGER_QUARANTINE_ROOT", "/tmp/media-manager/quarantine"),
+            integrity_quarantine_retention_days=self._default_days("MEDIA_MANAGER_QUARANTINE_RETENTION_DAYS", 14),
+            recycle_bin_root=self._default_path("MEDIA_MANAGER_RECYCLE_BIN_ROOT", "/tmp/media-manager/recycle-bin"),
+            recycle_purge_days=self._default_days("MEDIA_MANAGER_RECYCLE_PURGE_DAYS", 30),
+            automation_mode="NOTIFY_ONLY",
             recanonicalization_enabled=False,
             updated_at=datetime.fromtimestamp(0, tz=timezone.utc),
             version=0,
@@ -208,6 +311,38 @@ class PolicySettingsService:
             return normalize_naming_strategy(raw)
         except ValueError as exc:
             raise PolicySettingsValidationError(str(exc)) from exc
+
+    def _validate_scan_mode(self, raw: str) -> str:
+        value = str(raw).strip().upper()
+        if value not in {"FAST", "DEEP"}:
+            raise PolicySettingsValidationError("integrity_scan_default_mode must be FAST or DEEP.")
+        return value
+
+    def _validate_confidence(self, raw: float) -> float:
+        value = float(raw)
+        if not 0.0 <= value <= 1.0:
+            raise PolicySettingsValidationError("integrity_issue_min_confidence must be within [0.0, 1.0].")
+        return round(value, 4)
+
+    def _validate_positive_int(self, raw: int, field_name: str) -> int:
+        value = int(raw)
+        if value <= 0:
+            raise PolicySettingsValidationError(f"{field_name} must be > 0.")
+        return value
+
+    def _validate_absolute_path(self, raw: str, field_name: str) -> str:
+        value = str(raw).strip()
+        if not value:
+            raise PolicySettingsValidationError(f"{field_name} must not be empty.")
+        if not Path(value).is_absolute():
+            raise PolicySettingsValidationError(f"{field_name} must be an absolute path.")
+        return value
+
+    def _validate_automation_mode(self, raw: str) -> str:
+        value = str(raw).strip().upper()
+        if value != "NOTIFY_ONLY":
+            raise PolicySettingsValidationError("automation_mode must be NOTIFY_ONLY.")
+        return value
 
     def _normalize_roots(self, preferred_roots: tuple[str, ...]) -> tuple[str, ...]:
         values: set[str] = set()
@@ -236,3 +371,18 @@ class PolicySettingsService:
                 if cleaned:
                     values.append(cleaned)
         return tuple(sorted(set(values)))
+
+    def _default_scan_mode(self) -> str:
+        raw = (os.getenv("MEDIA_MANAGER_IMPORT_INTEGRITY_SCAN_MODE", "") or "").strip().upper()
+        return raw if raw in {"FAST", "DEEP"} else "FAST"
+
+    def _default_path(self, env_name: str, fallback: str) -> str:
+        raw = (os.getenv(env_name, "") or "").strip()
+        return raw if raw else fallback
+
+    def _default_days(self, env_name: str, fallback: int) -> int:
+        raw = (os.getenv(env_name, "") or "").strip()
+        try:
+            return max(1, int(raw)) if raw else fallback
+        except ValueError:
+            return fallback

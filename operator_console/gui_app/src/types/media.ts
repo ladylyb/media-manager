@@ -93,6 +93,7 @@ export interface IntegrityDashboard {
   suspect_count: number;
   ignored_count: number;
   marked_ok_count: number;
+  high_confidence_unresolved_count: number;
 }
 
 export interface IntegrityIssue {

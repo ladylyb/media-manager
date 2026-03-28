@@ -34,6 +34,7 @@ from media_manager.app.persistence.media_file_queries import (
     get_rows_by_hash,
     get_rows_by_status,
 )
+from media_manager.app.persistence.policy_settings import PolicySettingsService
 from media_manager.app.persistence.models import (
     ApplyAuditRun,
     CanonicalAssignment,
@@ -263,6 +264,7 @@ class IntegrityDashboardSummary:
     suspect_count: int
     ignored_count: int
     marked_ok_count: int
+    high_confidence_unresolved_count: int
 
     def to_dict(self) -> dict[str, int | str | None]:
         return {
@@ -274,6 +276,7 @@ class IntegrityDashboardSummary:
             "suspect_count": self.suspect_count,
             "ignored_count": self.ignored_count,
             "marked_ok_count": self.marked_ok_count,
+            "high_confidence_unresolved_count": self.high_confidence_unresolved_count,
         }
 
 
@@ -1007,6 +1010,7 @@ class OperatorConsoleReadService:
         return output
 
     def get_integrity_dashboard_summary(self) -> IntegrityDashboardSummary:
+        threshold = PolicySettingsService(self._session_factory).get_settings().integrity_issue_min_confidence
         with self._session_factory() as session:
             total_files_scanned = int(session.scalar(select(func.count()).select_from(IntegrityCheck)) or 0)
             broken_count = int(
@@ -1033,6 +1037,19 @@ class OperatorConsoleReadService:
                 )
                 or 0
             )
+            high_confidence_unresolved_count = int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(IntegrityCheck)
+                    .outerjoin(IntegrityReviewDecision, IntegrityReviewDecision.check_id == IntegrityCheck.id)
+                    .where(
+                        IntegrityCheck.status.in_(("BROKEN", "SUSPECT")),
+                        IntegrityCheck.confidence >= float(threshold),
+                        IntegrityReviewDecision.check_id.is_(None),
+                    )
+                )
+                or 0
+            )
             latest_run = session.scalar(
                 select(IntegrityCheckRun).order_by(IntegrityCheckRun.started_at.desc(), IntegrityCheckRun.id.desc()).limit(1)
             )
@@ -1054,6 +1071,7 @@ class OperatorConsoleReadService:
             suspect_count=suspect_count,
             ignored_count=ignored_count,
             marked_ok_count=marked_ok_count,
+            high_confidence_unresolved_count=high_confidence_unresolved_count,
         )
 
     def get_integrity_issue_page(

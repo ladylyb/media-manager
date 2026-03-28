@@ -112,6 +112,17 @@ class PolicyUpdatePayload(BaseModel):
     selected_policy: str
     naming_strategy: str = "SHARED_CANONICAL_NAME"
     preferred_roots: list[str] = Field(default_factory=list)
+    integrity_scan_default_mode: str = "FAST"
+    integrity_issue_min_confidence: float = 0.9
+    integrity_notify_on_high_confidence: bool = True
+    duplicate_reclaim_archive_root: str = "/tmp/media-manager/reclaim"
+    duplicate_reclaim_default_retention_days: int = 14
+    duplicate_reclaim_notify_on_reviewed_safe: bool = True
+    integrity_quarantine_root: str = "/tmp/media-manager/quarantine"
+    integrity_quarantine_retention_days: int = 14
+    recycle_bin_root: str = "/tmp/media-manager/recycle-bin"
+    recycle_purge_days: int = 30
+    automation_mode: str = "NOTIFY_ONLY"
     recanonicalization_enabled: bool
     version: int
 
@@ -247,7 +258,7 @@ class IntegrityPlaybackFailurePayload(BaseModel):
 
 class DuplicateReclaimExecutePayload(BaseModel):
     content_ids: list[str] = Field(default_factory=list)
-    retention_days: int = 14
+    retention_days: int | None = None
 
 
 class DuplicateReclaimRestorePayload(BaseModel):
@@ -1234,6 +1245,17 @@ def create_app() -> FastAPI:
                 selected_policy=payload.selected_policy,
                 naming_strategy=payload.naming_strategy,
                 preferred_roots=tuple(payload.preferred_roots),
+                integrity_scan_default_mode=payload.integrity_scan_default_mode,
+                integrity_issue_min_confidence=payload.integrity_issue_min_confidence,
+                integrity_notify_on_high_confidence=payload.integrity_notify_on_high_confidence,
+                duplicate_reclaim_archive_root=payload.duplicate_reclaim_archive_root,
+                duplicate_reclaim_default_retention_days=payload.duplicate_reclaim_default_retention_days,
+                duplicate_reclaim_notify_on_reviewed_safe=payload.duplicate_reclaim_notify_on_reviewed_safe,
+                integrity_quarantine_root=payload.integrity_quarantine_root,
+                integrity_quarantine_retention_days=payload.integrity_quarantine_retention_days,
+                recycle_bin_root=payload.recycle_bin_root,
+                recycle_purge_days=payload.recycle_purge_days,
+                automation_mode=payload.automation_mode,
                 recanonicalization_enabled=payload.recanonicalization_enabled,
                 version=payload.version,
             ),
