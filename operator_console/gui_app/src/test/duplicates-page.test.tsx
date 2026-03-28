@@ -338,14 +338,21 @@ describe("DuplicatesPage", () => {
         ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
         review_status: "looks_right",
       },
-      buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
+      {
+        ...buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
+        review_status: "needs_review",
+      },
+      {
+        ...buildGroup("group-gamma", "gamma-main.jpg", ["gamma-copy.jpg"]),
+        review_status: "looks_right",
+      },
     ];
     reclaimItemsData = [
       {
         file_instance_id: "archived-1",
-        content_id: "group-beta",
-        original_path: "/library/beta-copy.jpg",
-        archive_path: "/archive/beta-copy.jpg",
+        content_id: "group-gamma",
+        original_path: "/library/gamma-copy.jpg",
+        archive_path: "/archive/gamma-copy.jpg",
         item_status: "ARCHIVED",
         expires_at: "2026-04-10T10:00:00+00:00",
       },
@@ -405,6 +412,38 @@ describe("DuplicatesPage", () => {
         screen.getByText("2 duplicate files moved from 2 groups into the configured holding area. The keep copy stayed in place."),
       ).toBeInTheDocument();
     });
+  });
+
+  it("does not keep already processed groups selectable in Ready to move", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        review_status: "looks_right",
+        reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
+      },
+      {
+        ...buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
+        review_status: "looks_right",
+      },
+    ];
+    reclaimItemsData = [
+      {
+        file_instance_id: "group-alpha-duplicate-0",
+        content_id: "group-alpha",
+        original_path: "/library/alpha-copy.jpg",
+        archive_path: "/tmp/media-manager/reclaim/group-alpha/group-alpha-duplicate-0-alpha-copy.jpg",
+        item_status: "ARCHIVED",
+        expires_at: "2026-04-10T10:00:00+00:00",
+      },
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+
+    renderPage("/duplicates?tab=removal");
+
+    expect(await screen.findByTestId("recycle-bin-ready-gallery")).toBeInTheDocument();
+    expect(screen.queryByTestId("recycle-bin-gallery-card-group-alpha")).not.toBeInTheDocument();
+    expect(screen.getByTestId("recycle-bin-gallery-card-group-beta")).toBeInTheDocument();
+    expect(screen.getAllByText("alpha-copy.jpg").length).toBeGreaterThan(0);
   });
 
   it("uses Looks right groups as the only move-eligible groups and shows move and restore feedback", async () => {
@@ -557,7 +596,8 @@ describe("DuplicatesPage", () => {
 
     renderPage("/duplicates?tab=removal");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Move all eligible groups" }));
+    fireEvent.click(await screen.findByLabelText("Select group alpha-main.jpg"));
+    fireEvent.click(screen.getByRole("button", { name: "Move selected groups" }));
 
     await waitFor(() => {
       expect(mocks.executeDuplicateReclaim).toHaveBeenCalledWith({
@@ -565,10 +605,10 @@ describe("DuplicatesPage", () => {
         retention_days: 21,
       });
       expect(
-        screen.getByText(
-          "No new files were moved. Eligible duplicates were already processed or were no longer available to move.",
-        ),
+        screen.getByText("The selected groups no longer had extra copies available to move. The list has been refreshed."),
       ).toBeInTheDocument();
+      expect(screen.queryByTestId("recycle-bin-bulk-action-bar")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("recycle-bin-gallery-card-group-alpha")).not.toBeInTheDocument();
     });
   });
 

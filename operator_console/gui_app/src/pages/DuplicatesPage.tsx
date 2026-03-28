@@ -52,6 +52,11 @@ interface RecycleBinFeedback {
   message: string;
 }
 
+interface ReadyGroupOptions {
+  blockedGroupIds?: string[];
+  unavailableGroupIds?: string[];
+}
+
 const reviewOptions: Array<{ value: ReviewFilter; label: string }> = [
   { value: "all", label: "All" },
   { value: "unreviewed", label: "Still to review" },
@@ -190,6 +195,37 @@ function isPendingRemovalStatus(status: DuplicateGroup["reclaim_status"] | undef
   return status === "ARCHIVED" || status === "RESTORED" || status === "SCHEDULED_FOR_DELETE";
 }
 
+function getArchivedReclaimCountByGroup(reclaimItems: DuplicateReclaimItem[]) {
+  return reclaimItems.reduce<Record<string, number>>((acc, item) => {
+    if (item.item_status !== "ARCHIVED") return acc;
+    acc[item.content_id] = (acc[item.content_id] ?? 0) + 1;
+    return acc;
+  }, {});
+}
+
+function deriveActionableReadyGroups(
+  groups: DuplicateGroup[],
+  reclaimItems: DuplicateReclaimItem[],
+  options: ReadyGroupOptions = {},
+) {
+  const blockedIds = new Set(options.blockedGroupIds ?? []);
+  const unavailableIds = new Set(options.unavailableGroupIds ?? []);
+  const archivedCounts = getArchivedReclaimCountByGroup(reclaimItems);
+
+  return groups.filter((group) => {
+    const reclaimableCount = group.reclaimable_file_count ?? 0;
+    const archivedCount = archivedCounts[group.group_id] ?? 0;
+    return (
+      currentReviewMark(group) === "looks_right" &&
+      reclaimableCount > 0 &&
+      archivedCount < reclaimableCount &&
+      !isPendingRemovalStatus(group.reclaim_status) &&
+      !blockedIds.has(group.group_id) &&
+      !unavailableIds.has(group.group_id)
+    );
+  });
+}
+
 function getKeepCopy(group: DuplicateGroup): DuplicateFile | null {
   return group.duplicates.find((file) => file.is_canonical) ?? group.duplicates[0] ?? null;
 }
@@ -221,6 +257,7 @@ export default function DuplicatesPage() {
   const [isReviewQueueOpen, setIsReviewQueueOpen] = useState(false);
   const [recycleBinViewMode, setRecycleBinViewMode] = useState<RecycleBinViewMode>("gallery");
   const [selectedReadyGroupIds, setSelectedReadyGroupIds] = useState<string[]>([]);
+  const [recycleBinUnavailableGroupIds, setRecycleBinUnavailableGroupIds] = useState<string[]>([]);
   const [reclaimBridgeBlockedIds, setReclaimBridgeBlockedIds] = useState<string[]>([]);
   const [reclaimBridgeWarning, setReclaimBridgeWarning] = useState<string | null>(null);
   const [recycleBinFeedback, setRecycleBinFeedback] = useState<RecycleBinFeedback | null>(null);
@@ -391,6 +428,7 @@ export default function DuplicatesPage() {
   const reclaimItems = ((reclaimItemsQuery.data?.items ?? []) as DuplicateReclaimItem[]) ?? [];
   const archivedItems = reclaimItems.filter((item) => item.item_status === "ARCHIVED");
   const restoredItems = reclaimItems.filter((item) => item.item_status === "RESTORED");
+  const archivedReclaimCounts = useMemo(() => getArchivedReclaimCountByGroup(reclaimItems), [reclaimItems]);
   const groupsById = useMemo(
     () =>
       sortedGroups.reduce<Record<string, DuplicateGroup>>((acc, group) => {
@@ -399,13 +437,10 @@ export default function DuplicatesPage() {
       }, {}),
     [sortedGroups],
   );
-  const readyGroups = sortedGroups.filter(
-    (group) =>
-      currentReviewMark(group) === "looks_right" &&
-      (group.reclaimable_file_count ?? 0) > 0 &&
-      !isPendingRemovalStatus(group.reclaim_status) &&
-      !reclaimBridgeBlockedIds.includes(group.group_id),
-  );
+  const readyGroups = deriveActionableReadyGroups(sortedGroups, reclaimItems, {
+    blockedGroupIds: reclaimBridgeBlockedIds,
+    unavailableGroupIds: recycleBinUnavailableGroupIds,
+  });
   const readyExtraCopyCount = readyGroups.reduce((sum, group) => sum + (group.reclaimable_file_count ?? 0), 0);
   const readyEstimatedBytes = readyGroups.reduce((sum, group) => sum + (group.estimated_reclaim_bytes ?? 0), 0);
   const readyGroupIds = new Set(readyGroups.map((group) => group.group_id));
@@ -414,6 +449,7 @@ export default function DuplicatesPage() {
     (group) =>
       (group.reclaimable_file_count ?? 0) > 0 &&
       !readyGroupIds.has(group.group_id) &&
+      !((archivedReclaimCounts[group.group_id] ?? 0) >= (group.reclaimable_file_count ?? 0)) &&
       !isPendingRemovalStatus(group.reclaim_status),
   );
   const archiveRoot = policy?.duplicate_reclaim.archive_root?.trim() ?? "";
@@ -471,6 +507,20 @@ export default function DuplicatesPage() {
     setSelectedReadyGroupIds((current) => current.filter((groupId) => readyGroupIds.has(groupId)));
   }, [readyGroupIdList]);
 
+  function setReadyGroupsUnavailable(groupIds: string[], unavailable: boolean) {
+    setRecycleBinUnavailableGroupIds((current) => {
+      const next = new Set(current);
+      for (const groupId of groupIds) {
+        if (unavailable) {
+          next.add(groupId);
+        } else {
+          next.delete(groupId);
+        }
+      }
+      return [...next];
+    });
+  }
+
   function setActiveTab(nextTab: DuplicatesTab) {
     const nextParams = new URLSearchParams(searchParams);
     nextParams.set("tab", nextTab);
@@ -503,6 +553,7 @@ export default function DuplicatesPage() {
         reclaim_status,
       });
       markBridgeBlocked(group.group_id, false);
+      setReadyGroupsUnavailable([group.group_id], false);
       setReclaimBridgeWarning((current) => (current && current.includes(group.group_id) ? null : current));
       return true;
     } catch {
@@ -542,6 +593,15 @@ export default function DuplicatesPage() {
     setSelectedReadyGroupIds([]);
   }
 
+  async function refreshRecycleBinQueries() {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.duplicates }),
+      queryClient.invalidateQueries({ queryKey: ["duplicates", "reclaim-items"] }),
+      queryClient.refetchQueries({ queryKey: queryKeys.duplicates, type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["duplicates", "reclaim-items"], type: "active" }),
+    ]);
+  }
+
   async function handleMoveEligibleDuplicates(groupsToMove: DuplicateGroup[] = readyGroups, scope: "selected" | "all" | "single" = "all") {
     setRecycleBinFeedback(null);
     if (recycleConfigWarning) {
@@ -553,37 +613,68 @@ export default function DuplicatesPage() {
         tone: "warning",
         message:
           scope === "selected"
-            ? "Select one or more eligible groups to move their extra copies into the configured holding area."
+            ? "Select one or more actionable groups to move their extra copies into the configured holding area."
             : "No new files were moved. No eligible extra copies are left to move from the main library.",
       });
       return;
     }
 
+    const actionableGroups = groupsToMove.filter((group) => readyGroupIds.has(group.group_id));
     const targetGroupIds = new Set(groupsToMove.map((group) => group.group_id));
-    const groupsNeedingSync = groupsToMove.filter((group) => group.reclaim_status !== "REVIEWED_SAFE_TO_RECLAIM");
+
+    if (!actionableGroups.length) {
+      setSelectedReadyGroupIds((current) => current.filter((groupId) => !targetGroupIds.has(groupId)));
+      setReadyGroupsUnavailable([...targetGroupIds], true);
+      await refreshRecycleBinQueries();
+      setRecycleBinFeedback({
+        tone: "warning",
+        message: "The selected groups no longer had extra copies available to move. The list has been refreshed.",
+      });
+      return;
+    }
+
+    const actionableGroupIds = new Set(actionableGroups.map((group) => group.group_id));
+    const groupsNeedingSync = actionableGroups.filter((group) => group.reclaim_status !== "REVIEWED_SAFE_TO_RECLAIM");
     const synced = await runPreflightReclaimSync(groupsNeedingSync);
     if (!synced) return;
 
     try {
       const result = await executeReclaimMutation.mutateAsync({
-        content_ids: groupsToMove.map((group) => group.group_id),
+        content_ids: actionableGroups.map((group) => group.group_id),
         retention_days: archiveRetentionDays ?? 14,
       });
       const summary = getMutationSummary(result.data);
       const applied = Number(summary.applied_count ?? 0);
-      setRecycleBinFeedback(
-        applied > 0
-          ? {
-              tone: "success",
-              message: getGalleryActionSummary(groupsToMove.length, applied),
-            }
-          : {
-              tone: "warning",
-              message: getGalleryNoOpSummary(scope),
-            },
-      );
       if (applied > 0) {
-        setSelectedReadyGroupIds((current) => current.filter((groupId) => !targetGroupIds.has(groupId)));
+        setSelectedReadyGroupIds((current) => current.filter((groupId) => !actionableGroupIds.has(groupId)));
+        setReadyGroupsUnavailable([...actionableGroupIds], false);
+        setRecycleBinFeedback({
+          tone: "success",
+          message: getGalleryActionSummary(actionableGroups.length, applied),
+        });
+      } else {
+        await refreshRecycleBinQueries();
+        const refreshedGroups = (queryClient.getQueryData(queryKeys.duplicates) as DuplicateGroup[] | undefined) ?? [];
+        const refreshedReclaimItems =
+          ((queryClient.getQueryData(queryKeys.duplicateReclaimItems(1, 50)) as { items?: DuplicateReclaimItem[] } | undefined)
+            ?.items ?? []) as DuplicateReclaimItem[];
+        const refreshedReadyIds = new Set(
+          deriveActionableReadyGroups(refreshedGroups, refreshedReclaimItems, {
+            blockedGroupIds: reclaimBridgeBlockedIds,
+          }).map((group) => group.group_id),
+        );
+        const staleTargetIds = [...actionableGroupIds];
+        if (staleTargetIds.length) {
+          setReadyGroupsUnavailable(staleTargetIds, true);
+        }
+        setSelectedReadyGroupIds((current) => current.filter((groupId) => !actionableGroupIds.has(groupId) && refreshedReadyIds.has(groupId)));
+        setRecycleBinFeedback({
+          tone: "warning",
+          message:
+            scope === "selected" || scope === "single"
+              ? "The selected groups no longer had extra copies available to move. The list has been refreshed."
+              : "The eligible groups no longer had extra copies available to move. The list has been refreshed.",
+        });
       }
     } catch {
       setRecycleBinFeedback({
@@ -637,6 +728,7 @@ export default function DuplicatesPage() {
       reviewed_canonical_instance_id: selectedCanonical.file_instance_id,
     });
     setRecycleBinFeedback(null);
+    setReadyGroupsUnavailable([selected.group_id], false);
 
     if (isPendingRemovalStatus(selected.reclaim_status)) {
       markBridgeBlocked(selected.group_id, false);
