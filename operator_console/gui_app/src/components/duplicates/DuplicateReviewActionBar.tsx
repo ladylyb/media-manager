@@ -14,6 +14,9 @@ interface DuplicateReviewActionBarProps {
   onPrev: () => void;
   sticky?: boolean;
   showShortcutHint?: boolean;
+  showNavigation?: boolean;
+  compact?: boolean;
+  progressLabel?: string;
 }
 
 function ActionChoice({
@@ -57,24 +60,33 @@ export function DuplicateReviewActionBar({
   onPrev,
   sticky = true,
   showShortcutHint = true,
+  showNavigation = true,
+  compact = false,
+  progressLabel,
 }: DuplicateReviewActionBarProps) {
   return (
     <div
       className={cn(
-        "rounded-[24px] border border-border/70 bg-card/95 p-4 backdrop-blur",
+        "rounded-[22px] border border-border/70 bg-card/95 backdrop-blur",
+        compact ? "p-3" : "p-4",
         sticky ? "sticky bottom-4 z-10 shadow-lg" : "shadow-sm",
       )}
     >
       <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="outline" onClick={onPrev} disabled={!hasPrev}>
-            <ArrowLeft className="h-4 w-4" />
-            Prev
-          </Button>
-          <Button type="button" variant="outline" onClick={onNext} disabled={!hasNext}>
-            Next
-            <ArrowRight className="h-4 w-4" />
-          </Button>
+          {showNavigation ? (
+            <>
+              <Button type="button" variant="outline" size={compact ? "sm" : "default"} onClick={onPrev} disabled={!hasPrev}>
+                <ArrowLeft className="h-4 w-4" />
+                Back
+              </Button>
+              <Button type="button" variant="outline" size={compact ? "sm" : "default"} onClick={onNext} disabled={!hasNext}>
+                Next
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+            </>
+          ) : null}
+          {progressLabel ? <span className="text-xs font-medium text-muted-foreground">{progressLabel}</span> : null}
           {showShortcutHint ? <span className="ml-1 text-xs text-muted-foreground">1 / 2 / 3 to mark</span> : null}
         </div>
         <div className="flex flex-wrap gap-2">
