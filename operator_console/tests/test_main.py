@@ -234,6 +234,71 @@ def test_logs_access_filter_keeps_logs_endpoint_visible_in_debug() -> None:
         root_logger.setLevel(original_level)
 
 
+def test_logs_access_filter_suppresses_successful_status_polling_above_debug() -> None:
+    filter_ = main_module._LogsEndpointAccessFilter()
+    root_logger = logging.getLogger()
+    original_level = root_logger.level
+    root_logger.setLevel(logging.INFO)
+    try:
+        record = logging.LogRecord(
+            name="uvicorn.access",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=0,
+            msg='%s - "%s %s HTTP/%s" %d',
+            args=("127.0.0.1:60148", "GET", "/api/status", "1.1", 200),
+            exc_info=None,
+        )
+
+        assert filter_.filter(record) is False
+    finally:
+        root_logger.setLevel(original_level)
+
+
+def test_logs_access_filter_keeps_unhealthy_status_polling_visible() -> None:
+    filter_ = main_module._LogsEndpointAccessFilter()
+    root_logger = logging.getLogger()
+    original_level = root_logger.level
+    root_logger.setLevel(logging.INFO)
+    try:
+        record = logging.LogRecord(
+            name="uvicorn.access",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=0,
+            msg='%s - "%s %s HTTP/%s" %d',
+            args=("127.0.0.1:60148", "GET", "/api/status", "1.1", 503),
+            exc_info=None,
+        )
+
+        assert filter_.filter(record) is True
+        assert record.levelno == logging.INFO
+    finally:
+        root_logger.setLevel(original_level)
+
+
+def test_logs_access_filter_leaves_unrelated_access_logs_unchanged() -> None:
+    filter_ = main_module._LogsEndpointAccessFilter()
+    root_logger = logging.getLogger()
+    original_level = root_logger.level
+    root_logger.setLevel(logging.INFO)
+    try:
+        record = logging.LogRecord(
+            name="uvicorn.access",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=0,
+            msg='%s - "%s %s HTTP/%s" %d',
+            args=("127.0.0.1:60148", "GET", "/api/runs", "1.1", 200),
+            exc_info=None,
+        )
+
+        assert filter_.filter(record) is True
+        assert record.levelno == logging.INFO
+    finally:
+        root_logger.setLevel(original_level)
+
+
 class _FakeService:
     """Simple fake read service for endpoint dependency overrides."""
 

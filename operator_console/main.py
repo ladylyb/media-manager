@@ -43,14 +43,37 @@ _TRUTHY_ENV = {"1", "true", "yes", "on"}
 
 
 class _LogsEndpointAccessFilter(logging.Filter):
-    """Reduce `/logs` polling noise unless the server is running in DEBUG."""
+    """Reduce high-frequency polling noise unless the server is running in DEBUG."""
+
+    @staticmethod
+    def _record_matches(record: logging.LogRecord, *, method: str, path_prefix: str) -> bool:
+        args = record.args
+        if not isinstance(args, tuple) or len(args) < 5:
+            return False
+        request_method = str(args[1])
+        request_path = str(args[2])
+        return request_method == method and request_path.startswith(path_prefix)
+
+    @classmethod
+    def _is_logs_poll(cls, record: logging.LogRecord) -> bool:
+        return cls._record_matches(record, method="GET", path_prefix="/logs")
+
+    @classmethod
+    def _is_successful_status_poll(cls, record: logging.LogRecord) -> bool:
+        if not cls._record_matches(record, method="GET", path_prefix="/api/status"):
+            return False
+        args = record.args
+        try:
+            status_code = int(args[4])
+        except (TypeError, ValueError, IndexError):
+            return False
+        return 200 <= status_code < 400
 
     def filter(self, record: logging.LogRecord) -> bool:
         if record.name != "uvicorn.access":
             return True
 
-        message = record.getMessage()
-        if "\"GET /logs" not in message:
+        if not (self._is_logs_poll(record) or self._is_successful_status_poll(record)):
             return True
 
         if logging.getLogger().getEffectiveLevel() > logging.DEBUG:
@@ -62,7 +85,7 @@ class _LogsEndpointAccessFilter(logging.Filter):
 
 
 def _install_logs_endpoint_access_filter() -> None:
-    """Keep high-frequency `/logs` access records out of INFO-level server logs."""
+    """Keep high-frequency poll access records out of INFO-level server logs."""
     access_logger = logging.getLogger("uvicorn.access")
     if any(isinstance(existing, _LogsEndpointAccessFilter) for existing in access_logger.filters):
         return
