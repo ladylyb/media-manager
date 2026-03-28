@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from media_manager.app.core.logging_buffer import get_buffered_logs
+from media_manager.app.core.logging_config import get_logger
 from media_manager.app.observability import mount_metrics_endpoint
 from media_manager.app.persistence.base import create_db_engine, create_session_factory
 from media_manager.app.persistence.operator_console import OperatorConsoleReadService
@@ -35,7 +36,7 @@ from media_manager.app.service_layer import (
     schema_version,
 )
 
-LOGGER = logging.getLogger(__name__)
+LOGGER = get_logger(__name__)
 _MUTATION_SEMAPHORE = threading.BoundedSemaphore(value=4)
 _TRUTHY_ENV = {"1", "true", "yes", "on"}
 

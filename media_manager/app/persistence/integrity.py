@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
-from typing import Any
+from typing import Any, Callable
 from uuid import UUID
 
 from sqlalchemy import select
@@ -65,6 +65,7 @@ class IntegrityService:
         scan_mode: str,
         file_instance_ids: list[UUID] | None = None,
         operation_run_id: UUID | None = None,
+        on_progress: Callable[[int, int, int], None] | None = None,
     ) -> IntegrityScanSummary:
         normalized_mode = IntegrityScanMode(scan_mode.strip().upper())
         with transactional_session(self._session_factory) as session:
@@ -86,7 +87,7 @@ class IntegrityService:
 
             instances = self._load_instances(session, file_instance_ids=file_instance_ids)
             run.paths = [row.absolute_path for row in instances]
-            return self._scan_instances(session, run=run, instances=instances)
+            return self._scan_instances(session, run=run, instances=instances, on_progress=on_progress)
 
     def scan_paths(
         self,
@@ -124,11 +125,12 @@ class IntegrityService:
         *,
         run: IntegrityCheckRun,
         instances: list[FileInstance],
+        on_progress: Callable[[int, int, int], None] | None = None,
     ) -> IntegrityScanSummary:
         normalized_mode = IntegrityScanMode(run.scan_mode)
-
+        eligible_file_count = len(instances)
         issues_found = 0
-        for instance in instances:
+        for processed_count, instance in enumerate(instances, start=1):
             result = self._scan_path(Path(instance.absolute_path), normalized_mode)
             if result["status"] != IntegrityCheckStatus.OK.value:
                 issues_found += 1
@@ -175,8 +177,15 @@ class IntegrityService:
                         created_at=now,
                     )
                 )
+            if (
+                on_progress is not None
+                and eligible_file_count >= 100
+                and processed_count < eligible_file_count
+                and processed_count % 100 == 0
+            ):
+                on_progress(processed_count, eligible_file_count, issues_found)
 
-        run.scanned_count = len(instances)
+        run.scanned_count = eligible_file_count
         run.issues_found = issues_found
         run.status = IntegrityRunStatus.COMPLETED.value
         run.completed_at = _utcnow()
@@ -185,7 +194,7 @@ class IntegrityService:
             run_id=str(run.id),
             status=run.status,
             scan_mode=run.scan_mode,
-            eligible_file_count=run.scanned_count,
+            eligible_file_count=eligible_file_count,
             scanned_count=run.scanned_count,
             issues_found=run.issues_found,
         )

@@ -685,6 +685,29 @@ class OperationServices:
         requested_file_count = len(parsed_file_ids or [])
         scan_scope = "EXPLICIT_FILE_IDS" if parsed_file_ids else _DEFAULT_ACTIVE_LIBRARY_SCOPE
         started_at = time.perf_counter()
+
+        def _log_manual_progress(processed_count: int, eligible_file_count: int, issues_found_so_far: int) -> None:
+            elapsed_seconds = round(time.perf_counter() - started_at, 2)
+            LOGGER.info(
+                (
+                    f"Manual integrity scan progress: mode={mode.strip().upper()} scan_scope={scan_scope} "
+                    f"processed_count={processed_count}/{eligible_file_count} "
+                    f"issues_found_so_far={issues_found_so_far} elapsed_seconds={elapsed_seconds}"
+                ),
+                extra={
+                    "run_id": run_log.operation_run_id,
+                    "phase": "integrity",
+                    "stage": "manual_scan",
+                    "status": "running",
+                    "action": "manual_integrity_scan_progress",
+                    "action_type": OperationRunType.INTEGRITY_SCAN.value,
+                    "scope": scan_scope,
+                    "processed_count": processed_count,
+                    "total_count": eligible_file_count,
+                    "elapsed_seconds": elapsed_seconds,
+                },
+            )
+
         if trigger == "manual":
             LOGGER.info(
                 (
@@ -707,6 +730,7 @@ class OperationServices:
                 scan_mode=mode,
                 file_instance_ids=parsed_file_ids,
                 operation_run_id=UUID(run_log.operation_run_id),
+                on_progress=_log_manual_progress if trigger == "manual" else None,
             )
             self._op_runs().complete(UUID(run_log.operation_run_id))
             self.cache.invalidate("integrity_dashboard", "integrity_issues")
