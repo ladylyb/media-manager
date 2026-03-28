@@ -466,7 +466,7 @@ export default function DuplicatesPage() {
         "mx-auto flex flex-col",
         activeTab === "review"
           ? "max-w-[120rem] gap-3 px-2 py-3 sm:px-2.5 lg:px-3"
-          : "max-w-7xl gap-5 p-6",
+          : "max-w-[120rem] gap-4 px-3 py-4 sm:px-4 lg:px-5",
       )}
     >
       <TopSurfaceHeader
