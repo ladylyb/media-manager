@@ -136,6 +136,36 @@ Defaults below reflect runtime code defaults, not shell defaults.
 - Safety note: disabled by default to prevent correctness-sensitive planner paths from using eventually-consistent MV reads.
 - Example: `false`
 
+### `MEDIA_MANAGER_RECLAIM_ROOT`
+- Purpose: Default holding-area root for the duplicate move flow used by the Duplicates page.
+- Format: Absolute directory path.
+- Default in code: `/tmp/media-manager/reclaim`
+- Stage note: this controls where eligible extra copies first move during duplicate reclaim; it is not the later recycle-bin destination.
+- Example: `/srv/media-manager/reclaim`
+
+### `MEDIA_MANAGER_RECYCLE_BIN_ROOT`
+- Purpose: Default recycle-bin root for the later recycle/purge stage after holding-area retention expires.
+- Format: Absolute directory path.
+- Default in code: `/tmp/media-manager/recycle-bin`
+- Stage note: this setting is separate from the initial duplicate holding area and does not change the Duplicates page move target.
+- Example: `/srv/media-manager/recycle-bin`
+
+### `MEDIA_MANAGER_RECYCLE_PURGE_DAYS`
+- Purpose: Default purge window, in days, once items have entered the later recycle-bin stage.
+- Format: Positive integer days.
+- Default in code: `30`
+- Stage note: this applies to the later recycle/purge workflow, not to the initial duplicate holding retention shown on the Duplicates page.
+- Example: `30`
+
+## Policy-Backed Duplicate Retention
+
+### `duplicate_reclaim_default_retention_days`
+- Purpose: Holding-window length shown on the Duplicates page for duplicate extra copies in the configured holding area.
+- Backing: persisted policy field, not an environment variable.
+- Default in code: `14`
+- Source of default: `PolicySettingsService._default_snapshot()` in `media_manager/app/persistence/policy_settings.py`
+- Operator note: the Duplicates page reads this from policy (`duplicate_reclaim.default_retention_days`), and the execute flow falls back to the same policy value when no explicit retention is supplied.
+
 ## Admin Safety Controls
 
 ### `MEDIA_MANAGER_ENV`
