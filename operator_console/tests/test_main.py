@@ -1357,6 +1357,7 @@ class _FakeOperationServices:
         *,
         mode: str,
         file_instance_ids: list[str] | None = None,
+        full_rescan: bool = False,
         trigger: str = "manual",
     ) -> dict[str, object]:
         _ = file_instance_ids
@@ -1364,8 +1365,11 @@ class _FakeOperationServices:
             "run_id": "44444444-4444-4444-4444-444444444444",
             "status": "COMPLETED",
             "scan_mode": mode.upper(),
+            "eligible_file_count": 6,
             "scanned_count": 4,
+            "skipped_count": 2,
             "issues_found": 1,
+            "full_rescan": full_rescan,
             "trigger": trigger,
         }
 
@@ -2703,6 +2707,8 @@ def test_integrity_scan_endpoint_returns_summary() -> None:
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert response.json()["data"]["result"]["scan_mode"] == "FAST"
+    assert response.json()["data"]["result"]["skipped_count"] == 2
+    assert response.json()["data"]["result"]["full_rescan"] is False
     assert response.json()["data"]["result"]["trigger"] == "manual"
 
 
@@ -2718,17 +2724,18 @@ def test_integrity_scan_endpoint_logs_manual_request() -> None:
     app.dependency_overrides[get_operation_services] = _FakeOperationServices
     client = TestClient(app)
     try:
-        response = client.post("/api/integrity/scan", json={"mode": "DEEP", "file_instance_ids": []})
+        response = client.post("/api/integrity/scan", json={"mode": "DEEP", "file_instance_ids": [], "full_rescan": True})
     finally:
         app.dependency_overrides.clear()
         main_module.LOGGER.info = original_info  # type: ignore[assignment]
 
     assert response.status_code == 200
     assert any(
-        "POST /api/integrity/scan received: mode=DEEP requested_file_count=0 scan_scope=DEFAULT_ACTIVE_LIBRARY"
+        "POST /api/integrity/scan received: mode=DEEP requested_file_count=0 scan_scope=DEFAULT_ACTIVE_LIBRARY full_rescan=True"
         in line
         for line in logged_messages
     )
+    assert response.json()["data"]["result"]["full_rescan"] is True
 
 
 def test_integrity_playback_failure_endpoint_returns_summary() -> None:

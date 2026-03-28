@@ -58,6 +58,7 @@ def clean_tables(db_engine: Engine) -> None:
                 "canonical_recompute_items, canonical_recompute_runs, canonical_assignments, "
                 "tag_enrichment_items, tag_enrichment_runs, "
                 "benchmark_runs, "
+                "integrity_quarantine_records, integrity_check_runs, "
                 "operation_runs, "
                 "media_file, "
                 "canonical_tags, tags, "

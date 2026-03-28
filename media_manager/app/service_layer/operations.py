@@ -667,6 +667,7 @@ class OperationServices:
         *,
         mode: str,
         file_instance_ids: list[str] | None = None,
+        full_rescan: bool = False,
         trigger: str = "manual",
     ) -> dict[str, object]:
         parsed_file_ids: list[UUID] | None = None
@@ -680,7 +681,12 @@ class OperationServices:
 
         run_log = self._op_runs().start(
             operation_type=OperationRunType.INTEGRITY_SCAN,
-            context={"mode": mode, "file_instance_ids": [str(item) for item in parsed_file_ids or []], "trigger": trigger},
+            context={
+                "mode": mode,
+                "file_instance_ids": [str(item) for item in parsed_file_ids or []],
+                "full_rescan": bool(full_rescan),
+                "trigger": trigger,
+            },
         )
         requested_file_count = len(parsed_file_ids or [])
         scan_scope = "EXPLICIT_FILE_IDS" if parsed_file_ids else _DEFAULT_ACTIVE_LIBRARY_SCOPE
@@ -718,7 +724,7 @@ class OperationServices:
             LOGGER.info(
                 (
                     f"Manual integrity scan started: mode={mode.strip().upper()} "
-                    f"requested_file_count={requested_file_count} scan_scope={scan_scope}"
+                    f"requested_file_count={requested_file_count} scan_scope={scan_scope} full_rescan={full_rescan}"
                 ),
                 extra={
                     "run_id": run_log.operation_run_id,
@@ -729,6 +735,7 @@ class OperationServices:
                     "action_type": OperationRunType.INTEGRITY_SCAN.value,
                     "total_count": requested_file_count,
                     "scope": scan_scope,
+                    "full_rescan": bool(full_rescan),
                 },
             )
         try:
@@ -737,6 +744,7 @@ class OperationServices:
                 file_instance_ids=parsed_file_ids,
                 operation_run_id=UUID(run_log.operation_run_id),
                 on_progress=_log_manual_progress if trigger == "manual" else None,
+                full_rescan=full_rescan,
             )
             self._op_runs().complete(UUID(run_log.operation_run_id))
             self.cache.invalidate("integrity_dashboard", "integrity_issues")
@@ -749,6 +757,7 @@ class OperationServices:
                         f"scan_scope={scan_scope} "
                         f"eligible_file_count={summary.eligible_file_count} "
                         f"scanned_count={summary.scanned_count} issues_found={summary.issues_found} "
+                        f"skipped_count={summary.skipped_count} full_rescan={summary.full_rescan} "
                         f"duration_ms={duration_ms}"
                     ),
                     extra={
@@ -762,6 +771,8 @@ class OperationServices:
                         "scope": scan_scope,
                         "files_count": summary.eligible_file_count,
                         "scanned": summary.scanned_count,
+                        "skipped_count": summary.skipped_count,
+                        "full_rescan": summary.full_rescan,
                         "duration_ms": duration_ms,
                     },
                 )
@@ -774,7 +785,7 @@ class OperationServices:
                     (
                         f"Manual integrity scan failed: mode={mode.strip().upper()} "
                         f"requested_file_count={requested_file_count} "
-                        f"scan_scope={scan_scope} duration_ms={duration_ms}"
+                        f"scan_scope={scan_scope} full_rescan={full_rescan} duration_ms={duration_ms}"
                     ),
                     extra={
                         "run_id": run_log.operation_run_id,
@@ -785,13 +796,19 @@ class OperationServices:
                         "action_type": OperationRunType.INTEGRITY_SCAN.value,
                         "total_count": requested_file_count,
                         "scope": scan_scope,
+                        "full_rescan": bool(full_rescan),
                         "duration_ms": duration_ms,
                     },
                 )
             raise
 
     def integrity_playback_failure(self, *, file_instance_id: str) -> dict[str, object]:
-        return self.integrity_scan(mode="FAST", file_instance_ids=[file_instance_id], trigger="playback_failure")
+        return self.integrity_scan(
+            mode="FAST",
+            file_instance_ids=[file_instance_id],
+            full_rescan=True,
+            trigger="playback_failure",
+        )
 
     def integrity_review_set(
         self,

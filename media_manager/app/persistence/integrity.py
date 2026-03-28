@@ -40,7 +40,9 @@ class IntegrityScanSummary:
     scan_mode: str
     eligible_file_count: int
     scanned_count: int
+    skipped_count: int
     issues_found: int
+    full_rescan: bool
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -49,8 +51,25 @@ class IntegrityScanSummary:
             "scan_mode": self.scan_mode,
             "eligible_file_count": self.eligible_file_count,
             "scanned_count": self.scanned_count,
+            "skipped_count": self.skipped_count,
             "issues_found": self.issues_found,
+            "full_rescan": self.full_rescan,
         }
+
+
+@dataclass(frozen=True)
+class _FileSnapshot:
+    absolute_path: str
+    size_bytes: int | None
+    mtime_ns: int | None
+
+
+@dataclass(frozen=True)
+class _ScanCandidate:
+    instance: FileInstance
+    existing_check: IntegrityCheck | None
+    current_snapshot: _FileSnapshot | None
+    should_scan: bool
 
 
 class IntegrityService:
@@ -66,6 +85,7 @@ class IntegrityService:
         file_instance_ids: list[UUID] | None = None,
         operation_run_id: UUID | None = None,
         on_progress: Callable[[int, int, int], None] | None = None,
+        full_rescan: bool = False,
     ) -> IntegrityScanSummary:
         normalized_mode = IntegrityScanMode(scan_mode.strip().upper())
         with transactional_session(self._session_factory) as session:
@@ -87,7 +107,13 @@ class IntegrityService:
 
             instances = self._load_instances(session, file_instance_ids=file_instance_ids)
             run.paths = [row.absolute_path for row in instances]
-            return self._scan_instances(session, run=run, instances=instances, on_progress=on_progress)
+            return self._scan_instances(
+                session,
+                run=run,
+                instances=instances,
+                on_progress=on_progress,
+                full_rescan=full_rescan,
+            )
 
     def scan_paths(
         self,
@@ -95,6 +121,7 @@ class IntegrityService:
         scan_mode: str,
         absolute_paths: list[str],
         operation_run_id: UUID | None = None,
+        full_rescan: bool = False,
     ) -> IntegrityScanSummary:
         normalized_mode = IntegrityScanMode(scan_mode.strip().upper())
         normalized_paths = sorted({path.strip() for path in absolute_paths if path.strip()})
@@ -117,7 +144,12 @@ class IntegrityService:
 
             instances = self._load_instances_by_paths(session, absolute_paths=normalized_paths)
             run.paths = [row.absolute_path for row in instances]
-            return self._scan_instances(session, run=run, instances=instances)
+            return self._scan_instances(
+                session,
+                run=run,
+                instances=instances,
+                full_rescan=full_rescan,
+            )
 
     def _scan_instances(
         self,
@@ -126,11 +158,22 @@ class IntegrityService:
         run: IntegrityCheckRun,
         instances: list[FileInstance],
         on_progress: Callable[[int, int, int], None] | None = None,
+        full_rescan: bool = False,
     ) -> IntegrityScanSummary:
         normalized_mode = IntegrityScanMode(run.scan_mode)
         eligible_file_count = len(instances)
+        candidates = self._build_scan_candidates(
+            session,
+            instances=instances,
+            requested_mode=normalized_mode,
+            full_rescan=full_rescan,
+        )
+        scan_candidates = [candidate for candidate in candidates if candidate.should_scan]
+        skipped_count = eligible_file_count - len(scan_candidates)
         issues_found = 0
-        for processed_count, instance in enumerate(instances, start=1):
+        scanned_count = len(scan_candidates)
+        for processed_count, candidate in enumerate(scan_candidates, start=1):
+            instance = candidate.instance
             result = self._scan_path(Path(instance.absolute_path), normalized_mode)
             if result["status"] != IntegrityCheckStatus.OK.value:
                 issues_found += 1
@@ -149,6 +192,10 @@ class IntegrityService:
                     readability_ok=result["readability_ok"],
                     probe_status=result["probe_status"],
                     decode_status=result["decode_status"],
+                    last_completed_scan_mode=normalized_mode.value,
+                    last_scanned_absolute_path=instance.absolute_path,
+                    last_scanned_size_bytes=candidate.current_snapshot.size_bytes if candidate.current_snapshot is not None else None,
+                    last_scanned_mtime_ns=candidate.current_snapshot.mtime_ns if candidate.current_snapshot is not None else None,
                     last_checked_at=now,
                     created_at=now,
                     updated_at=now,
@@ -162,6 +209,10 @@ class IntegrityService:
                 check.readability_ok = result["readability_ok"]
                 check.probe_status = result["probe_status"]
                 check.decode_status = result["decode_status"]
+                check.last_completed_scan_mode = normalized_mode.value
+                check.last_scanned_absolute_path = instance.absolute_path
+                check.last_scanned_size_bytes = candidate.current_snapshot.size_bytes if candidate.current_snapshot is not None else None
+                check.last_scanned_mtime_ns = candidate.current_snapshot.mtime_ns if candidate.current_snapshot is not None else None
                 check.last_checked_at = now
                 check.updated_at = now
                 session.flush()
@@ -179,13 +230,13 @@ class IntegrityService:
                 )
             if (
                 on_progress is not None
-                and eligible_file_count >= 100
-                and processed_count < eligible_file_count
+                and scanned_count >= 100
+                and processed_count < scanned_count
                 and processed_count % 100 == 0
             ):
-                on_progress(processed_count, eligible_file_count, issues_found)
+                on_progress(processed_count, scanned_count, issues_found)
 
-        run.scanned_count = eligible_file_count
+        run.scanned_count = scanned_count
         run.issues_found = issues_found
         run.status = IntegrityRunStatus.COMPLETED.value
         run.completed_at = _utcnow()
@@ -196,7 +247,103 @@ class IntegrityService:
             scan_mode=run.scan_mode,
             eligible_file_count=eligible_file_count,
             scanned_count=run.scanned_count,
+            skipped_count=skipped_count,
             issues_found=run.issues_found,
+            full_rescan=full_rescan,
+        )
+
+    def _build_scan_candidates(
+        self,
+        session: Session,
+        *,
+        instances: list[FileInstance],
+        requested_mode: IntegrityScanMode,
+        full_rescan: bool,
+    ) -> list[_ScanCandidate]:
+        if not instances:
+            return []
+
+        existing_checks = {
+            row.file_instance_id: row
+            for row in session.scalars(
+                select(IntegrityCheck).where(
+                    IntegrityCheck.file_instance_id.in_([instance.file_instance_id for instance in instances])
+                )
+            ).all()
+        }
+
+        candidates: list[_ScanCandidate] = []
+        for instance in instances:
+            current_snapshot = self._read_file_snapshot(Path(instance.absolute_path))
+            existing_check = existing_checks.get(instance.file_instance_id)
+            should_scan = full_rescan or self._needs_rescan(
+                existing_check=existing_check,
+                requested_mode=requested_mode,
+                absolute_path=instance.absolute_path,
+                current_snapshot=current_snapshot,
+            )
+            candidates.append(
+                _ScanCandidate(
+                    instance=instance,
+                    existing_check=existing_check,
+                    current_snapshot=current_snapshot,
+                    should_scan=should_scan,
+                )
+            )
+        return candidates
+
+    def _needs_rescan(
+        self,
+        *,
+        existing_check: IntegrityCheck | None,
+        requested_mode: IntegrityScanMode,
+        absolute_path: str,
+        current_snapshot: _FileSnapshot | None,
+    ) -> bool:
+        if existing_check is None:
+            return True
+        if (
+            existing_check.last_completed_scan_mode is None
+            or existing_check.last_scanned_absolute_path is None
+            or existing_check.last_scanned_size_bytes is None
+            or existing_check.last_scanned_mtime_ns is None
+        ):
+            return True
+        if current_snapshot is None:
+            return True
+        if existing_check.last_scanned_absolute_path != absolute_path:
+            return True
+        if existing_check.last_scanned_size_bytes != current_snapshot.size_bytes:
+            return True
+        if existing_check.last_scanned_mtime_ns != current_snapshot.mtime_ns:
+            return True
+        return not self._mode_satisfies(
+            existing_mode=existing_check.last_completed_scan_mode,
+            requested_mode=requested_mode,
+        )
+
+    def _mode_satisfies(self, *, existing_mode: str | None, requested_mode: IntegrityScanMode) -> bool:
+        if not existing_mode:
+            return False
+        try:
+            normalized_existing = IntegrityScanMode(existing_mode.strip().upper())
+        except ValueError:
+            return False
+        if normalized_existing == IntegrityScanMode.DEEP:
+            return True
+        return normalized_existing == requested_mode
+
+    def _read_file_snapshot(self, path: Path) -> _FileSnapshot | None:
+        try:
+            stat_result = path.stat()
+        except (FileNotFoundError, NotADirectoryError, OSError):
+            return None
+        if not path.is_file() or not os.access(path, os.R_OK):
+            return None
+        return _FileSnapshot(
+            absolute_path=str(path),
+            size_bytes=int(stat_result.st_size),
+            mtime_ns=int(stat_result.st_mtime_ns),
         )
 
     def _load_instances_by_paths(

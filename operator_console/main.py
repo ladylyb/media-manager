@@ -265,6 +265,7 @@ class IntegrityScanPayload(BaseModel):
 
     mode: str = "FAST"
     file_instance_ids: list[str] = Field(default_factory=list)
+    full_rescan: bool = False
 
 
 class IntegrityReviewPayload(BaseModel):
@@ -1055,7 +1056,8 @@ def create_app() -> FastAPI:
         LOGGER.info(
             (
                 f"POST /api/integrity/scan received: mode={normalized_mode} "
-                f"requested_file_count={requested_file_count} scan_scope={scan_scope}"
+                f"requested_file_count={requested_file_count} scan_scope={scan_scope} "
+                f"full_rescan={payload.full_rescan}"
             ),
             extra={
                 "phase": "operator_console",
@@ -1065,6 +1067,7 @@ def create_app() -> FastAPI:
                 "action_type": "api_request",
                 "total_count": requested_file_count,
                 "scope": scan_scope,
+                "full_rescan": bool(payload.full_rescan),
             },
         )
         return _execute_mutation(
@@ -1072,6 +1075,7 @@ def create_app() -> FastAPI:
             lambda: services.integrity_scan(
                 mode=payload.mode,
                 file_instance_ids=payload.file_instance_ids,
+                full_rescan=payload.full_rescan,
             ),
         )
 

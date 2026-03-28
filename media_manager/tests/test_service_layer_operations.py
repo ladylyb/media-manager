@@ -198,17 +198,25 @@ def test_integrity_playback_failure_uses_fast_scan_trigger(monkeypatch: pytest.M
 
     class _FakeIntegritySummary:
         def to_dict(self) -> dict[str, object]:
-            return {"scan_mode": "FAST", "scanned_count": 1, "issues_found": 1}
+            return {
+                "scan_mode": "FAST",
+                "eligible_file_count": 1,
+                "scanned_count": 1,
+                "skipped_count": 0,
+                "issues_found": 1,
+                "full_rescan": True,
+            }
 
     class _FakeIntegrityService:
         def __init__(self, _session_factory) -> None:
             pass
 
-        def scan(self, *, scan_mode, file_instance_ids, operation_run_id, on_progress=None):  # type: ignore[no-untyped-def]
+        def scan(self, *, scan_mode, file_instance_ids, operation_run_id, on_progress=None, full_rescan=False):  # type: ignore[no-untyped-def]
             _ = on_progress
             observed["scan_mode"] = scan_mode
             observed["file_instance_ids"] = [str(item) for item in file_instance_ids]
             observed["operation_run_id"] = str(operation_run_id)
+            observed["full_rescan"] = full_rescan
             return _FakeIntegritySummary()
 
     monkeypatch.setattr(operations_module, "IntegrityService", _FakeIntegrityService)
@@ -224,6 +232,7 @@ def test_integrity_playback_failure_uses_fast_scan_trigger(monkeypatch: pytest.M
     assert payload["trigger"] == "playback_failure"
     assert observed["scan_mode"] == "FAST"
     assert observed["file_instance_ids"] == [file_instance_id]
+    assert observed["full_rescan"] is True
 
 
 def test_integrity_scan_logs_manual_request_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -231,23 +240,28 @@ def test_integrity_scan_logs_manual_request_lifecycle(monkeypatch: pytest.Monkey
         scan_mode = "DEEP"
         eligible_file_count = 5
         scanned_count = 5
+        skipped_count = 0
         issues_found = 2
+        full_rescan = False
 
         def to_dict(self) -> dict[str, object]:
             return {
                 "scan_mode": self.scan_mode,
                 "eligible_file_count": self.eligible_file_count,
                 "scanned_count": self.scanned_count,
+                "skipped_count": self.skipped_count,
                 "issues_found": self.issues_found,
+                "full_rescan": self.full_rescan,
             }
 
     class _FakeIntegrityService:
         def __init__(self, _session_factory) -> None:
             pass
 
-        def scan(self, *, scan_mode, file_instance_ids, operation_run_id, on_progress=None):  # type: ignore[no-untyped-def]
+        def scan(self, *, scan_mode, file_instance_ids, operation_run_id, on_progress=None, full_rescan=False):  # type: ignore[no-untyped-def]
             _ = file_instance_ids, operation_run_id, on_progress
             assert scan_mode == "DEEP"
+            assert full_rescan is False
             return _FakeIntegritySummary()
 
     monkeypatch.setattr(operations_module, "IntegrityService", _FakeIntegrityService)
@@ -269,13 +283,15 @@ def test_integrity_scan_logs_manual_request_lifecycle(monkeypatch: pytest.Monkey
     assert payload["scan_mode"] == "DEEP"
     assert (
         "Manual integrity scan started: mode=DEEP requested_file_count=0 "
-        "scan_scope=DEFAULT_ACTIVE_LIBRARY" in info_calls
+        "scan_scope=DEFAULT_ACTIVE_LIBRARY full_rescan=False" in info_calls
     )
     assert any(
         "Manual integrity scan completed: mode=DEEP requested_file_count=0 scan_scope=DEFAULT_ACTIVE_LIBRARY eligible_file_count=5 "
-        "scanned_count=5 issues_found=2" in call
+        "scanned_count=5 issues_found=2 skipped_count=0 full_rescan=False" in call
         for call in info_calls
     )
+    assert payload["skipped_count"] == 0
+    assert payload["full_rescan"] is False
 
 
 def test_integrity_scan_logs_progress_for_large_manual_scans(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -283,22 +299,27 @@ def test_integrity_scan_logs_progress_for_large_manual_scans(monkeypatch: pytest
         scan_mode = "FAST"
         eligible_file_count = 250
         scanned_count = 250
+        skipped_count = 0
         issues_found = 9
+        full_rescan = False
 
         def to_dict(self) -> dict[str, object]:
             return {
                 "scan_mode": self.scan_mode,
                 "eligible_file_count": self.eligible_file_count,
                 "scanned_count": self.scanned_count,
+                "skipped_count": self.skipped_count,
                 "issues_found": self.issues_found,
+                "full_rescan": self.full_rescan,
             }
 
     class _FakeIntegrityService:
         def __init__(self, _session_factory) -> None:
             pass
 
-        def scan(self, *, scan_mode, file_instance_ids, operation_run_id, on_progress=None):  # type: ignore[no-untyped-def]
+        def scan(self, *, scan_mode, file_instance_ids, operation_run_id, on_progress=None, full_rescan=False):  # type: ignore[no-untyped-def]
             _ = scan_mode, file_instance_ids, operation_run_id
+            assert full_rescan is False
             assert on_progress is not None
             on_progress(100, 250, 3)
             on_progress(200, 250, 7)
@@ -342,22 +363,27 @@ def test_integrity_scan_does_not_log_progress_for_small_manual_scans(monkeypatch
         scan_mode = "FAST"
         eligible_file_count = 12
         scanned_count = 12
+        skipped_count = 0
         issues_found = 1
+        full_rescan = False
 
         def to_dict(self) -> dict[str, object]:
             return {
                 "scan_mode": self.scan_mode,
                 "eligible_file_count": self.eligible_file_count,
                 "scanned_count": self.scanned_count,
+                "skipped_count": self.skipped_count,
                 "issues_found": self.issues_found,
+                "full_rescan": self.full_rescan,
             }
 
     class _FakeIntegrityService:
         def __init__(self, _session_factory) -> None:
             pass
 
-        def scan(self, *, scan_mode, file_instance_ids, operation_run_id, on_progress=None):  # type: ignore[no-untyped-def]
+        def scan(self, *, scan_mode, file_instance_ids, operation_run_id, on_progress=None, full_rescan=False):  # type: ignore[no-untyped-def]
             _ = scan_mode, file_instance_ids, operation_run_id, on_progress
+            assert full_rescan is False
             return _FakeIntegritySummary()
 
     monkeypatch.setattr(operations_module, "IntegrityService", _FakeIntegrityService)
@@ -378,6 +404,49 @@ def test_integrity_scan_does_not_log_progress_for_small_manual_scans(monkeypatch
 
     assert payload["scanned_count"] == 12
     assert not any("Manual integrity scan progress:" in call for call in info_calls)
+
+
+def test_integrity_scan_forwards_full_rescan(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: dict[str, object] = {}
+
+    class _FakeIntegritySummary:
+        scan_mode = "FAST"
+        eligible_file_count = 4
+        scanned_count = 4
+        skipped_count = 0
+        issues_found = 1
+        full_rescan = True
+
+        def to_dict(self) -> dict[str, object]:
+            return {
+                "scan_mode": self.scan_mode,
+                "eligible_file_count": self.eligible_file_count,
+                "scanned_count": self.scanned_count,
+                "skipped_count": self.skipped_count,
+                "issues_found": self.issues_found,
+                "full_rescan": self.full_rescan,
+            }
+
+    class _FakeIntegrityService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def scan(self, *, scan_mode, file_instance_ids, operation_run_id, on_progress=None, full_rescan=False):  # type: ignore[no-untyped-def]
+            _ = scan_mode, file_instance_ids, operation_run_id, on_progress
+            observed["full_rescan"] = full_rescan
+            return _FakeIntegritySummary()
+
+    monkeypatch.setattr(operations_module, "IntegrityService", _FakeIntegrityService)
+    _install_fake_operation_run_service(monkeypatch)
+    _install_fake_policy_settings_service(monkeypatch, integrity_scan_default_mode="FAST")
+
+    cache = _FakeCache(invalidations=[])
+    services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
+
+    payload = services.integrity_scan(mode="FAST", file_instance_ids=None, full_rescan=True, trigger="manual")
+
+    assert observed["full_rescan"] is True
+    assert payload["full_rescan"] is True
 
 
 def test_plan_returns_run_and_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -8,6 +8,8 @@ import { TopSurfaceHeader } from "@/components/layout/TopSurfaceHeader";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { WizardResultConsole } from "@/components/wizard/WizardResultConsole";
@@ -32,7 +34,9 @@ type IntegrityScanResult = {
   scan_mode: "FAST" | "DEEP";
   eligible_file_count?: number;
   scanned_count: number;
+  skipped_count?: number;
   issues_found: number;
+  full_rescan?: boolean;
 };
 type IntegrityScanFeedback = {
   runId?: string;
@@ -40,7 +44,9 @@ type IntegrityScanFeedback = {
   phase: "running" | "completed" | "failed";
   eligible_file_count?: number;
   scanned_count?: number;
+  skipped_count?: number;
   issues_found?: number;
+  full_rescan?: boolean;
   message?: string;
 };
 
@@ -86,6 +92,7 @@ export default function IntegrityPage() {
   const [filter, setFilter] = useState<IssueFilter>("ALL");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [scanFeedback, setScanFeedback] = useState<IntegrityScanFeedback | null>(null);
+  const [fullRescan, setFullRescan] = useState(false);
 
   const dashboardQuery = useQuery({
     queryKey: queryKeys.integrityDashboard,
@@ -134,10 +141,11 @@ export default function IntegrityPage() {
   });
 
   const scanMutation = useMutation({
-    mutationFn: (mode: "FAST" | "DEEP") => startIntegrityScan({ mode }),
-    onMutate: (mode) => {
-      setScanFeedback({ mode, phase: "running" });
-      return { mode };
+    mutationFn: ({ mode, fullRescan }: { mode: "FAST" | "DEEP"; fullRescan: boolean }) =>
+      startIntegrityScan({ mode, full_rescan: fullRescan }),
+    onMutate: ({ mode, fullRescan }) => {
+      setScanFeedback({ mode, phase: "running", full_rescan: fullRescan });
+      return { mode, fullRescan };
     },
     onSuccess: (response) => {
       const payload = (response?.data ?? {}) as Partial<IntegrityScanResult>;
@@ -148,7 +156,9 @@ export default function IntegrityPage() {
         eligible_file_count:
           typeof payload.eligible_file_count === "number" ? Number(payload.eligible_file_count) : undefined,
         scanned_count: Number(payload.scanned_count ?? 0),
+        skipped_count: typeof payload.skipped_count === "number" ? Number(payload.skipped_count) : undefined,
         issues_found: Number(payload.issues_found ?? 0),
+        full_rescan: Boolean(payload.full_rescan),
       };
       setScanFeedback({
         runId: scanResult.run_id,
@@ -156,7 +166,9 @@ export default function IntegrityPage() {
         phase: "completed",
         eligible_file_count: scanResult.eligible_file_count,
         scanned_count: scanResult.scanned_count,
+        skipped_count: scanResult.skipped_count,
         issues_found: scanResult.issues_found,
+        full_rescan: scanResult.full_rescan,
       });
       void queryClient.invalidateQueries({ queryKey: queryKeys.integrityDashboard });
       void queryClient.invalidateQueries({ queryKey: ["integrity", "issues"] });
@@ -169,6 +181,7 @@ export default function IntegrityPage() {
       setScanFeedback({
         mode: activeMode,
         phase: "failed",
+        full_rescan: context?.fullRescan ?? false,
         message: error instanceof Error ? error.message : String(error),
       });
     },
@@ -248,6 +261,14 @@ export default function IntegrityPage() {
                 },
               ]
             : []),
+          ...(scanFeedback.skipped_count != null
+            ? [
+                {
+                  label: "Files skipped",
+                  value: scanFeedback.skipped_count,
+                },
+              ]
+            : []),
           ...(scanFeedback.issues_found != null
             ? [
                 {
@@ -261,8 +282,19 @@ export default function IntegrityPage() {
   const scanSummaryLines =
     scanFeedback?.phase === "completed"
       ? [
-          `${scanModeLabel} completed and refreshed the dashboard, review queue, and selected file detail.`,
-          ...(scanFeedback.scanned_count === 0 ? ["No eligible active files were scanned."] : []),
+          scanFeedback.full_rescan
+            ? `${scanModeLabel} completed as a full rescan and refreshed the dashboard, review queue, and selected file detail.`
+            : `${scanModeLabel} completed incrementally and refreshed the dashboard, review queue, and selected file detail.`,
+          ...(scanFeedback.eligible_file_count === 0 ? ["No eligible active files were found."] : []),
+          ...(scanFeedback.skipped_count && scanFeedback.skipped_count > 0
+            ? [`${scanFeedback.skipped_count} unchanged files kept their existing integrity facts.`]
+            : []),
+          ...(scanFeedback.eligible_file_count != null &&
+          scanFeedback.eligible_file_count > 0 &&
+          scanFeedback.scanned_count === 0 &&
+          (scanFeedback.skipped_count ?? 0) === scanFeedback.eligible_file_count
+            ? ["All eligible files were skipped because their existing scan facts were still sufficient."]
+            : []),
         ]
       : scanFeedback?.phase === "failed"
         ? [
@@ -293,16 +325,27 @@ export default function IntegrityPage() {
           <div className="flex gap-2">
             <Button
               variant="outline"
-              onClick={() => scanMutation.mutate("FAST")}
+              onClick={() => scanMutation.mutate({ mode: "FAST", fullRescan })}
               disabled={scanMutation.isPending}
             >
               {runningMode === "FAST" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               {quickLabel}
             </Button>
-            <Button onClick={() => scanMutation.mutate("DEEP")} disabled={scanMutation.isPending}>
+            <Button onClick={() => scanMutation.mutate({ mode: "DEEP", fullRescan })} disabled={scanMutation.isPending}>
               {runningMode === "DEEP" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               {deepLabel}
             </Button>
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="integrity-full-rescan"
+              checked={fullRescan}
+              onCheckedChange={(checked) => setFullRescan(checked === true)}
+              disabled={scanMutation.isPending}
+            />
+            <Label htmlFor="integrity-full-rescan" className="text-xs text-muted-foreground">
+              Full rescan
+            </Label>
           </div>
         </div>
       </TopSurfaceHeader>
@@ -338,7 +381,9 @@ export default function IntegrityPage() {
                 </p>
                 <p className="mt-3 text-sm text-foreground">{scanModeLabel} started.</p>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  Stay on this panel to follow the scan. Recent scan activity and any available log updates will appear below.
+                  {scanFeedback.full_rescan
+                    ? "This run will rescan every eligible file in scope. Recent scan activity and any available log updates will appear below."
+                    : "Stay on this panel to follow the scan. Recent scan activity and any available log updates will appear below."}
                 </p>
               </div>
               <LiveProgressPanel operationKind="integrity" operationStatus="running" />

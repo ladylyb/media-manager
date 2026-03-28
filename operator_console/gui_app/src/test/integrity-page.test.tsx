@@ -140,7 +140,9 @@ describe("IntegrityPage", () => {
         scan_mode: "FAST",
         eligible_file_count: 12,
         scanned_count: 12,
+        skipped_count: 0,
         issues_found: 3,
+        full_rescan: false,
       },
     });
   });
@@ -163,7 +165,7 @@ describe("IntegrityPage", () => {
   });
 
   it("quick scan shows in-flight state and then success summary", async () => {
-    const deferred = createDeferred<{ data: { run_id: string; scan_mode: "FAST"; eligible_file_count: number; scanned_count: number; issues_found: number } }>();
+    const deferred = createDeferred<{ data: { run_id: string; scan_mode: "FAST"; eligible_file_count: number; scanned_count: number; skipped_count: number; issues_found: number; full_rescan: boolean } }>();
     mocks.startIntegrityScan.mockReturnValueOnce(deferred.promise);
     renderPage();
 
@@ -179,16 +181,19 @@ describe("IntegrityPage", () => {
         scan_mode: "FAST",
         eligible_file_count: 12,
         scanned_count: 12,
+        skipped_count: 0,
         issues_found: 3,
+        full_rescan: false,
       },
     });
-    await waitFor(() => expect(mocks.startIntegrityScan).toHaveBeenCalledWith({ mode: "FAST" }));
+    await waitFor(() => expect(mocks.startIntegrityScan).toHaveBeenCalledWith({ mode: "FAST", full_rescan: false }));
     expect(await screen.findByText("Integrity Scan Result")).toBeInTheDocument();
     expect(screen.getByText("Scan Complete")).toBeInTheDocument();
-    expect(screen.getByText("Quick scan completed and refreshed the dashboard, review queue, and selected file detail.")).toBeInTheDocument();
+    expect(screen.getByText("Quick scan completed incrementally and refreshed the dashboard, review queue, and selected file detail.")).toBeInTheDocument();
     expect(screen.getByText("Run ID")).toBeInTheDocument();
     expect(screen.getByText("Eligible files")).toBeInTheDocument();
     expect(screen.getByText("Files scanned")).toBeInTheDocument();
+    expect(screen.getByText("Files skipped")).toBeInTheDocument();
     expect(screen.getByText("Issues found")).toBeInTheDocument();
     expect(screen.getAllByText("Quick").length).toBeGreaterThan(0);
     expect(screen.getAllByText("12").length).toBeGreaterThan(1);
@@ -196,7 +201,7 @@ describe("IntegrityPage", () => {
   });
 
   it("deep scan shows in-flight state and then success summary", async () => {
-    const deferred = createDeferred<{ data: { run_id: string; scan_mode: "DEEP"; eligible_file_count: number; scanned_count: number; issues_found: number } }>();
+    const deferred = createDeferred<{ data: { run_id: string; scan_mode: "DEEP"; eligible_file_count: number; scanned_count: number; skipped_count: number; issues_found: number; full_rescan: boolean } }>();
     mocks.startIntegrityScan.mockReturnValueOnce(deferred.promise);
 
     renderPage();
@@ -212,14 +217,17 @@ describe("IntegrityPage", () => {
         scan_mode: "DEEP",
         eligible_file_count: 12,
         scanned_count: 12,
+        skipped_count: 0,
         issues_found: 4,
+        full_rescan: false,
       },
     });
 
-    await waitFor(() => expect(mocks.startIntegrityScan).toHaveBeenCalledWith({ mode: "DEEP" }));
-    expect(await screen.findByText("Deep scan completed and refreshed the dashboard, review queue, and selected file detail.")).toBeInTheDocument();
+    await waitFor(() => expect(mocks.startIntegrityScan).toHaveBeenCalledWith({ mode: "DEEP", full_rescan: false }));
+    expect(await screen.findByText("Deep scan completed incrementally and refreshed the dashboard, review queue, and selected file detail.")).toBeInTheDocument();
     expect(screen.getByText("Eligible files")).toBeInTheDocument();
     expect(screen.getByText("Files scanned")).toBeInTheDocument();
+    expect(screen.getByText("Files skipped")).toBeInTheDocument();
     expect(screen.getByText("Issues found")).toBeInTheDocument();
     expect(screen.getAllByText("Deep").length).toBeGreaterThan(0);
     expect(screen.getAllByText("12").length).toBeGreaterThan(1);
@@ -233,7 +241,9 @@ describe("IntegrityPage", () => {
         scan_mode: "FAST",
         eligible_file_count: 0,
         scanned_count: 0,
+        skipped_count: 0,
         issues_found: 0,
+        full_rescan: false,
       },
     });
 
@@ -241,7 +251,7 @@ describe("IntegrityPage", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Quick Scan" }));
 
-    expect(await screen.findByText("No eligible active files were scanned.")).toBeInTheDocument();
+    expect(await screen.findByText("No eligible active files were found.")).toBeInTheDocument();
   });
 
   it("does not let persisted deep default override explicit quick scan", async () => {
@@ -252,7 +262,7 @@ describe("IntegrityPage", () => {
     expect(screen.getByText("Deep Scan: quick scan plus decode-level verification on eligible active files")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Quick Scan" }));
 
-    await waitFor(() => expect(mocks.startIntegrityScan).toHaveBeenCalledWith({ mode: "FAST" }));
+    await waitFor(() => expect(mocks.startIntegrityScan).toHaveBeenCalledWith({ mode: "FAST", full_rescan: false }));
   });
 
   it("shows a visible error when the scan fails", async () => {
@@ -273,8 +283,32 @@ describe("IntegrityPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Quick Scan" }));
 
     expect(await screen.findByText("Integrity Scan Result")).toBeInTheDocument();
-    expect(screen.getByText("Quick scan completed and refreshed the dashboard, review queue, and selected file detail.")).toBeInTheDocument();
+    expect(screen.getByText("Quick scan completed incrementally and refreshed the dashboard, review queue, and selected file detail.")).toBeInTheDocument();
     expect(screen.getAllByText("Quick").length).toBeGreaterThan(0);
+  });
+
+  it("sends the full rescan override and surfaces skipped files in the summary", async () => {
+    mocks.startIntegrityScan.mockResolvedValueOnce({
+      data: {
+        run_id: "run-4",
+        scan_mode: "FAST",
+        eligible_file_count: 12,
+        scanned_count: 12,
+        skipped_count: 0,
+        issues_found: 3,
+        full_rescan: true,
+      },
+    });
+
+    renderPage();
+
+    fireEvent.click(await screen.findByLabelText("Full rescan"));
+    fireEvent.click(screen.getByRole("button", { name: "Quick Scan" }));
+
+    await waitFor(() =>
+      expect(mocks.startIntegrityScan).toHaveBeenCalledWith({ mode: "FAST", full_rescan: true }),
+    );
+    expect(await screen.findByText("Quick scan completed as a full rescan and refreshed the dashboard, review queue, and selected file detail.")).toBeInTheDocument();
   });
 
   it("submits mark as ok review decisions", async () => {
