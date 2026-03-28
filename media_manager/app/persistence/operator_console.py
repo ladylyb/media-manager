@@ -34,13 +34,21 @@ from media_manager.app.persistence.media_file_queries import (
     get_rows_by_hash,
     get_rows_by_status,
 )
+from media_manager.app.persistence.policy_settings import PolicySettingsService
 from media_manager.app.persistence.models import (
     ApplyAuditRun,
     CanonicalAssignment,
     CanonicalRecomputeRun,
     DuplicateGroupReview,
+    DuplicateReclaimItem,
+    DuplicateReclaimRecord,
     FileInstance,
     FileInstanceStatus,
+    IntegrityCheck,
+    IntegrityCheckRun,
+    IntegrityQuarantineRecord,
+    IntegritySignal,
+    IntegrityReviewDecision,
     MediaFile,
     MediaFileStatus,
     OperationRun,
@@ -211,6 +219,13 @@ class DuplicateGroupItem:
     reviewed_canonical_instance_id: str | None = None
     is_stale: bool = False
     stale_reason: str | None = None
+    estimated_reclaim_bytes: int = 0
+    reclaim_status: str | None = None
+    reclaimable_file_count: int = 0
+    retention_expires_at: str | None = None
+    integrity_issue_count: int = 0
+    integrity_broken_count: int = 0
+    integrity_suspect_count: int = 0
 
     def to_dict(self) -> dict[str, object]:
         """Return a JSON-serializable mapping."""
@@ -229,6 +244,245 @@ class DuplicateGroupItem:
             "reviewed_canonical_instance_id": self.reviewed_canonical_instance_id,
             "is_stale": self.is_stale,
             "stale_reason": self.stale_reason,
+            "estimated_reclaim_bytes": self.estimated_reclaim_bytes,
+            "reclaim_status": self.reclaim_status,
+            "reclaimable_file_count": self.reclaimable_file_count,
+            "retention_expires_at": self.retention_expires_at,
+            "integrity_issue_count": self.integrity_issue_count,
+            "integrity_broken_count": self.integrity_broken_count,
+            "integrity_suspect_count": self.integrity_suspect_count,
+        }
+
+
+@dataclass(frozen=True)
+class IntegrityDashboardSummary:
+    total_files_scanned: int
+    playback_issues: int
+    quarantined: int
+    last_scan_at: str | None
+    broken_count: int
+    suspect_count: int
+    ignored_count: int
+    marked_ok_count: int
+    high_confidence_unresolved_count: int
+
+    def to_dict(self) -> dict[str, int | str | None]:
+        return {
+            "total_files_scanned": self.total_files_scanned,
+            "playback_issues": self.playback_issues,
+            "quarantined": self.quarantined,
+            "last_scan_at": self.last_scan_at,
+            "broken_count": self.broken_count,
+            "suspect_count": self.suspect_count,
+            "ignored_count": self.ignored_count,
+            "marked_ok_count": self.marked_ok_count,
+            "high_confidence_unresolved_count": self.high_confidence_unresolved_count,
+        }
+
+
+@dataclass(frozen=True)
+class IntegrityIssueItem:
+    check_id: str
+    file_instance_id: str
+    absolute_path: str
+    status: str
+    confidence: float
+    probe_status: str | None
+    decode_status: str | None
+    reviewed_decision: str | None
+    reviewed_at: str | None
+    signal_types: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "check_id": self.check_id,
+            "file_instance_id": self.file_instance_id,
+            "absolute_path": self.absolute_path,
+            "status": self.status,
+            "confidence": self.confidence,
+            "probe_status": self.probe_status,
+            "decode_status": self.decode_status,
+            "reviewed_decision": self.reviewed_decision,
+            "reviewed_at": self.reviewed_at,
+            "signal_types": list(self.signal_types),
+        }
+
+
+@dataclass(frozen=True)
+class IntegrityIssuePage:
+    total_count: int
+    page: int
+    limit: int
+    total_pages: int
+    items: tuple[IntegrityIssueItem, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "total_count": self.total_count,
+            "page": self.page,
+            "limit": self.limit,
+            "total_pages": self.total_pages,
+            "items": [item.to_dict() for item in self.items],
+        }
+
+
+@dataclass(frozen=True)
+class IntegrityFileDetail:
+    check_id: str
+    file_instance_id: str
+    absolute_path: str
+    status: str
+    confidence: float
+    probe_status: str | None
+    decode_status: str | None
+    reviewed_decision: str | None
+    reviewed_at: str | None
+    signals: tuple[dict[str, object], ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "check_id": self.check_id,
+            "file_instance_id": self.file_instance_id,
+            "absolute_path": self.absolute_path,
+            "status": self.status,
+            "confidence": self.confidence,
+            "probe_status": self.probe_status,
+            "decode_status": self.decode_status,
+            "reviewed_decision": self.reviewed_decision,
+            "reviewed_at": self.reviewed_at,
+            "signals": [dict(signal) for signal in self.signals],
+        }
+
+
+@dataclass(frozen=True)
+class DuplicateReclaimArchiveItem:
+    file_instance_id: str
+    content_id: str
+    original_path: str
+    archive_path: str
+    item_status: str
+    reclaimed_at: str | None
+    expires_at: str | None
+    restored_at: str | None
+
+    def to_dict(self) -> dict[str, str | None]:
+        return {
+            "file_instance_id": self.file_instance_id,
+            "content_id": self.content_id,
+            "original_path": self.original_path,
+            "archive_path": self.archive_path,
+            "item_status": self.item_status,
+            "reclaimed_at": self.reclaimed_at,
+            "expires_at": self.expires_at,
+            "restored_at": self.restored_at,
+        }
+
+
+@dataclass(frozen=True)
+class DuplicateReclaimArchivePage:
+    total_count: int
+    page: int
+    limit: int
+    total_pages: int
+    items: tuple[DuplicateReclaimArchiveItem, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "total_count": self.total_count,
+            "page": self.page,
+            "limit": self.limit,
+            "total_pages": self.total_pages,
+            "items": [item.to_dict() for item in self.items],
+        }
+
+
+@dataclass(frozen=True)
+class IntegrityQuarantineItem:
+    file_instance_id: str
+    check_id: str
+    original_path: str
+    quarantine_path: str
+    quarantine_status: str
+    quarantined_at: str | None
+    restored_at: str | None
+
+    def to_dict(self) -> dict[str, str | None]:
+        return {
+            "file_instance_id": self.file_instance_id,
+            "check_id": self.check_id,
+            "original_path": self.original_path,
+            "quarantine_path": self.quarantine_path,
+            "quarantine_status": self.quarantine_status,
+            "quarantined_at": self.quarantined_at,
+            "restored_at": self.restored_at,
+        }
+
+
+@dataclass(frozen=True)
+class IntegrityQuarantinePage:
+    total_count: int
+    page: int
+    limit: int
+    total_pages: int
+    items: tuple[IntegrityQuarantineItem, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "total_count": self.total_count,
+            "page": self.page,
+            "limit": self.limit,
+            "total_pages": self.total_pages,
+            "items": [item.to_dict() for item in self.items],
+        }
+
+
+@dataclass(frozen=True)
+class RetentionRecycleItem:
+    workflow: str
+    file_instance_id: str
+    source_path: str
+    recycle_path: str | None
+    current_status: str
+    retention_expires_at: str | None
+    recycled_at: str | None
+    purge_after_at: str | None
+    purged_at: str | None
+    ready_for_recycle: bool
+    ready_for_purge: bool
+    days_remaining: int | None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "workflow": self.workflow,
+            "file_instance_id": self.file_instance_id,
+            "source_path": self.source_path,
+            "recycle_path": self.recycle_path,
+            "current_status": self.current_status,
+            "retention_expires_at": self.retention_expires_at,
+            "recycled_at": self.recycled_at,
+            "purge_after_at": self.purge_after_at,
+            "purged_at": self.purged_at,
+            "ready_for_recycle": self.ready_for_recycle,
+            "ready_for_purge": self.ready_for_purge,
+            "days_remaining": self.days_remaining,
+        }
+
+
+@dataclass(frozen=True)
+class RetentionRecyclePage:
+    total_count: int
+    page: int
+    limit: int
+    total_pages: int
+    items: tuple[RetentionRecycleItem, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "total_count": self.total_count,
+            "page": self.page,
+            "limit": self.limit,
+            "total_pages": self.total_pages,
+            "items": [item.to_dict() for item in self.items],
         }
 
 
@@ -610,6 +864,12 @@ class OperatorConsoleReadService:
                     select(DuplicateGroupReview).where(DuplicateGroupReview.content_id.in_(duplicate_content_ids))
                 ).all()
             }
+            reclaim_records = {
+                row.content_id: row
+                for row in session.scalars(
+                    select(DuplicateReclaimRecord).where(DuplicateReclaimRecord.content_id.in_(duplicate_content_ids))
+                ).all()
+            }
 
             instance_rows = session.execute(
                 select(
@@ -627,11 +887,29 @@ class OperatorConsoleReadService:
                     FileInstance.absolute_path.asc(),
                     FileInstance.file_instance_id.asc(),
                 )
+                ).all()
+            integrity_rows = session.execute(
+                select(IntegrityCheck.file_instance_id, IntegrityCheck.status).where(
+                    IntegrityCheck.file_instance_id.in_([file_instance_id for _, file_instance_id, _ in instance_rows])
+                )
             ).all()
+            instance_sizes = {
+                path: int(size_bytes or 0)
+                for path, size_bytes in session.execute(
+                    select(MediaFile.current_path, MediaFile.size_bytes).where(
+                        MediaFile.current_path.in_([absolute_path for _, _, absolute_path in instance_rows]),
+                        MediaFile.status != MediaFileStatus.DELETED.value,
+                    )
+                ).all()
+                if path is not None
+            }
 
         grouped: dict[UUID, list[DuplicateFileItem]] = {}
         by_group_by_instance: dict[UUID, dict[str, DuplicateFileItem]] = {}
         instance_ids_by_group: dict[UUID, list[UUID]] = {}
+        reclaim_bytes_by_group: dict[UUID, int] = {}
+        integrity_counts_by_group: dict[UUID, dict[str, int]] = {}
+        integrity_status_by_instance = {file_instance_id: status for file_instance_id, status in integrity_rows}
         for content_id, file_instance_id, absolute_path in instance_rows:
             instance_id_str = str(file_instance_id)
             media_type = infer_media_type_from_extension(Path(absolute_path)) or "OTHER"
@@ -662,6 +940,14 @@ class OperatorConsoleReadService:
             existing_group.append(file_item)
             by_group_by_instance.setdefault(content_id, {})[instance_id_str] = file_item
             instance_ids_by_group.setdefault(content_id, []).append(file_instance_id)
+            status = integrity_status_by_instance.get(file_instance_id)
+            if status in {"BROKEN", "SUSPECT"}:
+                counts = integrity_counts_by_group.setdefault(content_id, {"BROKEN": 0, "SUSPECT": 0})
+                counts[status] = counts.get(status, 0) + 1
+            if role == "DUPLICATE":
+                reclaim_bytes_by_group[content_id] = reclaim_bytes_by_group.get(content_id, 0) + int(
+                    instance_sizes.get(absolute_path, 0)
+                )
 
         output: list[DuplicateGroupItem] = []
         for content_id in sorted(grouped.keys(), key=str):
@@ -671,6 +957,7 @@ class OperatorConsoleReadService:
             if canonical_instance_id is not None:
                 canonical_file = by_group_by_instance.get(content_id, {}).get(str(canonical_instance_id))
             review_row = persisted_reviews.get(content_id)
+            reclaim_row = reclaim_records.get(content_id)
             current_signature = compute_duplicate_group_signature(
                 content_id=content_id,
                 canonical_instance_id=canonical_instance_id,
@@ -695,6 +982,12 @@ class OperatorConsoleReadService:
                         stale_reason = "canonical_changed"
                     else:
                         stale_reason = "group_membership_changed"
+            reclaim_status = reclaim_row.reclaim_status if reclaim_row is not None else None
+            retention_expires_at = (
+                reclaim_row.expires_at.isoformat() if reclaim_row is not None and reclaim_row.expires_at is not None else None
+            )
+            reclaimable_file_count = sum(1 for item in files if item.role == "DUPLICATE")
+            integrity_counts = integrity_counts_by_group.get(content_id, {})
             output.append(
                 DuplicateGroupItem(
                     group_id=str(content_id),
@@ -705,9 +998,363 @@ class OperatorConsoleReadService:
                     reviewed_canonical_instance_id=reviewed_canonical_instance_id,
                     is_stale=is_stale,
                     stale_reason=stale_reason,
+                    estimated_reclaim_bytes=reclaim_bytes_by_group.get(content_id, 0),
+                    reclaim_status=reclaim_status,
+                    reclaimable_file_count=reclaimable_file_count,
+                    retention_expires_at=retention_expires_at,
+                    integrity_issue_count=int(integrity_counts.get("BROKEN", 0) + integrity_counts.get("SUSPECT", 0)),
+                    integrity_broken_count=int(integrity_counts.get("BROKEN", 0)),
+                    integrity_suspect_count=int(integrity_counts.get("SUSPECT", 0)),
                 )
             )
         return output
+
+    def get_integrity_dashboard_summary(self) -> IntegrityDashboardSummary:
+        threshold = PolicySettingsService(self._session_factory).get_settings().integrity_issue_min_confidence
+        with self._session_factory() as session:
+            total_files_scanned = int(session.scalar(select(func.count()).select_from(IntegrityCheck)) or 0)
+            broken_count = int(
+                session.scalar(
+                    select(func.count()).select_from(IntegrityCheck).where(IntegrityCheck.status == "BROKEN")
+                )
+                or 0
+            )
+            suspect_count = int(
+                session.scalar(
+                    select(func.count()).select_from(IntegrityCheck).where(IntegrityCheck.status == "SUSPECT")
+                )
+                or 0
+            )
+            ignored_count = int(
+                session.scalar(
+                    select(func.count()).select_from(IntegrityReviewDecision).where(IntegrityReviewDecision.decision == "IGNORE")
+                )
+                or 0
+            )
+            marked_ok_count = int(
+                session.scalar(
+                    select(func.count()).select_from(IntegrityReviewDecision).where(IntegrityReviewDecision.decision == "MARK_OK")
+                )
+                or 0
+            )
+            high_confidence_unresolved_count = int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(IntegrityCheck)
+                    .outerjoin(IntegrityReviewDecision, IntegrityReviewDecision.check_id == IntegrityCheck.id)
+                    .where(
+                        IntegrityCheck.status.in_(("BROKEN", "SUSPECT")),
+                        IntegrityCheck.confidence >= float(threshold),
+                        IntegrityReviewDecision.check_id.is_(None),
+                    )
+                )
+                or 0
+            )
+            latest_run = session.scalar(
+                select(IntegrityCheckRun).order_by(IntegrityCheckRun.started_at.desc(), IntegrityCheckRun.id.desc()).limit(1)
+            )
+            quarantined_count = int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(IntegrityQuarantineRecord)
+                    .where(IntegrityQuarantineRecord.quarantine_status == "QUARANTINED")
+                )
+                or 0
+            )
+
+        return IntegrityDashboardSummary(
+            total_files_scanned=total_files_scanned,
+            playback_issues=broken_count + suspect_count,
+            quarantined=quarantined_count,
+            last_scan_at=latest_run.started_at.isoformat() if latest_run is not None else None,
+            broken_count=broken_count,
+            suspect_count=suspect_count,
+            ignored_count=ignored_count,
+            marked_ok_count=marked_ok_count,
+            high_confidence_unresolved_count=high_confidence_unresolved_count,
+        )
+
+    def get_integrity_issue_page(
+        self,
+        *,
+        status: str | None,
+        min_confidence: float | None,
+        page: int,
+        limit: int,
+    ) -> IntegrityIssuePage:
+        bounded_page = max(1, int(page))
+        bounded_limit = max(1, min(200, int(limit)))
+        with self._session_factory() as session:
+            stmt = (
+                select(IntegrityCheck, FileInstance, IntegrityReviewDecision)
+                .join(FileInstance, FileInstance.file_instance_id == IntegrityCheck.file_instance_id)
+                .outerjoin(IntegrityReviewDecision, IntegrityReviewDecision.check_id == IntegrityCheck.id)
+            )
+            if status:
+                stmt = stmt.where(IntegrityCheck.status == status.strip().upper())
+            if min_confidence is not None:
+                stmt = stmt.where(IntegrityCheck.confidence >= float(min_confidence))
+
+            rows = session.execute(
+                stmt.order_by(
+                    IntegrityCheck.confidence.desc(),
+                    IntegrityCheck.last_checked_at.desc(),
+                    IntegrityCheck.id.asc(),
+                )
+            ).all()
+            signal_rows = session.execute(
+                select(IntegritySignal.check_id, IntegritySignal.signal_type).where(
+                    IntegritySignal.check_id.in_([check.id for check, _, _ in rows])
+                )
+            ).all()
+
+        signal_types_by_check: dict[UUID, list[str]] = {}
+        for check_id, signal_type in signal_rows:
+            signal_types_by_check.setdefault(check_id, []).append(signal_type)
+
+        total_count = len(rows)
+        start = (bounded_page - 1) * bounded_limit
+        paged_rows = rows[start : start + bounded_limit]
+        items = tuple(
+            IntegrityIssueItem(
+                check_id=str(check.id),
+                file_instance_id=str(file_instance.file_instance_id),
+                absolute_path=file_instance.absolute_path,
+                status=check.status,
+                confidence=round(float(check.confidence), 3),
+                probe_status=check.probe_status,
+                decode_status=check.decode_status,
+                reviewed_decision=review.decision if review is not None else None,
+                reviewed_at=review.reviewed_at.isoformat() if review is not None else None,
+                signal_types=tuple(signal_types_by_check.get(check.id, [])),
+            )
+            for check, file_instance, review in paged_rows
+        )
+        return IntegrityIssuePage(
+            total_count=total_count,
+            page=bounded_page,
+            limit=bounded_limit,
+            total_pages=max(1, (total_count + bounded_limit - 1) // bounded_limit),
+            items=items,
+        )
+
+    def get_integrity_file_detail(self, check_id: UUID) -> IntegrityFileDetail | None:
+        with self._session_factory() as session:
+            row = session.execute(
+                select(IntegrityCheck, FileInstance, IntegrityReviewDecision)
+                .join(FileInstance, FileInstance.file_instance_id == IntegrityCheck.file_instance_id)
+                .outerjoin(IntegrityReviewDecision, IntegrityReviewDecision.check_id == IntegrityCheck.id)
+                .where(IntegrityCheck.id == check_id)
+            ).first()
+            if row is None:
+                return None
+            check, file_instance, review = row
+            signals = session.scalars(
+                select(IntegritySignal)
+                .where(IntegritySignal.check_id == check.id)
+                .order_by(IntegritySignal.created_at.asc(), IntegritySignal.id.asc())
+            ).all()
+
+        return IntegrityFileDetail(
+            check_id=str(check.id),
+            file_instance_id=str(file_instance.file_instance_id),
+            absolute_path=file_instance.absolute_path,
+            status=check.status,
+            confidence=round(float(check.confidence), 3),
+            probe_status=check.probe_status,
+            decode_status=check.decode_status,
+            reviewed_decision=review.decision if review is not None else None,
+            reviewed_at=review.reviewed_at.isoformat() if review is not None else None,
+            signals=tuple(
+                {
+                    "signal_type": signal.signal_type,
+                    "severity": signal.severity,
+                    "details": dict(signal.details or {}),
+                    "created_at": signal.created_at.isoformat(),
+                }
+                for signal in signals
+            ),
+        )
+
+    def get_duplicate_reclaim_archive_page(self, *, page: int, limit: int) -> DuplicateReclaimArchivePage:
+        bounded_page = max(1, int(page))
+        bounded_limit = max(1, min(200, int(limit)))
+        with self._session_factory() as session:
+            rows = session.scalars(
+                select(DuplicateReclaimItem)
+                .order_by(
+                    DuplicateReclaimItem.reclaimed_at.desc().nullslast(),
+                    DuplicateReclaimItem.created_at.desc(),
+                    DuplicateReclaimItem.file_instance_id.asc(),
+                )
+            ).all()
+
+        total_count = len(rows)
+        start = (bounded_page - 1) * bounded_limit
+        paged_rows = rows[start : start + bounded_limit]
+        items = tuple(
+            DuplicateReclaimArchiveItem(
+                file_instance_id=str(row.file_instance_id),
+                content_id=str(row.content_id),
+                original_path=row.original_path,
+                archive_path=row.archive_path,
+                item_status=row.item_status,
+                reclaimed_at=row.reclaimed_at.isoformat() if row.reclaimed_at is not None else None,
+                expires_at=row.expires_at.isoformat() if row.expires_at is not None else None,
+                restored_at=row.restored_at.isoformat() if row.restored_at is not None else None,
+            )
+            for row in paged_rows
+        )
+        return DuplicateReclaimArchivePage(
+            total_count=total_count,
+            page=bounded_page,
+            limit=bounded_limit,
+            total_pages=max(1, (total_count + bounded_limit - 1) // bounded_limit),
+            items=items,
+        )
+
+    def get_integrity_quarantine_page(self, *, page: int, limit: int) -> IntegrityQuarantinePage:
+        bounded_page = max(1, int(page))
+        bounded_limit = max(1, min(200, int(limit)))
+        with self._session_factory() as session:
+            rows = session.scalars(
+                select(IntegrityQuarantineRecord)
+                .order_by(
+                    IntegrityQuarantineRecord.quarantined_at.desc().nullslast(),
+                    IntegrityQuarantineRecord.created_at.desc(),
+                    IntegrityQuarantineRecord.file_instance_id.asc(),
+                )
+            ).all()
+
+        total_count = len(rows)
+        start = (bounded_page - 1) * bounded_limit
+        paged_rows = rows[start : start + bounded_limit]
+        items = tuple(
+            IntegrityQuarantineItem(
+                file_instance_id=str(row.file_instance_id),
+                check_id=str(row.check_id),
+                original_path=row.original_path,
+                quarantine_path=row.quarantine_path,
+                quarantine_status=row.quarantine_status,
+                quarantined_at=row.quarantined_at.isoformat() if row.quarantined_at is not None else None,
+                restored_at=row.restored_at.isoformat() if row.restored_at is not None else None,
+            )
+            for row in paged_rows
+        )
+        return IntegrityQuarantinePage(
+            total_count=total_count,
+            page=bounded_page,
+            limit=bounded_limit,
+            total_pages=max(1, (total_count + bounded_limit - 1) // bounded_limit),
+            items=items,
+        )
+
+    def get_retention_recycle_page(self, *, page: int, limit: int) -> RetentionRecyclePage:
+        bounded_page = max(1, int(page))
+        bounded_limit = max(1, min(200, int(limit)))
+        now = datetime.now(UTC)
+        rows: list[RetentionRecycleItem] = []
+        with self._session_factory() as session:
+            duplicate_items = session.scalars(
+                select(DuplicateReclaimItem).order_by(
+                    DuplicateReclaimItem.purge_after_at.desc().nullslast(),
+                    DuplicateReclaimItem.expires_at.desc().nullslast(),
+                    DuplicateReclaimItem.file_instance_id.asc(),
+                )
+            ).all()
+            integrity_items = session.scalars(
+                select(IntegrityQuarantineRecord).order_by(
+                    IntegrityQuarantineRecord.purge_after_at.desc().nullslast(),
+                    IntegrityQuarantineRecord.expires_at.desc().nullslast(),
+                    IntegrityQuarantineRecord.file_instance_id.asc(),
+                )
+            ).all()
+
+        for item in duplicate_items:
+            ready_for_recycle = (
+                item.purged_at is None
+                and item.item_status == "ARCHIVED"
+                and item.expires_at is not None
+                and item.expires_at <= now
+            )
+            ready_for_purge = (
+                item.purged_at is None
+                and item.item_status == "RECYCLED"
+                and item.purge_after_at is not None
+                and item.purge_after_at <= now
+            )
+            days_remaining = None
+            if item.purge_after_at is not None:
+                days_remaining = max(0, (item.purge_after_at.date() - now.date()).days)
+            rows.append(
+                RetentionRecycleItem(
+                    workflow="duplicate_reclaim",
+                    file_instance_id=str(item.file_instance_id),
+                    source_path=item.archive_path if item.item_status == "RECYCLED" else item.original_path,
+                    recycle_path=item.recycle_path,
+                    current_status=item.item_status,
+                    retention_expires_at=item.expires_at.isoformat() if item.expires_at is not None else None,
+                    recycled_at=item.recycled_at.isoformat() if item.recycled_at is not None else None,
+                    purge_after_at=item.purge_after_at.isoformat() if item.purge_after_at is not None else None,
+                    purged_at=item.purged_at.isoformat() if item.purged_at is not None else None,
+                    ready_for_recycle=ready_for_recycle,
+                    ready_for_purge=ready_for_purge,
+                    days_remaining=days_remaining,
+                )
+            )
+
+        for item in integrity_items:
+            ready_for_recycle = (
+                item.purged_at is None
+                and item.quarantine_status == "QUARANTINED"
+                and item.expires_at is not None
+                and item.expires_at <= now
+            )
+            ready_for_purge = (
+                item.purged_at is None
+                and item.quarantine_status == "RECYCLED"
+                and item.purge_after_at is not None
+                and item.purge_after_at <= now
+            )
+            days_remaining = None
+            if item.purge_after_at is not None:
+                days_remaining = max(0, (item.purge_after_at.date() - now.date()).days)
+            rows.append(
+                RetentionRecycleItem(
+                    workflow="integrity_quarantine",
+                    file_instance_id=str(item.file_instance_id),
+                    source_path=item.quarantine_path if item.quarantine_status == "RECYCLED" else item.original_path,
+                    recycle_path=item.recycle_path,
+                    current_status=item.quarantine_status,
+                    retention_expires_at=item.expires_at.isoformat() if item.expires_at is not None else None,
+                    recycled_at=item.recycled_at.isoformat() if item.recycled_at is not None else None,
+                    purge_after_at=item.purge_after_at.isoformat() if item.purge_after_at is not None else None,
+                    purged_at=item.purged_at.isoformat() if item.purged_at is not None else None,
+                    ready_for_recycle=ready_for_recycle,
+                    ready_for_purge=ready_for_purge,
+                    days_remaining=days_remaining,
+                )
+            )
+
+        rows.sort(
+            key=lambda item: (
+                0 if item.ready_for_recycle else 1,
+                0 if item.ready_for_purge else 1,
+                item.days_remaining if item.days_remaining is not None else 999999,
+                item.workflow,
+                item.file_instance_id,
+            )
+        )
+        total_count = len(rows)
+        start = (bounded_page - 1) * bounded_limit
+        paged_rows = tuple(rows[start : start + bounded_limit])
+        return RetentionRecyclePage(
+            total_count=total_count,
+            page=bounded_page,
+            limit=bounded_limit,
+            total_pages=max(1, (total_count + bounded_limit - 1) // bounded_limit),
+            items=paged_rows,
+        )
 
     def get_canonical_gallery(
         self,

@@ -123,6 +123,14 @@ class OperationRunType(StrEnum):
     DB_RESET = "DB_RESET"
     BENCHMARK_METADATA = "BENCHMARK_METADATA"
     BENCHMARK_DISCOVERY = "BENCHMARK_DISCOVERY"
+    INTEGRITY_SCAN = "INTEGRITY_SCAN"
+    INTEGRITY_QUARANTINE = "INTEGRITY_QUARANTINE"
+    INTEGRITY_RESTORE = "INTEGRITY_RESTORE"
+    DUPLICATE_RECLAIM_REVIEW = "DUPLICATE_RECLAIM_REVIEW"
+    DUPLICATE_RECLAIM_EXECUTE = "DUPLICATE_RECLAIM_EXECUTE"
+    DUPLICATE_RECLAIM_RESTORE = "DUPLICATE_RECLAIM_RESTORE"
+    RETENTION_RECYCLE = "RETENTION_RECYCLE"
+    RETENTION_PURGE = "RETENTION_PURGE"
 
 
 class OperationRunStatus(StrEnum):
@@ -149,6 +157,50 @@ class NamingStrategyDB(StrEnum):
     SHARED_CANONICAL_NAME = "SHARED_CANONICAL_NAME"
     DUPLICATE_OWNS_DATE_STANDARDIZED = "DUPLICATE_OWNS_DATE_STANDARDIZED"
     PRESERVE_DUPLICATE_ORIGINAL_NAME = "PRESERVE_DUPLICATE_ORIGINAL_NAME"
+
+
+class IntegrityScanMode(StrEnum):
+    FAST = "FAST"
+    DEEP = "DEEP"
+
+
+class IntegrityCheckStatus(StrEnum):
+    OK = "OK"
+    SUSPECT = "SUSPECT"
+    BROKEN = "BROKEN"
+
+
+class IntegrityRunStatus(StrEnum):
+    STARTED = "STARTED"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class IntegrityReviewStatus(StrEnum):
+    MARK_OK = "MARK_OK"
+    IGNORE = "IGNORE"
+
+
+class DuplicateReclaimStatus(StrEnum):
+    UNREVIEWED = "UNREVIEWED"
+    REVIEWED_SAFE_TO_RECLAIM = "REVIEWED_SAFE_TO_RECLAIM"
+    ARCHIVED = "ARCHIVED"
+    SCHEDULED_FOR_DELETE = "SCHEDULED_FOR_DELETE"
+    RESTORED = "RESTORED"
+
+
+class DuplicateReclaimItemStatus(StrEnum):
+    PENDING = "PENDING"
+    ARCHIVED = "ARCHIVED"
+    RESTORED = "RESTORED"
+    RECYCLED = "RECYCLED"
+
+
+class IntegrityQuarantineStatus(StrEnum):
+    PENDING = "PENDING"
+    QUARANTINED = "QUARANTINED"
+    RESTORED = "RESTORED"
+    RECYCLED = "RECYCLED"
 
 
 class Run(Base):
@@ -557,6 +609,119 @@ class DuplicateGroupReview(Base):
 Index("idx_duplicate_group_reviews_reviewed_at", DuplicateGroupReview.reviewed_at.desc())
 
 
+class DuplicateReclaimRecord(Base):
+    __tablename__ = "duplicate_reclaim_records"
+
+    content_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("file_contents.content_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    reclaim_status: Mapped[str] = mapped_column(Text, nullable=False)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    archive_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reclaimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    restored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    content: Mapped[FileContent] = relationship(foreign_keys=[content_id])
+
+    __table_args__ = (
+        CheckConstraint(
+            "reclaim_status IN ('UNREVIEWED', 'REVIEWED_SAFE_TO_RECLAIM', 'ARCHIVED', 'SCHEDULED_FOR_DELETE', 'RESTORED')",
+            name="ck_duplicate_reclaim_records_status",
+        ),
+    )
+
+
+Index("idx_duplicate_reclaim_records_reviewed_at", DuplicateReclaimRecord.reviewed_at.desc())
+
+
+class DuplicateReclaimItem(Base):
+    __tablename__ = "duplicate_reclaim_items"
+
+    file_instance_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("file_instances.file_instance_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    content_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("file_contents.content_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    original_path: Mapped[str] = mapped_column(Text, nullable=False)
+    archive_path: Mapped[str] = mapped_column(Text, nullable=False)
+    item_status: Mapped[str] = mapped_column(Text, nullable=False)
+    reclaimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    recycle_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recycled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    purge_after_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    restored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    file_instance: Mapped[FileInstance] = relationship(foreign_keys=[file_instance_id])
+    content: Mapped[FileContent] = relationship(foreign_keys=[content_id])
+
+    __table_args__ = (
+        CheckConstraint(
+            "item_status IN ('PENDING', 'ARCHIVED', 'RESTORED', 'RECYCLED')",
+            name="ck_duplicate_reclaim_items_status",
+        ),
+    )
+
+
+Index("idx_duplicate_reclaim_items_content_id", DuplicateReclaimItem.content_id)
+Index("idx_duplicate_reclaim_items_status", DuplicateReclaimItem.item_status)
+
+
+class IntegrityQuarantineRecord(Base):
+    __tablename__ = "integrity_quarantine_records"
+
+    file_instance_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("file_instances.file_instance_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    check_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("integrity_checks.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    original_path: Mapped[str] = mapped_column(Text, nullable=False)
+    quarantine_path: Mapped[str] = mapped_column(Text, nullable=False)
+    quarantine_status: Mapped[str] = mapped_column(Text, nullable=False)
+    quarantined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    recycle_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recycled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    purge_after_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    restored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    file_instance: Mapped[FileInstance] = relationship(foreign_keys=[file_instance_id])
+    check: Mapped[IntegrityCheck] = relationship(foreign_keys=[check_id])
+
+    __table_args__ = (
+        CheckConstraint(
+            "quarantine_status IN ('PENDING', 'QUARANTINED', 'RESTORED', 'RECYCLED')",
+            name="ck_integrity_quarantine_records_status",
+        ),
+    )
+
+
+Index("idx_integrity_quarantine_records_status", IntegrityQuarantineRecord.quarantine_status)
+
+
 class CanonicalRecomputeRun(Base):
     __tablename__ = "canonical_recompute_runs"
 
@@ -705,6 +870,145 @@ class ApplyAuditItem(Base):
 
 Index("idx_apply_audit_items_run_id", ApplyAuditItem.run_id)
 Index("idx_apply_audit_items_planned_action_id", ApplyAuditItem.planned_action_id)
+
+
+class IntegrityCheckRun(Base):
+    __tablename__ = "integrity_check_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    operation_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("operation_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+    )
+    scan_mode: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    paths: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
+    scanned_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    issues_found: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    checks: Mapped[list[IntegrityCheck]] = relationship(
+        back_populates="run",
+        cascade="save-update, merge",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        CheckConstraint("scan_mode IN ('FAST', 'DEEP')", name="ck_integrity_check_runs_mode"),
+        CheckConstraint("status IN ('STARTED', 'COMPLETED', 'FAILED')", name="ck_integrity_check_runs_status"),
+    )
+
+
+Index("idx_integrity_check_runs_started_at", IntegrityCheckRun.started_at.desc())
+
+
+class IntegrityCheck(Base):
+    __tablename__ = "integrity_checks"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    file_instance_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("file_instances.file_instance_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    latest_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("integrity_check_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default=text("0"))
+    readability_ok: Mapped[bool] = mapped_column(nullable=False, default=False, server_default=text("false"))
+    probe_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decode_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    run: Mapped[IntegrityCheckRun] = relationship(back_populates="checks")
+    file_instance: Mapped[FileInstance] = relationship(foreign_keys=[file_instance_id])
+    signals: Mapped[list[IntegritySignal]] = relationship(
+        back_populates="check",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    review_decision: Mapped[IntegrityReviewDecision | None] = relationship(
+        back_populates="check",
+        cascade="save-update, merge",
+        passive_deletes=True,
+        uselist=False,
+    )
+
+    __table_args__ = (
+        CheckConstraint("status IN ('OK', 'SUSPECT', 'BROKEN')", name="ck_integrity_checks_status"),
+        CheckConstraint("confidence >= 0 AND confidence <= 1", name="ck_integrity_checks_confidence"),
+    )
+
+
+Index("idx_integrity_checks_status", IntegrityCheck.status)
+Index("idx_integrity_checks_last_checked_at", IntegrityCheck.last_checked_at.desc())
+
+
+class IntegritySignal(Base):
+    __tablename__ = "integrity_signals"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    check_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("integrity_checks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    signal_type: Mapped[str] = mapped_column(Text, nullable=False)
+    severity: Mapped[str] = mapped_column(Text, nullable=False)
+    details: Mapped[dict[str, object]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    check: Mapped[IntegrityCheck] = relationship(back_populates="signals")
+
+
+Index("idx_integrity_signals_check_id", IntegritySignal.check_id)
+Index("idx_integrity_signals_signal_type", IntegritySignal.signal_type)
+
+
+class IntegrityReviewDecision(Base):
+    __tablename__ = "integrity_review_decisions"
+
+    check_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("integrity_checks.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    decision: Mapped[str] = mapped_column(Text, nullable=False)
+    reviewed_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    check: Mapped[IntegrityCheck] = relationship(back_populates="review_decision")
+
+    __table_args__ = (
+        CheckConstraint("decision IN ('MARK_OK', 'IGNORE')", name="ck_integrity_review_decisions_decision"),
+    )
+
+
+Index("idx_integrity_review_decisions_reviewed_at", IntegrityReviewDecision.reviewed_at.desc())
 
 
 class MetadataCode(Base):
@@ -960,6 +1264,70 @@ class OperatorPolicySetting(Base):
         server_default=text("'SHARED_CANONICAL_NAME'"),
     )
     preferred_roots_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default=text("'[]'"))
+    integrity_scan_default_mode: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="FAST",
+        server_default=text("'FAST'"),
+    )
+    integrity_issue_min_confidence: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=0.9,
+        server_default=text("0.9"),
+    )
+    duplicate_reclaim_default_retention_days: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=14,
+        server_default=text("14"),
+    )
+    integrity_quarantine_retention_days: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=14,
+        server_default=text("14"),
+    )
+    recycle_purge_days: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=30,
+        server_default=text("30"),
+    )
+    recycle_bin_root: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="/tmp/media-manager/recycle-bin",
+        server_default=text("'/tmp/media-manager/recycle-bin'"),
+    )
+    duplicate_reclaim_archive_root: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="/tmp/media-manager/reclaim",
+        server_default=text("'/tmp/media-manager/reclaim'"),
+    )
+    integrity_quarantine_root: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="/tmp/media-manager/quarantine",
+        server_default=text("'/tmp/media-manager/quarantine'"),
+    )
+    integrity_notify_on_high_confidence: Mapped[bool] = mapped_column(
+        nullable=False,
+        default=True,
+        server_default=text("true"),
+    )
+    duplicate_reclaim_notify_on_reviewed_safe: Mapped[bool] = mapped_column(
+        nullable=False,
+        default=True,
+        server_default=text("true"),
+    )
+    automation_mode: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="NOTIFY_ONLY",
+        server_default=text("'NOTIFY_ONLY'"),
+    )
     recanonicalization_enabled: Mapped[bool] = mapped_column(
         nullable=False,
         default=False,

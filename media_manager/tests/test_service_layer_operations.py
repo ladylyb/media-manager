@@ -52,6 +52,25 @@ def _install_fake_operation_run_service(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(operations_module, "OperationRunService", _FakeOperationRunService)
 
 
+def _install_fake_policy_settings_service(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    integrity_scan_default_mode: str = "",
+    duplicate_reclaim_default_retention_days: int = 14,
+) -> None:
+    class _FakePolicySettingsService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def get_settings(self):  # type: ignore[no-untyped-def]
+            return SimpleNamespace(
+                integrity_scan_default_mode=integrity_scan_default_mode,
+                duplicate_reclaim_default_retention_days=duplicate_reclaim_default_retention_days,
+            )
+
+    monkeypatch.setattr(operations_module, "PolicySettingsService", _FakePolicySettingsService)
+
+
 def test_ingest_dry_run_is_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     dataset = tmp_path / "dataset"
     dataset.mkdir()
@@ -65,6 +84,7 @@ def test_ingest_dry_run_is_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(operations_module, "IngestService", _FakeIngestService)
     _install_fake_operation_run_service(monkeypatch)
+    _install_fake_policy_settings_service(monkeypatch)
     cache = _FakeCache(invalidations=[])
     services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
 
@@ -95,6 +115,7 @@ def test_ingest_execute_invalidates_caches(tmp_path: Path, monkeypatch: pytest.M
 
     monkeypatch.setattr(operations_module, "IngestService", _FakeIngestService)
     _install_fake_operation_run_service(monkeypatch)
+    _install_fake_policy_settings_service(monkeypatch)
     cache = _FakeCache(invalidations=[])
     services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
 
@@ -111,6 +132,242 @@ def test_ingest_execute_invalidates_caches(tmp_path: Path, monkeypatch: pytest.M
         {"dashboard_summary", "latest_metrics", "status"}.issubset(set(invalidated))
         for invalidated in cache.invalidations
     )
+
+
+def test_ingest_execute_runs_post_ingest_integrity_scan_when_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+    first = dataset / "a.jpg"
+    second = dataset / "b.jpg"
+    first.write_bytes(b"a")
+    second.write_bytes(b"b")
+    recorded: dict[str, object] = {}
+
+    class _FakeIngestService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def ingest_path(self, _root: Path) -> IngestSummary:
+            return IngestSummary(
+                files_scanned=2,
+                new_contents=2,
+                new_instances=2,
+                duplicates_detected=0,
+                metadata_extracted=2,
+                duration_s=0.1,
+            )
+
+        def collect_files(self, _root: Path) -> list[Path]:
+            return [first, second]
+
+    class _FakeIntegritySummary:
+        def to_dict(self) -> dict[str, object]:
+            return {"scan_mode": "FAST", "scanned_count": 2, "issues_found": 1}
+
+    class _FakeIntegrityService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def scan_paths(self, *, scan_mode, absolute_paths, operation_run_id):  # type: ignore[no-untyped-def]
+            recorded["scan_mode"] = scan_mode
+            recorded["absolute_paths"] = list(absolute_paths)
+            recorded["operation_run_id"] = str(operation_run_id)
+            return _FakeIntegritySummary()
+
+    monkeypatch.setattr(operations_module, "IngestService", _FakeIngestService)
+    monkeypatch.setattr(operations_module, "IntegrityService", _FakeIntegrityService)
+    _install_fake_operation_run_service(monkeypatch)
+    _install_fake_policy_settings_service(monkeypatch, integrity_scan_default_mode="FAST")
+
+    cache = _FakeCache(invalidations=[])
+    services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
+
+    payload = services.ingest(folder_path=str(dataset), dry_run=False)
+
+    assert payload["post_ingest_integrity_scan"]["trigger"] == "import_pipeline"
+    assert recorded["scan_mode"] == "FAST"
+    assert recorded["absolute_paths"] == [str(first.resolve()), str(second.resolve())]
+    assert any({"integrity_dashboard", "integrity_issues"}.issubset(set(invalidated)) for invalidated in cache.invalidations)
+
+
+def test_integrity_playback_failure_uses_fast_scan_trigger(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: dict[str, object] = {}
+
+    class _FakeIntegritySummary:
+        def to_dict(self) -> dict[str, object]:
+            return {"scan_mode": "FAST", "scanned_count": 1, "issues_found": 1}
+
+    class _FakeIntegrityService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def scan(self, *, scan_mode, file_instance_ids, operation_run_id, on_progress=None):  # type: ignore[no-untyped-def]
+            _ = on_progress
+            observed["scan_mode"] = scan_mode
+            observed["file_instance_ids"] = [str(item) for item in file_instance_ids]
+            observed["operation_run_id"] = str(operation_run_id)
+            return _FakeIntegritySummary()
+
+    monkeypatch.setattr(operations_module, "IntegrityService", _FakeIntegrityService)
+    _install_fake_operation_run_service(monkeypatch)
+    _install_fake_policy_settings_service(monkeypatch, integrity_scan_default_mode="FAST")
+
+    cache = _FakeCache(invalidations=[])
+    services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
+    file_instance_id = str(uuid4())
+
+    payload = services.integrity_playback_failure(file_instance_id=file_instance_id)
+
+    assert payload["trigger"] == "playback_failure"
+    assert observed["scan_mode"] == "FAST"
+    assert observed["file_instance_ids"] == [file_instance_id]
+
+
+def test_integrity_scan_logs_manual_request_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeIntegritySummary:
+        scan_mode = "DEEP"
+        eligible_file_count = 5
+        scanned_count = 5
+        issues_found = 2
+
+        def to_dict(self) -> dict[str, object]:
+            return {
+                "scan_mode": self.scan_mode,
+                "eligible_file_count": self.eligible_file_count,
+                "scanned_count": self.scanned_count,
+                "issues_found": self.issues_found,
+            }
+
+    class _FakeIntegrityService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def scan(self, *, scan_mode, file_instance_ids, operation_run_id, on_progress=None):  # type: ignore[no-untyped-def]
+            _ = file_instance_ids, operation_run_id, on_progress
+            assert scan_mode == "DEEP"
+            return _FakeIntegritySummary()
+
+    monkeypatch.setattr(operations_module, "IntegrityService", _FakeIntegrityService)
+    _install_fake_operation_run_service(monkeypatch)
+    _install_fake_policy_settings_service(monkeypatch, integrity_scan_default_mode="FAST")
+    info_calls: list[str] = []
+
+    def _record_info(message, *args, **kwargs):  # type: ignore[no-untyped-def]
+        _ = args, kwargs
+        info_calls.append(str(message))
+
+    monkeypatch.setattr(operations_module.LOGGER, "info", _record_info)
+
+    cache = _FakeCache(invalidations=[])
+    services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
+
+    payload = services.integrity_scan(mode="DEEP", file_instance_ids=None, trigger="manual")
+
+    assert payload["scan_mode"] == "DEEP"
+    assert (
+        "Manual integrity scan started: mode=DEEP requested_file_count=0 "
+        "scan_scope=DEFAULT_ACTIVE_LIBRARY" in info_calls
+    )
+    assert any(
+        "Manual integrity scan completed: mode=DEEP requested_file_count=0 scan_scope=DEFAULT_ACTIVE_LIBRARY eligible_file_count=5 "
+        "scanned_count=5 issues_found=2" in call
+        for call in info_calls
+    )
+
+
+def test_integrity_scan_logs_progress_for_large_manual_scans(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeIntegritySummary:
+        scan_mode = "FAST"
+        eligible_file_count = 250
+        scanned_count = 250
+        issues_found = 9
+
+        def to_dict(self) -> dict[str, object]:
+            return {
+                "scan_mode": self.scan_mode,
+                "eligible_file_count": self.eligible_file_count,
+                "scanned_count": self.scanned_count,
+                "issues_found": self.issues_found,
+            }
+
+    class _FakeIntegrityService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def scan(self, *, scan_mode, file_instance_ids, operation_run_id, on_progress=None):  # type: ignore[no-untyped-def]
+            _ = scan_mode, file_instance_ids, operation_run_id
+            assert on_progress is not None
+            on_progress(100, 250, 3)
+            on_progress(200, 250, 7)
+            return _FakeIntegritySummary()
+
+    monkeypatch.setattr(operations_module, "IntegrityService", _FakeIntegrityService)
+    _install_fake_operation_run_service(monkeypatch)
+    _install_fake_policy_settings_service(monkeypatch, integrity_scan_default_mode="FAST")
+    info_calls: list[str] = []
+
+    def _record_info(message, *args, **kwargs):  # type: ignore[no-untyped-def]
+        _ = args, kwargs
+        info_calls.append(str(message))
+
+    monkeypatch.setattr(operations_module.LOGGER, "info", _record_info)
+
+    cache = _FakeCache(invalidations=[])
+    services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
+
+    payload = services.integrity_scan(mode="FAST", file_instance_ids=None, trigger="manual")
+
+    assert payload["scanned_count"] == 250
+    progress_calls = [call for call in info_calls if "Manual integrity scan progress:" in call]
+    assert len(progress_calls) == 2
+    assert any("processed_count=100/250 issues_found_so_far=3" in call for call in progress_calls)
+    assert any("processed_count=200/250 issues_found_so_far=7" in call for call in progress_calls)
+
+
+def test_integrity_scan_does_not_log_progress_for_small_manual_scans(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeIntegritySummary:
+        scan_mode = "FAST"
+        eligible_file_count = 12
+        scanned_count = 12
+        issues_found = 1
+
+        def to_dict(self) -> dict[str, object]:
+            return {
+                "scan_mode": self.scan_mode,
+                "eligible_file_count": self.eligible_file_count,
+                "scanned_count": self.scanned_count,
+                "issues_found": self.issues_found,
+            }
+
+    class _FakeIntegrityService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def scan(self, *, scan_mode, file_instance_ids, operation_run_id, on_progress=None):  # type: ignore[no-untyped-def]
+            _ = scan_mode, file_instance_ids, operation_run_id, on_progress
+            return _FakeIntegritySummary()
+
+    monkeypatch.setattr(operations_module, "IntegrityService", _FakeIntegrityService)
+    _install_fake_operation_run_service(monkeypatch)
+    _install_fake_policy_settings_service(monkeypatch, integrity_scan_default_mode="FAST")
+    info_calls: list[str] = []
+
+    def _record_info(message, *args, **kwargs):  # type: ignore[no-untyped-def]
+        _ = args, kwargs
+        info_calls.append(str(message))
+
+    monkeypatch.setattr(operations_module.LOGGER, "info", _record_info)
+
+    cache = _FakeCache(invalidations=[])
+    services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
+
+    payload = services.integrity_scan(mode="FAST", file_instance_ids=None, trigger="manual")
+
+    assert payload["scanned_count"] == 12
+    assert not any("Manual integrity scan progress:" in call for call in info_calls)
 
 
 def test_plan_returns_run_and_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -154,6 +411,7 @@ def test_plan_returns_run_and_summary(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setattr(operations_module, "RunService", _FakeRunService)
     monkeypatch.setattr(operations_module, "PlanningService", _FakePlanner)
     _install_fake_operation_run_service(monkeypatch)
+    _install_fake_policy_settings_service(monkeypatch)
 
     cache = _FakeCache(invalidations=[])
     services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
@@ -197,6 +455,7 @@ def test_canonical_recompute_apply_invalidates_cache(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(operations_module, "build_canonical_policy", _fake_build_policy)
     monkeypatch.setattr(operations_module, "recompute_canonical_assignments", _fake_recompute)
     _install_fake_operation_run_service(monkeypatch)
+    _install_fake_policy_settings_service(monkeypatch)
 
     cache = _FakeCache(invalidations=[])
     services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
@@ -216,7 +475,21 @@ def test_operations_catalog_contains_expected_items() -> None:
 
     assert "items" in catalog
     ids = [item["operation_id"] for item in catalog["items"]]
-    assert ids == ["ingest", "plan", "apply", "canonical_recompute", "tag_enrichment", "operator_run"]
+    assert ids == [
+        "ingest",
+        "plan",
+        "apply",
+        "canonical_recompute",
+        "integrity_scan",
+        "integrity_quarantine",
+        "integrity_restore",
+        "duplicate_reclaim_execute",
+        "duplicate_reclaim_restore",
+        "retention_recycle",
+        "retention_purge",
+        "tag_enrichment",
+        "operator_run",
+    ]
     assert catalog["items"][-1]["label"] == "Composite Run (Compatibility)"
 
 
@@ -354,6 +627,7 @@ def test_run_execution_flows_through_service_layer_and_links_run(tmp_path: Path,
     monkeypatch.setattr(operations_module, "ApplyService", _FakeApplyService)
     monkeypatch.setattr(operations_module, "build_canonical_policy", _fake_build_policy)
     monkeypatch.setattr(operations_module, "recompute_canonical_assignments", _fake_recompute)
+    _install_fake_policy_settings_service(monkeypatch)
 
     cache = _FakeCache(invalidations=[])
     services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]

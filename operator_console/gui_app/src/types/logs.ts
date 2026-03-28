@@ -1,8 +1,8 @@
-export type LogPhase = "ingest" | "plan" | "apply" | "canonical" | "tag" | null;
+export type LogPhase = "ingest" | "plan" | "apply" | "canonical" | "integrity" | "tag" | null;
 
 export type LogStatus = "idle" | "running" | "error";
 
-export type ProgressOperationKind = "ingest" | "plan" | "apply" | "canonical" | "tag" | null;
+export type ProgressOperationKind = "ingest" | "plan" | "apply" | "canonical" | "integrity" | "tag" | null;
 
 export type ProgressOperationStatus = "idle" | "running" | "finalizing" | "completed" | "error";
 

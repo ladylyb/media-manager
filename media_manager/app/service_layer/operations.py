@@ -5,16 +5,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
+import time
 from uuid import UUID
 
 from media_manager.app.canonical.context import CanonicalContext
 from media_manager.app.canonical.factory import build_canonical_policy
+from media_manager.app.core.logging_config import get_logger
 from media_manager.app.core.naming import DEFAULT_CONTEXT, DEFAULT_OWNER, normalize_naming_strategy
 from media_manager.app.persistence.apply import ApplyService
+from media_manager.app.persistence.duplicate_reclaim import DuplicateReclaimService
 from media_manager.app.persistence.canonicalization import RecomputeMode, recompute_canonical_assignments
 from media_manager.app.persistence.duplicate_reviews import DuplicateReviewService
 from media_manager.app.persistence.ingest import IngestService
+from media_manager.app.persistence.integrity import IntegrityService
 from media_manager.app.persistence.operation_runs import OperationRunService
+from media_manager.app.persistence.phase3_actions import Phase3ActionService
 from media_manager.app.persistence.planner import PlanningService
 from media_manager.app.persistence.policy_settings import PolicySettingsService, UpdatePolicySettingsCommand
 from media_manager.app.persistence.models import OperationRunStatus, OperationRunType, TagSource
@@ -24,6 +29,8 @@ from media_manager.app.service_layer.cache import ServiceCache
 
 _WINDOWS_DRIVE_PATH_RE = re.compile(r"^([A-Za-z]):[\\/](.*)$")
 _MNT_DRIVE_PATH_RE = re.compile(r"^/mnt/([A-Z])(?:/(.*))?$")
+LOGGER = get_logger(__name__)
+_DEFAULT_ACTIVE_LIBRARY_SCOPE = "DEFAULT_ACTIVE_LIBRARY"
 
 
 def _strip_wrapping_quotes(value: str) -> str:
@@ -95,6 +102,33 @@ class OperationServices:
     def _op_runs(self) -> OperationRunService:
         return OperationRunService(self.session_factory)
 
+    def _policy(self):
+        return PolicySettingsService(self.session_factory).get_settings()
+
+    def _run_integrity_scan_for_paths(
+        self,
+        *,
+        mode: str,
+        absolute_paths: list[str],
+        trigger: str,
+    ) -> dict[str, object]:
+        run_log = self._op_runs().start(
+            operation_type=OperationRunType.INTEGRITY_SCAN,
+            context={"mode": mode, "absolute_paths": absolute_paths, "trigger": trigger},
+        )
+        try:
+            summary = IntegrityService(self.session_factory).scan_paths(
+                scan_mode=mode,
+                absolute_paths=absolute_paths,
+                operation_run_id=UUID(run_log.operation_run_id),
+            )
+            self._op_runs().complete(UUID(run_log.operation_run_id))
+            self.cache.invalidate("integrity_dashboard", "integrity_issues")
+            return {**summary.to_dict(), "operation_run_id": run_log.operation_run_id, "trigger": trigger}
+        except Exception as exc:
+            self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))
+            raise
+
     def ingest(self, *, folder_path: str, dry_run: bool) -> dict[str, object]:
         folder = normalize_and_resolve_directory(folder_path)
         run_log = self._op_runs().start(
@@ -118,6 +152,15 @@ class OperationServices:
                 "operation_run_id": run_log.operation_run_id,
                 "summary": service.ingest_path(folder).to_dict(),
             }
+            import_integrity_mode = self._policy().integrity_scan_default_mode
+            if import_integrity_mode in {"FAST", "DEEP"}:
+                imported_paths = [str(path.resolve(strict=False)) for path in service.collect_files(folder)]
+                if imported_paths:
+                    result["post_ingest_integrity_scan"] = self._run_integrity_scan_for_paths(
+                        mode=import_integrity_mode,
+                        absolute_paths=imported_paths,
+                        trigger="import_pipeline",
+                    )
             self._op_runs().complete(UUID(run_log.operation_run_id))
             self.cache.invalidate("dashboard_summary", "latest_metrics", "status", "runs", "home")
             return result
@@ -353,6 +396,14 @@ class OperationServices:
         )
         plan_summary = PlanningService(self.session_factory).plan_run(run.id, files, ingest_if_needed=False)
         apply_summary = ApplyService(self.session_factory).apply_run(run.id)
+        import_integrity_scan: dict[str, object] | None = None
+        import_integrity_mode = self._policy().integrity_scan_default_mode
+        if import_integrity_mode in {"FAST", "DEEP"}:
+            import_integrity_scan = self._run_integrity_scan_for_paths(
+                mode=import_integrity_mode,
+                absolute_paths=[str(path.resolve(strict=False)) for path in files],
+                trigger="import_pipeline",
+            )
 
         return {
             "mode": "EXECUTION",
@@ -388,6 +439,7 @@ class OperationServices:
             },
             "duplicates_found": plan_summary.duplicate_actions,
             "canonical_changes": recompute_summary.changed_count,
+            "post_ingest_integrity_scan": import_integrity_scan,
         }
 
     def operations_catalog(self) -> dict[str, object]:
@@ -427,6 +479,58 @@ class OperationServices:
                     "required_fields": ["policy_name"],
                 },
                 {
+                    "operation_id": "integrity_scan",
+                    "label": "Integrity Scan",
+                    "mutates_state": True,
+                    "supports_dry_run": False,
+                    "defaults": {"mode": "FAST", "file_instance_ids": []},
+                    "required_fields": [],
+                },
+                {
+                    "operation_id": "integrity_quarantine",
+                    "label": "Integrity Quarantine",
+                    "mutates_state": True,
+                    "supports_dry_run": False,
+                    "required_fields": ["check_id"],
+                },
+                {
+                    "operation_id": "integrity_restore",
+                    "label": "Integrity Restore",
+                    "mutates_state": True,
+                    "supports_dry_run": False,
+                    "required_fields": ["file_instance_id"],
+                },
+                {
+                    "operation_id": "duplicate_reclaim_execute",
+                    "label": "Duplicate Reclaim Execute",
+                    "mutates_state": True,
+                    "supports_dry_run": False,
+                    "defaults": {"content_ids": [], "retention_days": 14},
+                    "required_fields": [],
+                },
+                {
+                    "operation_id": "duplicate_reclaim_restore",
+                    "label": "Duplicate Reclaim Restore",
+                    "mutates_state": True,
+                    "supports_dry_run": False,
+                    "defaults": {"file_instance_ids": []},
+                    "required_fields": [],
+                },
+                {
+                    "operation_id": "retention_recycle",
+                    "label": "Retention Recycle",
+                    "mutates_state": True,
+                    "supports_dry_run": False,
+                    "required_fields": [],
+                },
+                {
+                    "operation_id": "retention_purge",
+                    "label": "Retention Purge",
+                    "mutates_state": True,
+                    "supports_dry_run": False,
+                    "required_fields": [],
+                },
+                {
                     "operation_id": "tag_enrichment",
                     "label": "Tag Enrichment",
                     "mutates_state": True,
@@ -459,6 +563,17 @@ class OperationServices:
         selected_policy: str,
         naming_strategy: str,
         preferred_roots: tuple[str, ...],
+        integrity_scan_default_mode: str,
+        integrity_issue_min_confidence: float,
+        integrity_notify_on_high_confidence: bool,
+        duplicate_reclaim_archive_root: str,
+        duplicate_reclaim_default_retention_days: int,
+        duplicate_reclaim_notify_on_reviewed_safe: bool,
+        integrity_quarantine_root: str,
+        integrity_quarantine_retention_days: int,
+        recycle_bin_root: str,
+        recycle_purge_days: int,
+        automation_mode: str,
         recanonicalization_enabled: bool,
         version: int,
     ) -> dict[str, object]:
@@ -467,6 +582,17 @@ class OperationServices:
                 selected_policy=selected_policy,
                 naming_strategy=naming_strategy,
                 preferred_roots=preferred_roots,
+                integrity_scan_default_mode=integrity_scan_default_mode,
+                integrity_issue_min_confidence=integrity_issue_min_confidence,
+                integrity_notify_on_high_confidence=integrity_notify_on_high_confidence,
+                duplicate_reclaim_archive_root=duplicate_reclaim_archive_root,
+                duplicate_reclaim_default_retention_days=duplicate_reclaim_default_retention_days,
+                duplicate_reclaim_notify_on_reviewed_safe=duplicate_reclaim_notify_on_reviewed_safe,
+                integrity_quarantine_root=integrity_quarantine_root,
+                integrity_quarantine_retention_days=integrity_quarantine_retention_days,
+                recycle_bin_root=recycle_bin_root,
+                recycle_purge_days=recycle_purge_days,
+                automation_mode=automation_mode,
                 recanonicalization_enabled=recanonicalization_enabled,
                 version=version,
             )
@@ -502,6 +628,383 @@ class OperationServices:
         )
         self.cache.invalidate("duplicates")
         return result
+
+    def duplicate_reclaim_set(
+        self,
+        *,
+        content_id: str,
+        reclaim_status: str,
+        reviewed_by: str | None = None,
+    ) -> dict[str, object]:
+        try:
+            parsed_content_id = UUID(content_id)
+        except ValueError as exc:
+            raise ValueError(f"content_id must be a valid UUID: {content_id}") from exc
+
+        run_log = self._op_runs().start(
+            operation_type=OperationRunType.DUPLICATE_RECLAIM_REVIEW,
+            context={
+                "content_id": str(parsed_content_id),
+                "reclaim_status": reclaim_status,
+                "reviewed_by": reviewed_by,
+            },
+        )
+        try:
+            result = DuplicateReclaimService(self.session_factory).set_reclaim_status(
+                content_id=parsed_content_id,
+                reclaim_status=reclaim_status,
+                reviewed_by=reviewed_by,
+            )
+            self._op_runs().complete(UUID(run_log.operation_run_id))
+            self.cache.invalidate("duplicates")
+            return result
+        except Exception as exc:
+            self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))
+            raise
+
+    def integrity_scan(
+        self,
+        *,
+        mode: str,
+        file_instance_ids: list[str] | None = None,
+        trigger: str = "manual",
+    ) -> dict[str, object]:
+        parsed_file_ids: list[UUID] | None = None
+        if file_instance_ids:
+            parsed_file_ids = []
+            for file_id in file_instance_ids:
+                try:
+                    parsed_file_ids.append(UUID(file_id))
+                except ValueError as exc:
+                    raise ValueError(f"file_instance_id must be a valid UUID: {file_id}") from exc
+
+        run_log = self._op_runs().start(
+            operation_type=OperationRunType.INTEGRITY_SCAN,
+            context={"mode": mode, "file_instance_ids": [str(item) for item in parsed_file_ids or []], "trigger": trigger},
+        )
+        requested_file_count = len(parsed_file_ids or [])
+        scan_scope = "EXPLICIT_FILE_IDS" if parsed_file_ids else _DEFAULT_ACTIVE_LIBRARY_SCOPE
+        started_at = time.perf_counter()
+
+        def _log_manual_progress(processed_count: int, eligible_file_count: int, issues_found_so_far: int) -> None:
+            elapsed_seconds = round(time.perf_counter() - started_at, 2)
+            LOGGER.info(
+                (
+                    f"Manual integrity scan progress: mode={mode.strip().upper()} scan_scope={scan_scope} "
+                    f"processed_count={processed_count}/{eligible_file_count} "
+                    f"issues_found_so_far={issues_found_so_far} elapsed_seconds={elapsed_seconds}"
+                ),
+                extra={
+                    "run_id": run_log.operation_run_id,
+                    "phase": "integrity",
+                    "stage": "manual_scan",
+                    "status": "running",
+                    "action": "manual_integrity_scan_progress",
+                    "action_type": OperationRunType.INTEGRITY_SCAN.value,
+                    "scope": scan_scope,
+                    "processed_count": processed_count,
+                    "total_count": eligible_file_count,
+                    "elapsed_seconds": elapsed_seconds,
+                },
+            )
+
+        if trigger == "manual":
+            LOGGER.info(
+                (
+                    f"Manual integrity scan started: mode={mode.strip().upper()} "
+                    f"requested_file_count={requested_file_count} scan_scope={scan_scope}"
+                ),
+                extra={
+                    "run_id": run_log.operation_run_id,
+                    "phase": "integrity",
+                    "stage": "manual_scan",
+                    "status": "running",
+                    "action": "manual_integrity_scan",
+                    "action_type": OperationRunType.INTEGRITY_SCAN.value,
+                    "total_count": requested_file_count,
+                    "scope": scan_scope,
+                },
+            )
+        try:
+            summary = IntegrityService(self.session_factory).scan(
+                scan_mode=mode,
+                file_instance_ids=parsed_file_ids,
+                operation_run_id=UUID(run_log.operation_run_id),
+                on_progress=_log_manual_progress if trigger == "manual" else None,
+            )
+            self._op_runs().complete(UUID(run_log.operation_run_id))
+            self.cache.invalidate("integrity_dashboard", "integrity_issues")
+            duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            if trigger == "manual":
+                LOGGER.info(
+                    (
+                        f"Manual integrity scan completed: mode={summary.scan_mode} "
+                        f"requested_file_count={requested_file_count} "
+                        f"scan_scope={scan_scope} "
+                        f"eligible_file_count={summary.eligible_file_count} "
+                        f"scanned_count={summary.scanned_count} issues_found={summary.issues_found} "
+                        f"duration_ms={duration_ms}"
+                    ),
+                    extra={
+                        "run_id": run_log.operation_run_id,
+                        "phase": "integrity",
+                        "stage": "manual_scan",
+                        "status": "completed",
+                        "action": "manual_integrity_scan",
+                        "action_type": OperationRunType.INTEGRITY_SCAN.value,
+                        "total_count": requested_file_count,
+                        "scope": scan_scope,
+                        "files_count": summary.eligible_file_count,
+                        "scanned": summary.scanned_count,
+                        "duration_ms": duration_ms,
+                    },
+                )
+            return {**summary.to_dict(), "trigger": trigger}
+        except Exception as exc:
+            self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))
+            duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            if trigger == "manual":
+                LOGGER.exception(
+                    (
+                        f"Manual integrity scan failed: mode={mode.strip().upper()} "
+                        f"requested_file_count={requested_file_count} "
+                        f"scan_scope={scan_scope} duration_ms={duration_ms}"
+                    ),
+                    extra={
+                        "run_id": run_log.operation_run_id,
+                        "phase": "integrity",
+                        "stage": "manual_scan",
+                        "status": "failed",
+                        "action": "manual_integrity_scan",
+                        "action_type": OperationRunType.INTEGRITY_SCAN.value,
+                        "total_count": requested_file_count,
+                        "scope": scan_scope,
+                        "duration_ms": duration_ms,
+                    },
+                )
+            raise
+
+    def integrity_playback_failure(self, *, file_instance_id: str) -> dict[str, object]:
+        return self.integrity_scan(mode="FAST", file_instance_ids=[file_instance_id], trigger="playback_failure")
+
+    def integrity_review_set(
+        self,
+        *,
+        check_id: str,
+        decision: str,
+        reviewed_by: str | None = None,
+    ) -> dict[str, object]:
+        try:
+            parsed_check_id = UUID(check_id)
+        except ValueError as exc:
+            raise ValueError(f"check_id must be a valid UUID: {check_id}") from exc
+
+        result = IntegrityService(self.session_factory).set_review_decision(
+            check_id=parsed_check_id,
+            decision=decision,
+            reviewed_by=reviewed_by,
+        )
+        self.cache.invalidate("integrity_dashboard", "integrity_issues")
+        return result
+
+    def integrity_quarantine(self, *, check_id: str) -> dict[str, object]:
+        try:
+            parsed_check_id = UUID(check_id)
+        except ValueError as exc:
+            raise ValueError(f"check_id must be a valid UUID: {check_id}") from exc
+        run_log = self._op_runs().start(
+            operation_type=OperationRunType.INTEGRITY_QUARANTINE,
+            context={"check_id": str(parsed_check_id)},
+        )
+        try:
+            result = Phase3ActionService(self.session_factory).quarantine_integrity_issue(check_id=parsed_check_id)
+            linked_run_id = result.get("run_id")
+            if isinstance(linked_run_id, str):
+                self._op_runs().link_run(UUID(run_log.operation_run_id), linked_run_id=UUID(linked_run_id))
+            self._op_runs().complete(UUID(run_log.operation_run_id))
+            self.cache.invalidate("integrity_dashboard", "integrity_issues", "integrity_quarantine", "duplicates", "analytics")
+            return result
+        except Exception as exc:
+            self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))
+            raise
+
+    def integrity_restore(self, *, file_instance_id: str) -> dict[str, object]:
+        try:
+            parsed_file_instance_id = UUID(file_instance_id)
+        except ValueError as exc:
+            raise ValueError(f"file_instance_id must be a valid UUID: {file_instance_id}") from exc
+        run_log = self._op_runs().start(
+            operation_type=OperationRunType.INTEGRITY_RESTORE,
+            context={"file_instance_id": str(parsed_file_instance_id)},
+        )
+        try:
+            result = Phase3ActionService(self.session_factory).restore_integrity_quarantine(file_instance_id=parsed_file_instance_id)
+            linked_run_id = result.get("run_id")
+            if isinstance(linked_run_id, str):
+                self._op_runs().link_run(UUID(run_log.operation_run_id), linked_run_id=UUID(linked_run_id))
+            self._op_runs().complete(UUID(run_log.operation_run_id))
+            self.cache.invalidate("integrity_dashboard", "integrity_issues", "integrity_quarantine", "duplicates", "analytics")
+            return result
+        except Exception as exc:
+            self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))
+            raise
+
+    def duplicate_reclaim_execute(self, *, content_ids: list[str] | None = None, retention_days: int | None = None) -> dict[str, object]:
+        effective_retention_days = retention_days or self._policy().duplicate_reclaim_default_retention_days
+        parsed_content_ids: list[UUID] | None = None
+        if content_ids:
+            parsed_content_ids = []
+            for content_id in content_ids:
+                try:
+                    parsed_content_ids.append(UUID(content_id))
+                except ValueError as exc:
+                    raise ValueError(f"content_id must be a valid UUID: {content_id}") from exc
+        run_log = self._op_runs().start(
+            operation_type=OperationRunType.DUPLICATE_RECLAIM_EXECUTE,
+            context={
+                "content_ids": [str(item) for item in parsed_content_ids or []],
+                "retention_days": effective_retention_days,
+            },
+        )
+        try:
+            result = Phase3ActionService(self.session_factory).execute_duplicate_reclaim(
+                content_ids=parsed_content_ids,
+                retention_days=effective_retention_days,
+            )
+            linked_run_id = result.get("run_id")
+            if isinstance(linked_run_id, str):
+                self._op_runs().link_run(UUID(run_log.operation_run_id), linked_run_id=UUID(linked_run_id))
+            self._op_runs().complete(UUID(run_log.operation_run_id))
+            self.cache.invalidate("duplicates", "duplicate_reclaim_items", "analytics")
+            return {**result, "retention_days": effective_retention_days}
+        except Exception as exc:
+            self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))
+            raise
+
+    def duplicate_reclaim_restore(self, *, file_instance_ids: list[str] | None = None) -> dict[str, object]:
+        parsed_file_ids: list[UUID] | None = None
+        if file_instance_ids:
+            parsed_file_ids = []
+            for file_id in file_instance_ids:
+                try:
+                    parsed_file_ids.append(UUID(file_id))
+                except ValueError as exc:
+                    raise ValueError(f"file_instance_id must be a valid UUID: {file_id}") from exc
+        run_log = self._op_runs().start(
+            operation_type=OperationRunType.DUPLICATE_RECLAIM_RESTORE,
+            context={"file_instance_ids": [str(item) for item in parsed_file_ids or []]},
+        )
+        try:
+            result = Phase3ActionService(self.session_factory).restore_duplicate_reclaim(file_instance_ids=parsed_file_ids)
+            linked_run_id = result.get("run_id")
+            if isinstance(linked_run_id, str):
+                self._op_runs().link_run(UUID(run_log.operation_run_id), linked_run_id=UUID(linked_run_id))
+            self._op_runs().complete(UUID(run_log.operation_run_id))
+            self.cache.invalidate("duplicates", "duplicate_reclaim_items", "analytics")
+            return result
+        except Exception as exc:
+            self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))
+            raise
+
+    def retention_recycle_duplicates(self, *, file_instance_ids: list[str] | None = None) -> dict[str, object]:
+        parsed_file_ids: list[UUID] | None = None
+        if file_instance_ids:
+            parsed_file_ids = []
+            for file_id in file_instance_ids:
+                try:
+                    parsed_file_ids.append(UUID(file_id))
+                except ValueError as exc:
+                    raise ValueError(f"file_instance_id must be a valid UUID: {file_id}") from exc
+        run_log = self._op_runs().start(
+            operation_type=OperationRunType.RETENTION_RECYCLE,
+            context={"scope": "duplicates", "file_instance_ids": [str(item) for item in parsed_file_ids or []]},
+        )
+        try:
+            result = Phase3ActionService(self.session_factory).recycle_duplicate_reclaim(file_instance_ids=parsed_file_ids)
+            linked_run_id = result.get("run_id")
+            if isinstance(linked_run_id, str):
+                self._op_runs().link_run(UUID(run_log.operation_run_id), linked_run_id=UUID(linked_run_id))
+            self._op_runs().complete(UUID(run_log.operation_run_id))
+            self.cache.invalidate("duplicates", "duplicate_reclaim_items", "retention_recycle_items", "analytics")
+            return result
+        except Exception as exc:
+            self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))
+            raise
+
+    def retention_recycle_integrity(self, *, file_instance_ids: list[str] | None = None) -> dict[str, object]:
+        parsed_file_ids: list[UUID] | None = None
+        if file_instance_ids:
+            parsed_file_ids = []
+            for file_id in file_instance_ids:
+                try:
+                    parsed_file_ids.append(UUID(file_id))
+                except ValueError as exc:
+                    raise ValueError(f"file_instance_id must be a valid UUID: {file_id}") from exc
+        run_log = self._op_runs().start(
+            operation_type=OperationRunType.RETENTION_RECYCLE,
+            context={"scope": "integrity", "file_instance_ids": [str(item) for item in parsed_file_ids or []]},
+        )
+        try:
+            result = Phase3ActionService(self.session_factory).recycle_integrity_quarantine(file_instance_ids=parsed_file_ids)
+            linked_run_id = result.get("run_id")
+            if isinstance(linked_run_id, str):
+                self._op_runs().link_run(UUID(run_log.operation_run_id), linked_run_id=UUID(linked_run_id))
+            self._op_runs().complete(UUID(run_log.operation_run_id))
+            self.cache.invalidate("integrity_dashboard", "integrity_quarantine", "retention_recycle_items", "analytics")
+            return result
+        except Exception as exc:
+            self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))
+            raise
+
+    def retention_purge_duplicates(self, *, file_instance_ids: list[str] | None = None) -> dict[str, object]:
+        parsed_file_ids: list[UUID] | None = None
+        if file_instance_ids:
+            parsed_file_ids = []
+            for file_id in file_instance_ids:
+                try:
+                    parsed_file_ids.append(UUID(file_id))
+                except ValueError as exc:
+                    raise ValueError(f"file_instance_id must be a valid UUID: {file_id}") from exc
+        run_log = self._op_runs().start(
+            operation_type=OperationRunType.RETENTION_PURGE,
+            context={"scope": "duplicates", "file_instance_ids": [str(item) for item in parsed_file_ids or []]},
+        )
+        try:
+            result = Phase3ActionService(self.session_factory).purge_duplicate_reclaim(file_instance_ids=parsed_file_ids)
+            linked_run_id = result.get("run_id")
+            if isinstance(linked_run_id, str):
+                self._op_runs().link_run(UUID(run_log.operation_run_id), linked_run_id=UUID(linked_run_id))
+            self._op_runs().complete(UUID(run_log.operation_run_id))
+            self.cache.invalidate("duplicates", "duplicate_reclaim_items", "retention_recycle_items", "analytics")
+            return result
+        except Exception as exc:
+            self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))
+            raise
+
+    def retention_purge_integrity(self, *, file_instance_ids: list[str] | None = None) -> dict[str, object]:
+        parsed_file_ids: list[UUID] | None = None
+        if file_instance_ids:
+            parsed_file_ids = []
+            for file_id in file_instance_ids:
+                try:
+                    parsed_file_ids.append(UUID(file_id))
+                except ValueError as exc:
+                    raise ValueError(f"file_instance_id must be a valid UUID: {file_id}") from exc
+        run_log = self._op_runs().start(
+            operation_type=OperationRunType.RETENTION_PURGE,
+            context={"scope": "integrity", "file_instance_ids": [str(item) for item in parsed_file_ids or []]},
+        )
+        try:
+            result = Phase3ActionService(self.session_factory).purge_integrity_quarantine(file_instance_ids=parsed_file_ids)
+            linked_run_id = result.get("run_id")
+            if isinstance(linked_run_id, str):
+                self._op_runs().link_run(UUID(run_log.operation_run_id), linked_run_id=UUID(linked_run_id))
+            self._op_runs().complete(UUID(run_log.operation_run_id))
+            self.cache.invalidate("integrity_dashboard", "integrity_quarantine", "retention_recycle_items", "analytics")
+            return result
+        except Exception as exc:
+            self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))
+            raise
 
     def tag_enrichment(self, *, run_all: bool, canonical_id: str | None, batch_size: int, source: str) -> dict[str, object]:
         run_log = self._op_runs().start(

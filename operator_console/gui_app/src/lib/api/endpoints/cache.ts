@@ -6,6 +6,7 @@ export type OperationInvalidationTarget =
   | "plan"
   | "apply"
   | "canonicalRecompute"
+  | "integrityScan"
   | "tagEnrichment";
 
 export async function invalidateReadsAfterOperation(
@@ -18,6 +19,8 @@ export async function invalidateReadsAfterOperation(
     queryClient.invalidateQueries({ queryKey: queryKeys.latestMetrics }),
     queryClient.invalidateQueries({ queryKey: queryKeys.runsRoot }),
     queryClient.invalidateQueries({ queryKey: queryKeys.duplicates }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.integrityDashboard }),
+    queryClient.invalidateQueries({ queryKey: ["integrity", "issues"] }),
     queryClient.invalidateQueries({ queryKey: queryKeys.canonicalRoot }),
     queryClient.invalidateQueries({ queryKey: queryKeys.analytics }),
   ]);

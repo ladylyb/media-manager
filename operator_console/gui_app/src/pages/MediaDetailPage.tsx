@@ -1,12 +1,12 @@
-import { useMemo, type ReactNode } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo, useState, type ReactNode } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { ErrorAlert } from "@/components/ErrorAlert";
 import { EmptyState } from "@/components/EmptyState";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { getCanonicalDetail } from "@/lib/api/endpoints";
+import { getCanonicalDetail, reportIntegrityPlaybackFailure } from "@/lib/api/endpoints";
 import { queryKeys } from "@/lib/api/queryKeys";
 import type { CanonicalFile, CanonicalFileDetail, PaginatedResponse } from "@/types";
 import { ArrowLeft, FileImage, FileVideo, FolderOpen, Hash, ImageIcon } from "lucide-react";
@@ -37,6 +37,7 @@ export default function MediaDetailPage() {
   const { fileId = "" } = useParams();
   const queryClient = useQueryClient();
   const cachedFile = useMemo(() => findCachedCanonicalFile(fileId, queryClient), [fileId, queryClient]);
+  const [playbackReported, setPlaybackReported] = useState(false);
 
   const detailQuery = useQuery({
     queryKey: queryKeys.canonicalDetail(fileId),
@@ -59,6 +60,20 @@ export default function MediaDetailPage() {
     : cachedFile;
   const error = getErrorMessage(detailQuery.error);
   const isVideo = mergedFile?.file_type === "video";
+  const playbackFailureMutation = useMutation({
+    mutationFn: (failedFileInstanceId: string) =>
+      reportIntegrityPlaybackFailure({ file_instance_id: failedFileInstanceId }),
+  });
+
+  function handleVideoPlaybackError() {
+    if (!detail?.id || playbackReported || playbackFailureMutation.isPending) return;
+    setPlaybackReported(true);
+    playbackFailureMutation.mutate(detail.id, {
+      onError: () => {
+        setPlaybackReported(false);
+      },
+    });
+  }
 
   if (!fileId) {
     return (
@@ -100,6 +115,11 @@ export default function MediaDetailPage() {
       </div>
 
       {error ? <ErrorAlert message={error} /> : null}
+      {playbackFailureMutation.isSuccess ? (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Playback failure noted. A fast integrity scan was queued for this file so it appears in Integrity Review.
+        </div>
+      ) : null}
 
       {detailQuery.isLoading ? (
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1.5fr)_24rem]">
@@ -120,7 +140,12 @@ export default function MediaDetailPage() {
               <div className="flex min-h-[26rem] items-center justify-center rounded-[24px] border border-border/70 bg-black/90 p-3">
                 {detail.media_url ? (
                   isVideo ? (
-                    <video src={detail.media_url} controls className="max-h-[72vh] w-full rounded-2xl object-contain" />
+                    <video
+                      src={detail.media_url}
+                      controls
+                      onError={handleVideoPlaybackError}
+                      className="max-h-[72vh] w-full rounded-2xl object-contain"
+                    />
                   ) : (
                     <img src={detail.media_url} alt={detail.filename} className="max-h-[72vh] w-full rounded-2xl object-contain" />
                   )

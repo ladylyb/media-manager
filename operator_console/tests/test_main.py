@@ -90,6 +90,22 @@ def test_canonical_api_route_inventory_and_v1_removal() -> None:
         "/api/admin/benchmarks/runs/{operation_run_id}",
         "/api/admin/benchmarks/runs/{operation_run_id}/cancel",
         "/api/gallery/{file_id}",
+        "/api/integrity/dashboard",
+        "/api/integrity/issues",
+        "/api/integrity/quarantine/items",
+        "/api/retention/recycle",
+        "/api/retention/purge",
+        "/api/integrity/file/{check_id}",
+        "/api/integrity/scan",
+        "/api/integrity/playback-failure",
+        "/api/integrity/review",
+        "/api/integrity/quarantine",
+        "/api/integrity/restore",
+        "/api/duplicates/reclaim",
+        "/api/duplicates/reclaim/items",
+        "/api/duplicates/reclaim/execute",
+        "/api/duplicates/reclaim/restore",
+        "/api/retention/recycle",
         "/api/duplicates/review",
     }
 
@@ -568,6 +584,24 @@ class _FakePolicyService:
                     "selected_policy": "PREFER_ROOT",
                     "preferred_roots": ["/archive", "/media"],
                 },
+                "integrity": {
+                    "default_scan_mode": "FAST",
+                    "issue_min_confidence": 0.9,
+                    "notify_on_high_confidence": True,
+                },
+                "duplicate_reclaim": {
+                    "archive_root": "/tmp/media-manager/reclaim",
+                    "default_retention_days": 14,
+                    "notify_on_reviewed_safe": True,
+                },
+                "retention": {
+                    "quarantine_root": "/tmp/media-manager/quarantine",
+                    "recycle_bin_root": "/tmp/media-manager/recycle-bin",
+                    "quarantine_retention_days": 14,
+                    "recycle_purge_days": 30,
+                },
+                "automation": {"mode": "NOTIFY_ONLY"},
+                "naming": {"strategy": "SHARED_CANONICAL_NAME"},
                 "tie_breaker_rules": {
                     "effective_order": [
                         "preferred_root_match DESC",
@@ -599,6 +633,24 @@ class _FakePolicyService:
                     "selected_policy": command.selected_policy,
                     "preferred_roots": list(command.preferred_roots),
                 },
+                "integrity": {
+                    "default_scan_mode": command.integrity_scan_default_mode,
+                    "issue_min_confidence": command.integrity_issue_min_confidence,
+                    "notify_on_high_confidence": command.integrity_notify_on_high_confidence,
+                },
+                "duplicate_reclaim": {
+                    "archive_root": command.duplicate_reclaim_archive_root,
+                    "default_retention_days": command.duplicate_reclaim_default_retention_days,
+                    "notify_on_reviewed_safe": command.duplicate_reclaim_notify_on_reviewed_safe,
+                },
+                "retention": {
+                    "quarantine_root": command.integrity_quarantine_root,
+                    "recycle_bin_root": command.recycle_bin_root,
+                    "quarantine_retention_days": command.integrity_quarantine_retention_days,
+                    "recycle_purge_days": command.recycle_purge_days,
+                },
+                "automation": {"mode": command.automation_mode},
+                "naming": {"strategy": command.naming_strategy},
                 "tie_breaker_rules": {
                     "effective_order": [
                         "preferred_root_match DESC",
@@ -920,8 +972,159 @@ class _FakeReadServices:
                     "reviewed_canonical_instance_id": None,
                     "is_stale": False,
                     "stale_reason": None,
+                    "estimated_reclaim_bytes": 1048576,
+                    "reclaim_status": "UNREVIEWED",
+                    "reclaimable_file_count": 1,
+                    "retention_expires_at": None,
+                    "integrity_issue_count": 1,
+                    "integrity_broken_count": 1,
+                    "integrity_suspect_count": 0,
                 }
             ]
+        }
+
+    def integrity_dashboard(self) -> dict[str, object]:
+        return {
+            "total_files_scanned": 12,
+            "playback_issues": 3,
+            "quarantined": 0,
+            "last_scan_at": "2026-03-25T10:00:00+00:00",
+            "broken_count": 1,
+            "suspect_count": 2,
+            "ignored_count": 0,
+            "marked_ok_count": 1,
+        }
+
+    def integrity_issues(
+        self,
+        *,
+        status: str | None,
+        min_confidence: float | None,
+        page: int,
+        limit: int,
+    ) -> dict[str, object]:
+        _ = status, min_confidence, page, limit
+        return {
+            "total_count": 1,
+            "page": 1,
+            "limit": 30,
+            "total_pages": 1,
+            "items": [
+                {
+                    "check_id": "99999999-0000-0000-0000-000000000001",
+                    "file_instance_id": "aaaaaaaa-0000-0000-0000-000000000002",
+                    "absolute_path": "/dataset/problem.mp4",
+                    "status": "BROKEN",
+                    "confidence": 0.93,
+                    "probe_status": "FAILED",
+                    "decode_status": "SKIPPED",
+                    "reviewed_decision": None,
+                    "reviewed_at": None,
+                    "signal_types": ["ffprobe_failed"],
+                }
+            ],
+        }
+
+    def integrity_file_detail(self, *, check_id: str) -> dict[str, object] | None:
+        _ = check_id
+        return {
+            "check_id": "99999999-0000-0000-0000-000000000001",
+            "file_instance_id": "aaaaaaaa-0000-0000-0000-000000000002",
+            "absolute_path": "/dataset/problem.mp4",
+            "status": "BROKEN",
+            "confidence": 0.93,
+            "probe_status": "FAILED",
+            "decode_status": "SKIPPED",
+            "reviewed_decision": None,
+            "reviewed_at": None,
+            "signals": [
+                {
+                    "signal_type": "ffprobe_failed",
+                    "severity": "error",
+                    "details": {"stderr": "broken"},
+                    "created_at": "2026-03-25T10:00:00+00:00",
+                }
+            ],
+        }
+
+    def integrity_quarantine_items(self, *, page: int, limit: int) -> dict[str, object]:
+        _ = page, limit
+        return {
+            "total_count": 1,
+            "page": 1,
+            "limit": 30,
+            "total_pages": 1,
+            "items": [
+                {
+                    "file_instance_id": "aaaaaaaa-0000-0000-0000-000000000002",
+                    "check_id": "99999999-0000-0000-0000-000000000001",
+                    "original_path": "/dataset/problem.mp4",
+                    "quarantine_path": "/tmp/media-manager/quarantine/problem.mp4",
+                    "quarantine_status": "QUARANTINED",
+                    "quarantined_at": "2026-03-25T11:00:00+00:00",
+                    "restored_at": None,
+                }
+            ],
+        }
+
+    def duplicate_reclaim_items(self, *, page: int, limit: int) -> dict[str, object]:
+        _ = page, limit
+        return {
+            "total_count": 1,
+            "page": 1,
+            "limit": 30,
+            "total_pages": 1,
+            "items": [
+                {
+                    "file_instance_id": "aaaaaaaa-0000-0000-0000-000000000002",
+                    "content_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                    "original_path": "/dataset/b.jpg",
+                    "archive_path": "/tmp/media-manager/reclaim/b.jpg",
+                    "item_status": "ARCHIVED",
+                    "reclaimed_at": "2026-03-25T12:00:00+00:00",
+                    "expires_at": "2026-04-08T12:00:00+00:00",
+                    "restored_at": None,
+                }
+            ],
+        }
+
+    def retention_recycle_items(self, *, page: int, limit: int) -> dict[str, object]:
+        _ = page, limit
+        return {
+            "total_count": 2,
+            "page": 1,
+            "limit": 30,
+            "total_pages": 1,
+            "items": [
+                {
+                    "workflow": "duplicate_reclaim",
+                    "file_instance_id": "aaaaaaaa-0000-0000-0000-000000000002",
+                    "source_path": "/tmp/media-manager/reclaim/b.jpg",
+                    "recycle_path": "/tmp/media-manager/recycle-bin/duplicates/b.jpg",
+                    "current_status": "RECYCLED",
+                    "retention_expires_at": "2026-04-08T12:00:00+00:00",
+                    "recycled_at": "2026-04-09T12:00:00+00:00",
+                    "purge_after_at": "2026-05-09T12:00:00+00:00",
+                    "purged_at": None,
+                    "ready_for_recycle": False,
+                    "ready_for_purge": True,
+                    "days_remaining": 30,
+                },
+                {
+                    "workflow": "integrity_quarantine",
+                    "file_instance_id": "aaaaaaaa-0000-0000-0000-000000000003",
+                    "source_path": "/tmp/media-manager/quarantine/problem.mp4",
+                    "recycle_path": None,
+                    "current_status": "QUARANTINED",
+                    "retention_expires_at": "2026-03-26T12:00:00+00:00",
+                    "recycled_at": None,
+                    "purge_after_at": None,
+                    "purged_at": None,
+                    "ready_for_recycle": True,
+                    "ready_for_purge": False,
+                    "days_remaining": None,
+                },
+            ],
         }
 
     def media_file_by_hash(self, *, hash_prefix: str, page: int, limit: int) -> dict[str, object]:
@@ -1067,8 +1270,134 @@ class _FakeOperationServices:
             "stale_reason": None,
         }
 
-    def ingest(self, *, folder_path: str, dry_run: bool) -> dict[str, object]:
+    def duplicate_reclaim_set(
+        self,
+        *,
+        content_id: str,
+        reclaim_status: str,
+        reviewed_by: str | None = None,
+    ) -> dict[str, object]:
+        _ = reviewed_by
+        UUID(content_id)
         return {
+            "content_id": content_id,
+            "reclaim_status": reclaim_status,
+            "reviewed_at": "2026-03-25T10:00:00+00:00",
+            "reviewed_by": None,
+        }
+
+    def integrity_scan(
+        self,
+        *,
+        mode: str,
+        file_instance_ids: list[str] | None = None,
+        trigger: str = "manual",
+    ) -> dict[str, object]:
+        _ = file_instance_ids
+        return {
+            "run_id": "44444444-4444-4444-4444-444444444444",
+            "status": "COMPLETED",
+            "scan_mode": mode.upper(),
+            "scanned_count": 4,
+            "issues_found": 1,
+            "trigger": trigger,
+        }
+
+    def integrity_playback_failure(self, *, file_instance_id: str) -> dict[str, object]:
+        UUID(file_instance_id)
+        return {
+            "run_id": "15151515-1515-1515-1515-151515151515",
+            "status": "COMPLETED",
+            "scan_mode": "FAST",
+            "scanned_count": 1,
+            "issues_found": 1,
+            "trigger": "playback_failure",
+        }
+
+    def integrity_review_set(
+        self,
+        *,
+        check_id: str,
+        decision: str,
+        reviewed_by: str | None = None,
+    ) -> dict[str, object]:
+        _ = reviewed_by
+        return {
+            "check_id": check_id,
+            "decision": decision,
+            "reviewed_at": "2026-03-25T10:00:00+00:00",
+        }
+
+    def integrity_quarantine(self, *, check_id: str) -> dict[str, object]:
+        UUID(check_id)
+        return {
+            "run_id": "55555555-5555-5555-5555-555555555555",
+            "summary": {"applied_count": 1, "moves_count": 1, "errors_count": 0},
+        }
+
+    def integrity_restore(self, *, file_instance_id: str) -> dict[str, object]:
+        UUID(file_instance_id)
+        return {
+            "run_id": "66666666-6666-6666-6666-666666666666",
+            "summary": {"applied_count": 1, "moves_count": 1, "errors_count": 0},
+        }
+
+    def duplicate_reclaim_execute(
+        self,
+        *,
+        content_ids: list[str] | None = None,
+        retention_days: int = 14,
+    ) -> dict[str, object]:
+        for content_id in content_ids or []:
+            UUID(content_id)
+        return {
+            "run_id": "77777777-7777-7777-7777-777777777777",
+            "retention_days": retention_days,
+            "summary": {"applied_count": 1, "moves_count": 1, "errors_count": 0},
+        }
+
+    def duplicate_reclaim_restore(self, *, file_instance_ids: list[str] | None = None) -> dict[str, object]:
+        for file_instance_id in file_instance_ids or []:
+            UUID(file_instance_id)
+        return {
+            "run_id": "88888888-8888-8888-8888-888888888888",
+            "summary": {"applied_count": 1, "moves_count": 1, "errors_count": 0},
+        }
+
+    def retention_recycle_duplicates(self, *, file_instance_ids: list[str] | None = None) -> dict[str, object]:
+        for file_instance_id in file_instance_ids or []:
+            UUID(file_instance_id)
+        return {
+            "run_id": "99999999-9999-9999-9999-999999999999",
+            "summary": {"applied_count": 1, "moves_count": 1, "errors_count": 0},
+        }
+
+    def retention_recycle_integrity(self, *, file_instance_ids: list[str] | None = None) -> dict[str, object]:
+        for file_instance_id in file_instance_ids or []:
+            UUID(file_instance_id)
+        return {
+            "run_id": "12121212-1212-1212-1212-121212121212",
+            "summary": {"applied_count": 1, "moves_count": 1, "errors_count": 0},
+        }
+
+    def retention_purge_duplicates(self, *, file_instance_ids: list[str] | None = None) -> dict[str, object]:
+        for file_instance_id in file_instance_ids or []:
+            UUID(file_instance_id)
+        return {
+            "run_id": "13131313-1313-1313-1313-131313131313",
+            "summary": {"applied_count": 1, "moves_count": 1, "errors_count": 0},
+        }
+
+    def retention_purge_integrity(self, *, file_instance_ids: list[str] | None = None) -> dict[str, object]:
+        for file_instance_id in file_instance_ids or []:
+            UUID(file_instance_id)
+        return {
+            "run_id": "14141414-1414-1414-1414-141414141414",
+            "summary": {"applied_count": 1, "moves_count": 1, "errors_count": 0},
+        }
+
+    def ingest(self, *, folder_path: str, dry_run: bool) -> dict[str, object]:
+        payload = {
             "operation": "INGEST",
             "mode": "VALIDATION_ONLY" if dry_run else "EXECUTION",
             "report": {"scan": {"files_scanned": 3}},
@@ -1082,6 +1411,16 @@ class _FakeOperationServices:
             },
             "folder_path": folder_path,
         }
+        if not dry_run:
+            payload["post_ingest_integrity_scan"] = {
+                "run_id": "16161616-1616-1616-1616-161616161616",
+                "status": "COMPLETED",
+                "scan_mode": "FAST",
+                "scanned_count": 3,
+                "issues_found": 1,
+                "trigger": "import_pipeline",
+            }
+        return payload
 
     def plan(
         self,
@@ -1244,6 +1583,23 @@ class _FakeOperationServices:
                 "selected_policy": "PREFER_ROOT",
                 "preferred_roots": ["/archive", "/media"],
             },
+            "integrity": {
+                "default_scan_mode": "FAST",
+                "issue_min_confidence": 0.9,
+                "notify_on_high_confidence": True,
+            },
+            "duplicate_reclaim": {
+                "archive_root": "/tmp/media-manager/reclaim",
+                "default_retention_days": 14,
+                "notify_on_reviewed_safe": True,
+            },
+            "retention": {
+                "quarantine_root": "/tmp/media-manager/quarantine",
+                "recycle_bin_root": "/tmp/media-manager/recycle-bin",
+                "quarantine_retention_days": 14,
+                "recycle_purge_days": 30,
+            },
+            "automation": {"mode": "NOTIFY_ONLY"},
             "naming": {
                 "strategy": "SHARED_CANONICAL_NAME",
             },
@@ -1269,6 +1625,17 @@ class _FakeOperationServices:
         selected_policy: str,
         naming_strategy: str = "SHARED_CANONICAL_NAME",
         preferred_roots: tuple[str, ...],
+        integrity_scan_default_mode: str = "FAST",
+        integrity_issue_min_confidence: float = 0.9,
+        integrity_notify_on_high_confidence: bool = True,
+        duplicate_reclaim_archive_root: str = "/tmp/media-manager/reclaim",
+        duplicate_reclaim_default_retention_days: int = 14,
+        duplicate_reclaim_notify_on_reviewed_safe: bool = True,
+        integrity_quarantine_root: str = "/tmp/media-manager/quarantine",
+        integrity_quarantine_retention_days: int = 14,
+        recycle_bin_root: str = "/tmp/media-manager/recycle-bin",
+        recycle_purge_days: int = 30,
+        automation_mode: str = "NOTIFY_ONLY",
         recanonicalization_enabled: bool,
         version: int,
     ) -> dict[str, object]:
@@ -1283,6 +1650,23 @@ class _FakeOperationServices:
                 "selected_policy": selected_policy,
                 "preferred_roots": list(preferred_roots),
             },
+            "integrity": {
+                "default_scan_mode": integrity_scan_default_mode,
+                "issue_min_confidence": integrity_issue_min_confidence,
+                "notify_on_high_confidence": integrity_notify_on_high_confidence,
+            },
+            "duplicate_reclaim": {
+                "archive_root": duplicate_reclaim_archive_root,
+                "default_retention_days": duplicate_reclaim_default_retention_days,
+                "notify_on_reviewed_safe": duplicate_reclaim_notify_on_reviewed_safe,
+            },
+            "retention": {
+                "quarantine_root": integrity_quarantine_root,
+                "recycle_bin_root": recycle_bin_root,
+                "quarantine_retention_days": integrity_quarantine_retention_days,
+                "recycle_purge_days": recycle_purge_days,
+            },
+            "automation": {"mode": automation_mode},
             "naming": {
                 "strategy": naming_strategy,
             },
@@ -2116,6 +2500,16 @@ def test_duplicates_page_serves_spa_shell(tmp_path: Path, monkeypatch) -> None:
     assert "/static-v2/assets/" in response.text
 
 
+def test_integrity_page_serves_spa_shell(tmp_path: Path, monkeypatch) -> None:
+    client = _create_console_client(tmp_path, monkeypatch)
+
+    response = client.get("/integrity")
+
+    assert response.status_code == 200
+    assert '<div id="root"></div>' in response.text
+    assert "/static-v2/assets/" in response.text
+
+
 def test_duplicates_endpoint_returns_json() -> None:
     """GET /api/duplicates should return duplicate group payload."""
     app.dependency_overrides[get_read_services] = _FakeReadServices
@@ -2160,6 +2554,13 @@ def test_duplicates_endpoint_returns_json() -> None:
                 "reviewed_canonical_instance_id": None,
                 "is_stale": False,
                 "stale_reason": None,
+                "estimated_reclaim_bytes": 1048576,
+                "reclaim_status": "UNREVIEWED",
+                "reclaimable_file_count": 1,
+                "retention_expires_at": None,
+                "integrity_issue_count": 1,
+                "integrity_broken_count": 1,
+                "integrity_suspect_count": 0,
             }
         ]
     }
@@ -2183,6 +2584,263 @@ def test_duplicates_review_endpoint_persists_decision() -> None:
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert response.json()["data"]["result"]["review_status"] == "looks_right"
+
+
+def test_duplicates_reclaim_endpoint_persists_decision() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/duplicates/reclaim",
+            json={
+                "content_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "reclaim_status": "REVIEWED_SAFE_TO_RECLAIM",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"]["reclaim_status"] == "REVIEWED_SAFE_TO_RECLAIM"
+
+
+def test_integrity_dashboard_endpoint_returns_json() -> None:
+    app.dependency_overrides[get_read_services] = _FakeReadServices
+    client = TestClient(app)
+    try:
+        response = client.get("/api/integrity/dashboard")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"]["playback_issues"] == 3
+
+
+def test_integrity_scan_endpoint_returns_summary() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post("/api/integrity/scan", json={"mode": "FAST", "file_instance_ids": []})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"]["scan_mode"] == "FAST"
+    assert response.json()["data"]["result"]["trigger"] == "manual"
+
+
+def test_integrity_scan_endpoint_logs_manual_request() -> None:
+    logged_messages: list[str] = []
+
+    def _record_info(message, *args, **kwargs):  # type: ignore[no-untyped-def]
+        _ = args, kwargs
+        logged_messages.append(str(message))
+
+    original_info = main_module.LOGGER.info
+    main_module.LOGGER.info = _record_info  # type: ignore[assignment]
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post("/api/integrity/scan", json={"mode": "DEEP", "file_instance_ids": []})
+    finally:
+        app.dependency_overrides.clear()
+        main_module.LOGGER.info = original_info  # type: ignore[assignment]
+
+    assert response.status_code == 200
+    assert any(
+        "POST /api/integrity/scan received: mode=DEEP requested_file_count=0 scan_scope=DEFAULT_ACTIVE_LIBRARY"
+        in line
+        for line in logged_messages
+    )
+
+
+def test_integrity_playback_failure_endpoint_returns_summary() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/integrity/playback-failure",
+            json={"file_instance_id": "aaaaaaaa-0000-0000-0000-000000000002"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"]["trigger"] == "playback_failure"
+
+
+def test_integrity_quarantine_items_endpoint_returns_rows() -> None:
+    app.dependency_overrides[get_read_services] = _FakeReadServices
+    client = TestClient(app)
+    try:
+        response = client.get("/api/integrity/quarantine/items")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"]["items"][0]["quarantine_status"] == "QUARANTINED"
+
+
+def test_integrity_quarantine_endpoint_executes() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/integrity/quarantine",
+            json={"check_id": "99999999-0000-0000-0000-000000000001"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"]["run_id"] == "55555555-5555-5555-5555-555555555555"
+
+
+def test_integrity_restore_endpoint_executes() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/integrity/restore",
+            json={"file_instance_id": "aaaaaaaa-0000-0000-0000-000000000002"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"]["run_id"] == "66666666-6666-6666-6666-666666666666"
+
+
+def test_duplicate_reclaim_items_endpoint_returns_rows() -> None:
+    app.dependency_overrides[get_read_services] = _FakeReadServices
+    client = TestClient(app)
+    try:
+        response = client.get("/api/duplicates/reclaim/items")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"]["items"][0]["item_status"] == "ARCHIVED"
+
+
+def test_duplicate_reclaim_execute_endpoint_executes() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/duplicates/reclaim/execute",
+            json={
+                "content_ids": ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"],
+                "retention_days": 21,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"]["retention_days"] == 21
+
+
+def test_duplicate_reclaim_restore_endpoint_executes() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/duplicates/reclaim/restore",
+            json={"file_instance_ids": ["aaaaaaaa-0000-0000-0000-000000000002"]},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"]["run_id"] == "88888888-8888-8888-8888-888888888888"
+
+
+def test_retention_recycle_items_endpoint_returns_rows() -> None:
+    app.dependency_overrides[get_read_services] = _FakeReadServices
+    client = TestClient(app)
+    try:
+        response = client.get("/api/retention/recycle")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"]["items"][1]["ready_for_recycle"] is True
+
+
+def test_retention_recycle_endpoint_executes_for_duplicates() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/retention/recycle",
+            json={"workflow": "duplicates", "file_instance_ids": ["aaaaaaaa-0000-0000-0000-000000000002"]},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"]["run_id"] == "99999999-9999-9999-9999-999999999999"
+
+
+def test_retention_recycle_endpoint_executes_for_integrity() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/retention/recycle",
+            json={"workflow": "integrity", "file_instance_ids": ["aaaaaaaa-0000-0000-0000-000000000003"]},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"]["run_id"] == "12121212-1212-1212-1212-121212121212"
+
+
+def test_retention_purge_endpoint_executes_for_duplicates() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/retention/purge",
+            json={"workflow": "duplicates", "file_instance_ids": ["aaaaaaaa-0000-0000-0000-000000000002"]},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"]["run_id"] == "13131313-1313-1313-1313-131313131313"
+
+
+def test_retention_purge_endpoint_executes_for_integrity() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/retention/purge",
+            json={"workflow": "integrity", "file_instance_ids": ["aaaaaaaa-0000-0000-0000-000000000003"]},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"]["run_id"] == "14141414-1414-1414-1414-141414141414"
 
 
 def test_thumbnail_endpoint_returns_file_response() -> None:
@@ -2267,6 +2925,8 @@ def test_get_policy_endpoint_returns_structured_json() -> None:
     payload = response.json()["data"]["result"]
     assert payload["canonical_priority"]["selected_policy"] == "PREFER_ROOT"
     assert payload["canonical_priority"]["preferred_roots"] == ["/archive", "/media"]
+    assert payload["integrity"]["default_scan_mode"] == "FAST"
+    assert payload["automation"]["mode"] == "NOTIFY_ONLY"
     assert payload["recanonicalization"]["enabled"] is True
     assert payload["metadata"]["version"] == 7
 
@@ -2281,6 +2941,17 @@ def test_post_policy_endpoint_updates_settings() -> None:
             json={
                 "selected_policy": "PREFER_ROOT",
                 "preferred_roots": ["/a", "/b"],
+                "integrity_scan_default_mode": "DEEP",
+                "integrity_issue_min_confidence": 0.85,
+                "integrity_notify_on_high_confidence": True,
+                "duplicate_reclaim_archive_root": "/archive/reclaim",
+                "duplicate_reclaim_default_retention_days": 21,
+                "duplicate_reclaim_notify_on_reviewed_safe": True,
+                "integrity_quarantine_root": "/archive/quarantine",
+                "integrity_quarantine_retention_days": 10,
+                "recycle_bin_root": "/archive/recycle",
+                "recycle_purge_days": 45,
+                "automation_mode": "NOTIFY_ONLY",
                 "recanonicalization_enabled": False,
                 "version": 7,
             },
@@ -2291,6 +2962,8 @@ def test_post_policy_endpoint_updates_settings() -> None:
     assert response.status_code == 200
     payload = response.json()["data"]["result"]
     assert payload["canonical_priority"]["preferred_roots"] == ["/a", "/b"]
+    assert payload["integrity"]["default_scan_mode"] == "DEEP"
+    assert payload["duplicate_reclaim"]["default_retention_days"] == 21
     assert payload["metadata"]["version"] == 8
 
 
@@ -2304,6 +2977,17 @@ def test_post_policy_endpoint_returns_version_conflict() -> None:
             json={
                 "selected_policy": "FIRST_SEEN",
                 "preferred_roots": [],
+                "integrity_scan_default_mode": "FAST",
+                "integrity_issue_min_confidence": 0.9,
+                "integrity_notify_on_high_confidence": True,
+                "duplicate_reclaim_archive_root": "/tmp/media-manager/reclaim",
+                "duplicate_reclaim_default_retention_days": 14,
+                "duplicate_reclaim_notify_on_reviewed_safe": True,
+                "integrity_quarantine_root": "/tmp/media-manager/quarantine",
+                "integrity_quarantine_retention_days": 14,
+                "recycle_bin_root": "/tmp/media-manager/recycle-bin",
+                "recycle_purge_days": 30,
+                "automation_mode": "NOTIFY_ONLY",
                 "recanonicalization_enabled": False,
                 "version": 6,
             },
@@ -2390,6 +3074,7 @@ def test_post_ingest_execute_returns_summary_fields() -> None:
     assert payload["summary"]["duplicates_detected"] == 0
     assert payload["summary"]["metadata_extracted"] == 3
     assert payload["summary"]["duration_s"] == 0.25
+    assert payload["post_ingest_integrity_scan"]["trigger"] == "import_pipeline"
 
 
 def test_post_ingest_invalid_path_returns_actionable_400() -> None:
