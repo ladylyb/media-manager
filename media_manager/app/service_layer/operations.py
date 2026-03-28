@@ -688,11 +688,15 @@ class OperationServices:
 
         def _log_manual_progress(processed_count: int, eligible_file_count: int, issues_found_so_far: int) -> None:
             elapsed_seconds = round(time.perf_counter() - started_at, 2)
+            progress_percent = (processed_count / eligible_file_count) * 100.0 if eligible_file_count > 0 else 0.0
+            throughput_fps = processed_count / elapsed_seconds if elapsed_seconds > 0 else 0.0
             LOGGER.info(
                 (
                     f"Manual integrity scan progress: mode={mode.strip().upper()} scan_scope={scan_scope} "
                     f"processed_count={processed_count}/{eligible_file_count} "
-                    f"issues_found_so_far={issues_found_so_far} elapsed_seconds={elapsed_seconds}"
+                    f"issues_found_so_far={issues_found_so_far} elapsed_seconds={elapsed_seconds} "
+                    f"Progress: {processed_count}/{eligible_file_count} files ({progress_percent:.1f}%) | "
+                    f"{throughput_fps:.1f} files/sec | elapsed {elapsed_seconds:.1f}s"
                 ),
                 extra={
                     "run_id": run_log.operation_run_id,
@@ -704,6 +708,8 @@ class OperationServices:
                     "scope": scan_scope,
                     "processed_count": processed_count,
                     "total_count": eligible_file_count,
+                    "progress_percent": progress_percent,
+                    "throughput_fps": throughput_fps,
                     "elapsed_seconds": elapsed_seconds,
                 },
             )

@@ -53,7 +53,7 @@ describe("parseProgressLogs", () => {
       "2026-03-21 INFO media_manager.app.persistence.tag_enrichment phase=tag_enrichment stage=enrich processed_count=2 total_count=5 progress_percent=40.0 throughput_fps=10.0 Progress: 2/5 items (40.0%) | 10.0 items/sec | elapsed 0.2s",
     ]);
     const integrityResult = parseProgressLogs([
-      "2026-03-21 INFO media_manager.app.persistence.integrity phase=integrity stage=scan_active_files processed_count=4 total_count=10 progress_percent=40.0 throughput_fps=2.0 Progress: 4/10 files (40.0%) | 2.0 files/sec | elapsed 2.0s",
+      "2026-03-21 INFO media_manager.app.service_layer.operations phase=integrity stage=manual_scan status=running action=manual_integrity_scan_progress processed_count=100 total_count=250 progress_percent=40.0 throughput_fps=5.5 scope=DEFAULT_ACTIVE_LIBRARY filename=operations.py Manual integrity scan progress: mode=FAST scan_scope=DEFAULT_ACTIVE_LIBRARY processed_count=100/250 issues_found_so_far=3 elapsed_seconds=18.19 Progress: 100/250 files (40.0%) | 5.5 files/sec | elapsed 18.2s",
     ]);
 
     expect(applyResult.phase).toBe("apply");
@@ -63,7 +63,12 @@ describe("parseProgressLogs", () => {
     expect(tagResult.phase).toBe("tag");
     expect(tagResult.stage).toBe("enrich");
     expect(integrityResult.phase).toBe("integrity");
-    expect(integrityResult.stage).toBe("scan_active_files");
+    expect(integrityResult.stage).toBe("manual_scan");
+    expect(integrityResult.processedCount).toBe(100);
+    expect(integrityResult.totalCount).toBe(250);
+    expect(integrityResult.progressPercent).toBe(40);
+    expect(integrityResult.throughputFps).toBe(5.5);
+    expect(integrityResult.status).toBe("running");
   });
 
   it("marks warning and error lines for highlighting", () => {

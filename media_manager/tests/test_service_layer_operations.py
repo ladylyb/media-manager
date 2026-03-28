@@ -323,8 +323,18 @@ def test_integrity_scan_logs_progress_for_large_manual_scans(monkeypatch: pytest
     assert payload["scanned_count"] == 250
     progress_calls = [call for call in info_calls if "Manual integrity scan progress:" in call]
     assert len(progress_calls) == 2
-    assert any("processed_count=100/250 issues_found_so_far=3" in call for call in progress_calls)
-    assert any("processed_count=200/250 issues_found_so_far=7" in call for call in progress_calls)
+    assert any(
+        "processed_count=100/250 issues_found_so_far=3 elapsed_seconds=" in call
+        and "Progress: 100/250 files (40.0%) | " in call
+        and "files/sec | elapsed " in call
+        for call in progress_calls
+    )
+    assert any(
+        "processed_count=200/250 issues_found_so_far=7 elapsed_seconds=" in call
+        and "Progress: 200/250 files (80.0%) | " in call
+        and "files/sec | elapsed " in call
+        for call in progress_calls
+    )
 
 
 def test_integrity_scan_does_not_log_progress_for_small_manual_scans(monkeypatch: pytest.MonkeyPatch) -> None:
