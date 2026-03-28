@@ -13,15 +13,23 @@ import {
   getIntegrityFile,
   getIntegrityIssues,
   getIntegrityQuarantineItems,
+  getPolicy,
   quarantineIntegrityFile,
   restoreIntegrityFile,
   setIntegrityReview,
   startIntegrityScan,
 } from "@/lib/api/endpoints";
 import { queryKeys } from "@/lib/api/queryKeys";
-import type { IntegrityDashboard, IntegrityFileDetail, IntegrityIssue, IntegrityQuarantineItem } from "@/types";
+import type { IntegrityDashboard, IntegrityFileDetail, IntegrityIssue, IntegrityQuarantineItem, Policy } from "@/types";
 
 type IssueFilter = "ALL" | "BROKEN" | "SUSPECT";
+type IntegrityScanResult = {
+  run_id: string;
+  status?: string;
+  scan_mode: "FAST" | "DEEP";
+  scanned_count: number;
+  issues_found: number;
+};
 
 function basename(path: string) {
   const parts = path.split(/[\\/]/).filter(Boolean);
@@ -60,10 +68,16 @@ export default function IntegrityPage() {
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState<IssueFilter>("ALL");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [lastScanResult, setLastScanResult] = useState<IntegrityScanResult | null>(null);
+  const [scanErrorMessage, setScanErrorMessage] = useState<string | null>(null);
 
   const dashboardQuery = useQuery({
     queryKey: queryKeys.integrityDashboard,
     queryFn: async () => (await getIntegrityDashboard()).data as IntegrityDashboard,
+  });
+  const policyQuery = useQuery({
+    queryKey: queryKeys.policy,
+    queryFn: async () => (await getPolicy()).data,
   });
 
   const issuesQuery = useQuery({
@@ -79,6 +93,7 @@ export default function IntegrityPage() {
   });
 
   const issues = (issuesQuery.data?.items ?? []) as IntegrityIssue[];
+  const policy = (policyQuery.data as Policy | undefined) ?? null;
   const selectedIssue = issues.find((item) => item.check_id === selectedId) ?? issues[0] ?? null;
 
   useEffect(() => {
@@ -104,9 +119,28 @@ export default function IntegrityPage() {
 
   const scanMutation = useMutation({
     mutationFn: (mode: "FAST" | "DEEP") => startIntegrityScan({ mode }),
-    onSuccess: () => {
+    onMutate: () => {
+      setScanErrorMessage(null);
+    },
+    onSuccess: (response) => {
+      const payload = (response?.data ?? {}) as Partial<IntegrityScanResult>;
+      setLastScanResult({
+        run_id: String(payload.run_id ?? ""),
+        status: payload.status ? String(payload.status) : undefined,
+        scan_mode: payload.scan_mode === "DEEP" ? "DEEP" : "FAST",
+        scanned_count: Number(payload.scanned_count ?? 0),
+        issues_found: Number(payload.issues_found ?? 0),
+      });
+      setScanErrorMessage(null);
       void queryClient.invalidateQueries({ queryKey: queryKeys.integrityDashboard });
       void queryClient.invalidateQueries({ queryKey: ["integrity", "issues"] });
+      if (selectedIssue?.check_id) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.integrityFile(selectedIssue.check_id) });
+      }
+    },
+    onError: (error) => {
+      setLastScanResult(null);
+      setScanErrorMessage(error instanceof Error ? error.message : String(error));
     },
   });
 
@@ -157,19 +191,48 @@ export default function IntegrityPage() {
         title="Integrity Review"
         description="Read-only scan results for playback and file-health issues."
       >
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            onClick={() => scanMutation.mutate("FAST")}
-            disabled={scanMutation.isPending}
-          >
-            Run Quick Scan
-          </Button>
-          <Button onClick={() => scanMutation.mutate("DEEP")} disabled={scanMutation.isPending}>
-            Run Deep Scan
-          </Button>
+        <div className="flex flex-col items-end gap-2">
+          {policy ? (
+            <p className="text-xs text-muted-foreground">
+              Saved default scan mode: {policy.integrity.default_scan_mode === "DEEP" ? "Deep" : "Quick"}
+            </p>
+          ) : null}
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => scanMutation.mutate("FAST")}
+              disabled={scanMutation.isPending}
+            >
+              Quick Scan
+            </Button>
+            <Button onClick={() => scanMutation.mutate("DEEP")} disabled={scanMutation.isPending}>
+              Deep Scan
+            </Button>
+          </div>
         </div>
       </TopSurfaceHeader>
+
+      {scanErrorMessage ? <ErrorAlert message={`Integrity scan failed: ${scanErrorMessage}`} /> : null}
+
+      {lastScanResult ? (
+        <Card>
+          <CardContent className="flex flex-col gap-2 p-4 text-sm">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              <span className="font-medium">Last scan result</span>
+              <span>Mode: {lastScanResult.scan_mode === "DEEP" ? "Deep" : "Quick"}</span>
+              <span>Files scanned: {lastScanResult.scanned_count}</span>
+              <span>Issues found: {lastScanResult.issues_found}</span>
+            </div>
+            {lastScanResult.scanned_count === 0 ? (
+              <p className="text-muted-foreground">No eligible active files were scanned.</p>
+            ) : (
+              <p className="text-muted-foreground">
+                Scan completed and the dashboard, queue, and selected file detail were refreshed.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
 
       {(dashboardQuery.error || issuesQuery.error || detailQuery.error || quarantineQuery.error) && (
         <ErrorAlert
@@ -185,7 +248,7 @@ export default function IntegrityPage() {
         />
       )}
 
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-5">
         <StatCard
           title="Files Scanned"
           value={dashboardQuery.data?.total_files_scanned ?? 0}
@@ -194,6 +257,15 @@ export default function IntegrityPage() {
         <StatCard title="Playback Issues" value={dashboardQuery.data?.playback_issues ?? 0} helper="Broken and suspect files needing review." />
         <StatCard title="Broken" value={dashboardQuery.data?.broken_count ?? 0} helper="Highest confidence integrity failures." />
         <StatCard title="Reviewed" value={(dashboardQuery.data?.ignored_count ?? 0) + (dashboardQuery.data?.marked_ok_count ?? 0)} helper="Ignored or marked OK by operators." />
+        <StatCard
+          title="High-Confidence Queue"
+          value={dashboardQuery.data?.high_confidence_unresolved_count ?? 0}
+          helper={
+            policy
+              ? `Unreviewed issues at or above ${(policy.integrity.issue_min_confidence * 100).toFixed(0)}% confidence.`
+              : "Unreviewed high-confidence issues."
+          }
+        />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
