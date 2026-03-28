@@ -161,7 +161,7 @@ describe("DuplicatesPage", () => {
     renderPage();
 
     expect(await screen.findByRole("heading", { name: "Review duplicates" })).toBeInTheDocument();
-    expect(screen.getByText("Group navigation")).toBeInTheDocument();
+    expect(screen.getByTestId("review-group-navigation-hidden")).toBeInTheDocument();
     expect(screen.getAllByText("alpha-main.jpg").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Next" })).toBeInTheDocument();
@@ -170,10 +170,37 @@ describe("DuplicatesPage", () => {
     expect(screen.queryByRole("button", { name: "Mark safe to reclaim" })).not.toBeInTheDocument();
   });
 
+  it("toggles the side navigation open and closed without breaking the comparison area", async () => {
+    renderPage();
+
+    expect(await screen.findByTestId("primary-comparison-preview")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-group-navigation")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show group navigation" }));
+
+    expect(await screen.findByTestId("review-group-navigation")).toBeInTheDocument();
+    expect(screen.getByText("Group navigation")).toBeInTheDocument();
+    expect(screen.getByTestId("primary-comparison-preview")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide group navigation" }));
+
+    await waitFor(() => expect(screen.queryByTestId("review-group-navigation")).not.toBeInTheDocument());
+    expect(screen.getByTestId("primary-comparison-preview")).toBeInTheDocument();
+  });
+
+  it("keeps group jumping working through the secondary navigation panel", async () => {
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Show group navigation" }));
+    fireEvent.click(screen.getByRole("button", { name: /beta-main\.jpg/i }));
+
+    await waitFor(() => expect(screen.getByTestId("review-group-title")).toHaveTextContent("beta-main.jpg"));
+  });
+
   it("uses Back and Next as first-class review navigation controls", async () => {
     renderPage();
 
-    expect(await screen.findByText("alpha-main.jpg")).toBeInTheDocument();
+    expect(await screen.findByTestId("review-group-title")).toHaveTextContent("alpha-main.jpg");
     expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
 
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
@@ -245,6 +272,16 @@ describe("DuplicatesPage", () => {
       "src",
       "/api/thumbnail/group-alpha-duplicate-1",
     );
+  });
+
+  it("renders the secondary navigation as a text-only list without thumbnails", async () => {
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Show group navigation" }));
+
+    const navigation = await screen.findByTestId("review-group-navigation");
+    expect(within(navigation).getAllByTestId("review-queue-no-thumbnails").length).toBeGreaterThan(0);
+    expect(within(navigation).queryByRole("img")).toBeNull();
   });
 
   it("keeps deep-link tab navigation on the removal review tab", async () => {
@@ -446,5 +483,20 @@ describe("DuplicatesPage", () => {
     expect(reviewTitle).toHaveAttribute("title", longName);
     expect(primaryTitle).toHaveAttribute("title", longName);
     expect(secondaryTitle).toHaveAttribute("title", `Selected copy: copy-${longName}`);
+  });
+
+  it("constrains long filenames safely inside the side navigation", async () => {
+    const longName =
+      "extremely-long-navigation-filename-that-should-stay-contained-inside-the-secondary-panel-without-bleeding.jpg";
+    groupsData = [buildGroup("group-long-nav", longName, ["copy-a.jpg"])];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Show group navigation" }));
+
+    const queueTitle = await screen.findByTestId("review-queue-item-title");
+    expect(queueTitle).toHaveClass("truncate");
+    expect(queueTitle).toHaveAttribute("title", longName);
   });
 });

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Copy, ExternalLink, ShieldAlert } from "lucide-react";
+import { AlertTriangle, Copy, ExternalLink, PanelLeft, PanelLeftClose, ShieldAlert } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { ErrorAlert } from "@/components/ErrorAlert";
@@ -142,6 +142,7 @@ export default function DuplicatesPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedDuplicateId, setSelectedDuplicateId] = useState<string | null>(null);
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("unreviewed");
+  const [isReviewQueueOpen, setIsReviewQueueOpen] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = getDuplicatesTab(searchParams.get("tab"));
   const queryClient = useQueryClient();
@@ -358,6 +359,9 @@ export default function DuplicatesPage() {
   );
   const reviewProgressLabel =
     selectedOverallIndex >= 0 ? `${selectedOverallIndex + 1} of ${sortedGroups.length}` : `0 of ${sortedGroups.length}`;
+  const reviewMetaLine = selected
+    ? `${reviewProgressLabel} • ${selectedDuplicates.length === 1 ? "1 matching copy" : `${selectedDuplicates.length} matching copies`} • ${reviewedCount} reviewed`
+    : `${reviewProgressLabel} • ${reviewedCount} reviewed`;
 
   function setActiveTab(nextTab: DuplicatesTab) {
     const nextParams = new URLSearchParams(searchParams);
@@ -499,11 +503,7 @@ export default function DuplicatesPage() {
                         Compare one group at a time, mark the human review state, and move on.
                       </p>
                     </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <StatusBadge label={reviewProgressLabel} severity="info" />
-                      <StatusBadge label={`${sortedGroups.length - reviewedCount} left`} severity="caution" />
-                      <StatusBadge label={`${filteredGroups.length} in filter`} severity="neutral" />
-                    </div>
+                    <p className="text-sm text-muted-foreground">{reviewProgressLabel} in sequence</p>
                   </div>
                 </div>
               </TabsContent>
@@ -529,224 +529,218 @@ export default function DuplicatesPage() {
           </Card>
 
           <TabsContent value="review" className="mt-0">
-            <div className="grid gap-3 xl:grid-cols-[260px_minmax(0,1fr)]">
-              <Card className="rounded-[22px] border-border/70 bg-card/95 shadow-sm">
-                <CardContent className="space-y-3 p-3">
-                  <div className="space-y-2">
-                    <div>
-                      <p className="text-sm font-semibold text-foreground">Group navigation</p>
-                      <p className="text-sm text-muted-foreground">Use this queue to jump around. Back and Next drive the main review loop.</p>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {reviewOptions.map((option) => (
-                        <Button
-                          key={option.value}
-                          type="button"
-                          variant={reviewFilter === option.value ? "default" : "outline"}
-                          size="sm"
-                          className="rounded-full"
-                          onClick={() => setReviewFilter(option.value)}
-                        >
-                          {option.label}
-                        </Button>
-                      ))}
-                    </div>
-                  </div>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsReviewQueueOpen((current) => !current)}
+                  aria-expanded={isReviewQueueOpen}
+                  aria-controls="review-group-navigation"
+                >
+                  {isReviewQueueOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeft className="h-4 w-4" />}
+                  {isReviewQueueOpen ? "Hide group navigation" : "Show group navigation"}
+                </Button>
+                <div className="flex flex-wrap gap-2">
+                  {reviewOptions.map((option) => (
+                    <Button
+                      key={option.value}
+                      type="button"
+                      variant={reviewFilter === option.value ? "default" : "outline"}
+                      size="sm"
+                      className="rounded-full"
+                      onClick={() => setReviewFilter(option.value)}
+                    >
+                      {option.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
 
-                  <ScrollArea className="h-[40rem] pr-2">
-                    <div className="space-y-3">
-                      {filteredGroups.map((group, index) => {
-                        const presentation = getReviewPresentation(currentReviewMark(group), Boolean(group.is_stale));
-                        return (
-                          <DuplicateQueueItem
-                            key={group.group_id}
-                            index={index}
-                            active={selected?.group_id === group.group_id}
-                            group={group}
-                            markLabel={presentation.label}
-                            markSeverity={presentation.severity}
-                            onSelect={() => setSelectedId(group.group_id)}
-                          />
-                        );
-                      })}
-                    </div>
-                  </ScrollArea>
-                </CardContent>
-              </Card>
-
-              <Card className="rounded-[26px] border-border/70 bg-card/95 shadow-sm">
-                <CardContent className="space-y-4 p-3 sm:p-4">
-                  {selected && selectedCanonical ? (
-                    <>
-                      <div className="space-y-3">
-                        <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
-                          <div className="min-w-0 space-y-2">
-                            <div className="flex flex-wrap items-center gap-2">
-                              {selectedReview ? <StatusBadge label={selectedReview.label} severity={selectedReview.severity} /> : null}
-                              <StatusBadge
-                                label={
-                                  selectedDuplicates.length === 1
-                                    ? "1 matching copy"
-                                    : `${selectedDuplicates.length} matching copies`
-                                }
-                                severity="info"
-                              />
-                              <StatusBadge label={`${selected.duplicates.length} files in group`} severity="neutral" />
-                            </div>
-                            <p
-                              className="truncate text-xl font-semibold tracking-tight text-foreground"
-                              title={basename(selected.canonical_path)}
-                              data-testid="review-group-title"
-                            >
-                              {basename(selected.canonical_path)}
-                            </p>
-                            <p className="text-sm text-muted-foreground">
-                              Compare the main version against the selected copy, then mark the group and continue.
-                            </p>
-                          </div>
-                        </div>
-                        <DuplicateReviewActionBar
-                          activeMark={currentReviewMark(selected)}
-                          hasPrev={selectedIndex > 0}
-                          hasNext={selectedIndex >= 0 && selectedIndex < filteredGroups.length - 1}
-                          onMark={applyReviewMark}
-                          onNext={() => moveSelection(1)}
-                          onPrev={() => moveSelection(-1)}
-                          sticky={false}
-                          compact
-                          progressLabel={`${reviewProgressLabel} • ${reviewedCount} reviewed`}
-                        />
-                        {(selected.integrity_issue_count ?? 0) > 0 ? (
-                          <div className="flex flex-col gap-2 rounded-[18px] border border-caution/30 bg-caution/10 px-3 py-2.5 lg:flex-row lg:items-center lg:justify-between">
-                            <div className="min-w-0">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <StatusBadge
-                                  label={`${selected.integrity_issue_count} playback issue${selected.integrity_issue_count === 1 ? "" : "s"}`}
-                                  severity="caution"
-                                />
-                                {(selected.integrity_broken_count ?? 0) > 0 ? (
-                                  <StatusBadge label={`${selected.integrity_broken_count} broken`} severity="destructive" />
-                                ) : null}
-                                {(selected.integrity_suspect_count ?? 0) > 0 ? (
-                                  <StatusBadge label={`${selected.integrity_suspect_count} suspect`} severity="caution" />
-                                ) : null}
-                              </div>
-                              <p className="mt-1 text-sm text-muted-foreground">
-                                Check Playback Issues if file health is affecting this decision.
-                              </p>
-                            </div>
-                            <div className="flex gap-2">
-                              <Button type="button" variant="outline" size="sm" onClick={() => setActiveTab("playback-issues")}>
-                                Open playback issues
-                              </Button>
-                              <Button asChild type="button" variant="outline" size="sm">
-                                <Link to="/integrity">
-                                  Integrity review
-                                  <ExternalLink className="h-4 w-4" />
-                                </Link>
-                              </Button>
-                            </div>
-                          </div>
-                        ) : null}
+              <div className={cn("grid gap-3", isReviewQueueOpen ? "xl:grid-cols-[240px_minmax(0,1fr)]" : "grid-cols-1")}>
+                {isReviewQueueOpen ? (
+                  <Card
+                    id="review-group-navigation"
+                    className="rounded-[20px] border-border/70 bg-card/95 shadow-sm"
+                    data-testid="review-group-navigation"
+                  >
+                    <CardContent className="space-y-3 p-3">
+                      <div className="space-y-1">
+                        <p className="text-sm font-semibold text-foreground">Group navigation</p>
+                        <p className="text-sm text-muted-foreground">Jump to a group without interrupting the main review loop.</p>
                       </div>
 
-                      <div className="grid gap-3 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1.1fr)]">
-                        <DuplicateFocusCard
-                          badge="Main version"
-                          description="Anchor this comparison against the selected duplicate."
-                          emphasis="success"
-                          file={selectedCanonical}
-                          previewClassName="h-[26rem] sm:h-[34rem] lg:h-[44rem]"
-                          previewFit="contain"
-                          previewTestId="primary-comparison-preview"
-                          titleTestId="primary-comparison-title"
-                        />
+                      <ScrollArea className="h-[40rem] pr-2">
+                        <div className="space-y-2">
+                          {filteredGroups.map((group, index) => {
+                            const presentation = getReviewPresentation(currentReviewMark(group), Boolean(group.is_stale));
+                            return (
+                              <DuplicateQueueItem
+                                key={group.group_id}
+                                index={index}
+                                active={selected?.group_id === group.group_id}
+                                group={group}
+                                markLabel={presentation.label}
+                                onSelect={() => setSelectedId(group.group_id)}
+                              />
+                            );
+                          })}
+                        </div>
+                      </ScrollArea>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <div data-testid="review-group-navigation-hidden" className="hidden" />
+                )}
 
-                        {selectedDuplicate ? (
+                <Card className="rounded-[26px] border-border/70 bg-card/95 shadow-sm">
+                  <CardContent className="space-y-4 p-3 sm:p-4">
+                    {selected && selectedCanonical ? (
+                      <>
+                        <div className="space-y-3">
+                          <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                            <div className="min-w-0 space-y-1.5">
+                              <p
+                                className="truncate text-xl font-semibold tracking-tight text-foreground"
+                                title={basename(selected.canonical_path)}
+                                data-testid="review-group-title"
+                              >
+                                {basename(selected.canonical_path)}
+                              </p>
+                              <p className="text-sm text-muted-foreground">{reviewMetaLine}</p>
+                            </div>
+                          </div>
+                          <DuplicateReviewActionBar
+                            activeMark={currentReviewMark(selected)}
+                            hasPrev={selectedIndex > 0}
+                            hasNext={selectedIndex >= 0 && selectedIndex < filteredGroups.length - 1}
+                            onMark={applyReviewMark}
+                            onNext={() => moveSelection(1)}
+                            onPrev={() => moveSelection(-1)}
+                            sticky={false}
+                            compact
+                            progressLabel={reviewProgressLabel}
+                          />
+                          {(selected.integrity_issue_count ?? 0) > 0 ? (
+                            <div className="flex flex-col gap-2 rounded-[18px] border border-caution/30 bg-caution/10 px-3 py-2.5 lg:flex-row lg:items-center lg:justify-between">
+                              <div className="min-w-0">
+                                <p className="text-sm text-muted-foreground">
+                                  {selected.integrity_issue_count} playback issue{selected.integrity_issue_count === 1 ? "" : "s"} may affect this decision. Check Playback Issues if you need more detail.
+                                </p>
+                              </div>
+                              <div className="flex gap-2">
+                                <Button type="button" variant="outline" size="sm" onClick={() => setActiveTab("playback-issues")}>
+                                  Open playback issues
+                                </Button>
+                                <Button asChild type="button" variant="outline" size="sm">
+                                  <Link to="/integrity">
+                                    Integrity review
+                                    <ExternalLink className="h-4 w-4" />
+                                  </Link>
+                                </Button>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+
+                        <div className="grid gap-3 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1.1fr)]">
                           <DuplicateFocusCard
-                            badge="Currently comparing"
-                            description={`Selected duplicate ${selectedDuplicates.findIndex((file) => file.file_instance_id === selectedDuplicate.file_instance_id) + 1} updates this pane immediately.`}
-                            emphasis="info"
-                            file={selectedDuplicate}
-                            title={`Selected copy: ${basename(selectedDuplicate.path)}`}
+                            badge="Main"
+                            description="Anchor this comparison against the selected duplicate."
+                            emphasis="success"
+                            file={selectedCanonical}
                             previewClassName="h-[26rem] sm:h-[34rem] lg:h-[44rem]"
                             previewFit="contain"
-                            previewTestId="secondary-comparison-preview"
-                            titleTestId="secondary-comparison-title"
+                            previewTestId="primary-comparison-preview"
+                            titleTestId="primary-comparison-title"
                           />
-                        ) : (
-                          <Card className="rounded-[22px] border-border/70 bg-background/85 shadow-sm">
-                            <CardContent className="flex h-full min-h-[14rem] items-center justify-center p-6 text-center">
-                              <div className="space-y-2">
-                                <StatusBadge label="No extra copies" severity="neutral" />
-                                <p className="text-sm text-muted-foreground">Nothing else to compare in this group.</p>
-                              </div>
-                            </CardContent>
-                          </Card>
-                        )}
-                      </div>
 
-                      {selectedDuplicates.length ? (
-                        <section className="space-y-2.5">
-                          <div className="flex items-center justify-between gap-3">
-                            <h3 className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                              Select the duplicate to compare
-                            </h3>
-                            {selectedDuplicate ? (
-                              <p
-                                className="max-w-[28rem] truncate text-xs text-muted-foreground"
-                                title={basename(selectedDuplicate.path)}
-                                data-testid="active-duplicate-caption"
-                              >
-                                Active: {basename(selectedDuplicate.path)}
-                              </p>
-                            ) : null}
-                          </div>
-                          <ScrollArea className="w-full whitespace-nowrap">
-                            <div className="flex gap-2 pb-2">
-                              {selectedDuplicates.map((file, index) => {
-                                const active = selectedDuplicate?.file_instance_id === file.file_instance_id;
-                                return (
-                                  <button
-                                    key={file.file_instance_id || file.path}
-                                    type="button"
-                                    onClick={() => setSelectedDuplicateId(file.file_instance_id)}
-                                    aria-pressed={active}
-                                    aria-label={`Compare duplicate ${index + 1}: ${basename(file.path)}`}
-                                    className={cn(
-                                      "w-40 shrink-0 rounded-[18px] border p-2 text-left transition-all",
-                                      active
-                                        ? "border-primary bg-primary/8 shadow-sm ring-2 ring-primary/25"
-                                        : "border-border/70 bg-background/80 hover:border-primary/20 hover:bg-muted/30",
-                                    )}
-                                  >
-                                    <div className="mb-2 flex items-center justify-between gap-2">
-                                      <span className="text-[11px] font-medium text-muted-foreground">{index + 1}</span>
-                                      {active ? <StatusBadge label="Comparing" severity="info" /> : null}
-                                    </div>
-                                    <DuplicateMediaPreview
-                                      src={file.preview_url ?? (file.is_image ? file.media_url ?? file.thumbnail_url : null)}
-                                      alt={basename(file.path)}
-                                      isImage={file.is_image}
-                                      mediaType={file.media_type}
-                                      className="h-24 rounded-[16px]"
-                                      fit="contain"
-                                    />
-                                    <p
-                                      className="mt-2 truncate text-xs font-medium text-foreground"
-                                      title={basename(file.path)}
-                                    >
-                                      {basename(file.path)}
-                                    </p>
-                                  </button>
-                                );
-                              })}
+                          {selectedDuplicate ? (
+                            <DuplicateFocusCard
+                              badge="Selected copy"
+                              description={`Selected duplicate ${selectedDuplicates.findIndex((file) => file.file_instance_id === selectedDuplicate.file_instance_id) + 1} updates this pane immediately.`}
+                              emphasis="info"
+                              file={selectedDuplicate}
+                              title={`Selected copy: ${basename(selectedDuplicate.path)}`}
+                              previewClassName="h-[26rem] sm:h-[34rem] lg:h-[44rem]"
+                              previewFit="contain"
+                              previewTestId="secondary-comparison-preview"
+                              titleTestId="secondary-comparison-title"
+                            />
+                          ) : (
+                            <Card className="rounded-[22px] border-border/70 bg-background/85 shadow-sm">
+                              <CardContent className="flex h-full min-h-[14rem] items-center justify-center p-6 text-center">
+                                <div className="space-y-2">
+                                  <StatusBadge label="No extra copies" severity="neutral" />
+                                  <p className="text-sm text-muted-foreground">Nothing else to compare in this group.</p>
+                                </div>
+                              </CardContent>
+                            </Card>
+                          )}
+                        </div>
+
+                        {selectedDuplicates.length ? (
+                          <section className="space-y-2.5">
+                            <div className="flex items-center justify-between gap-3">
+                              <h3 className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                                Select the duplicate to compare
+                              </h3>
+                              {selectedDuplicate ? (
+                                <p
+                                  className="max-w-[28rem] truncate text-xs text-muted-foreground"
+                                  title={basename(selectedDuplicate.path)}
+                                  data-testid="active-duplicate-caption"
+                                >
+                                  Active: {basename(selectedDuplicate.path)}
+                                </p>
+                              ) : null}
                             </div>
-                          </ScrollArea>
-                        </section>
-                      ) : null}
+                            <ScrollArea className="w-full whitespace-nowrap">
+                              <div className="flex gap-2 pb-2">
+                                {selectedDuplicates.map((file, index) => {
+                                  const active = selectedDuplicate?.file_instance_id === file.file_instance_id;
+                                  return (
+                                    <button
+                                      key={file.file_instance_id || file.path}
+                                      type="button"
+                                      onClick={() => setSelectedDuplicateId(file.file_instance_id)}
+                                      aria-pressed={active}
+                                      aria-label={`Compare duplicate ${index + 1}: ${basename(file.path)}`}
+                                      className={cn(
+                                        "w-40 shrink-0 rounded-[18px] border p-2 text-left transition-all",
+                                        active
+                                          ? "border-primary bg-primary/8 shadow-sm ring-2 ring-primary/25"
+                                          : "border-border/70 bg-background/80 hover:border-primary/20 hover:bg-muted/30",
+                                      )}
+                                    >
+                                      <div className="mb-2 flex items-center justify-between gap-2">
+                                        <span className="text-[11px] font-medium text-muted-foreground">{index + 1}</span>
+                                        {active ? <StatusBadge label="Comparing" severity="info" /> : null}
+                                      </div>
+                                      <DuplicateMediaPreview
+                                        src={file.preview_url ?? (file.is_image ? file.media_url ?? file.thumbnail_url : null)}
+                                        alt={basename(file.path)}
+                                        isImage={file.is_image}
+                                        mediaType={file.media_type}
+                                        className="h-24 rounded-[16px]"
+                                        fit="contain"
+                                      />
+                                      <p
+                                        className="mt-2 truncate text-xs font-medium text-foreground"
+                                        title={basename(file.path)}
+                                      >
+                                        {basename(file.path)}
+                                      </p>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </ScrollArea>
+                          </section>
+                        ) : null}
 
-                      <Collapsible className="rounded-[24px] border border-border/70 bg-background/85">
+                        <Collapsible className="rounded-[24px] border border-border/70 bg-background/85">
                         <CollapsibleTrigger asChild>
                           <button
                             type="button"
@@ -808,6 +802,7 @@ export default function DuplicatesPage() {
                   )}
                 </CardContent>
               </Card>
+            </div>
             </div>
           </TabsContent>
 
