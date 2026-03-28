@@ -375,6 +375,46 @@ describe("DuplicatesPage", () => {
     });
   });
 
+  it("supports focused Previous and Next navigation across ready groups without breaking selection", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        review_status: "looks_right",
+      },
+      {
+        ...buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
+        review_status: "looks_right",
+      },
+      buildGroup("group-gamma", "gamma-main.jpg", ["gamma-copy.jpg"]),
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+
+    renderPage("/duplicates?tab=removal");
+
+    expect(await screen.findByTestId("recycle-bin-focused-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("recycle-bin-focused-title")).toHaveTextContent("alpha-main.jpg");
+    expect(screen.getAllByText("Keep copy").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Extra copies").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Select current group" }));
+    expect(screen.getByTestId("recycle-bin-bulk-action-bar")).toBeInTheDocument();
+    expect(screen.getByText("1 selected group")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+
+    await waitFor(() => expect(screen.getByTestId("recycle-bin-focused-title")).toHaveTextContent("beta-main.jpg"));
+    expect(screen.getByText("1 selected group")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("recycle-bin-view-list"));
+
+    await waitFor(() => expect(screen.getByTestId("recycle-bin-ready-list")).toBeInTheDocument());
+    expect(screen.getByTestId("recycle-bin-focused-title")).toHaveTextContent("beta-main.jpg");
+
+    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+
+    await waitFor(() => expect(screen.getByTestId("recycle-bin-focused-title")).toHaveTextContent("alpha-main.jpg"));
+  });
+
   it("supports group-level multi-select in Gallery and moves only the selected groups", async () => {
     groupsData = [
       {
@@ -513,8 +553,8 @@ describe("DuplicatesPage", () => {
       await screen.findByText("Only groups marked “Looks right” can be moved from this page. The keep copy stays in place."),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Mark safe to remove" })).not.toBeInTheDocument();
-    expect(screen.getByText("alpha-main.jpg")).toBeInTheDocument();
-    expect(screen.getByText("beta-main.jpg")).toBeInTheDocument();
+    expect(screen.getAllByText("alpha-main.jpg").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("beta-main.jpg").length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole("button", { name: "Move all eligible groups" }));
 
@@ -605,10 +645,11 @@ describe("DuplicatesPage", () => {
         retention_days: 21,
       });
       expect(
-        screen.getByText("The selected groups no longer had extra copies available to move. The list has been refreshed."),
+        screen.getByText("No files were moved from the selected groups. Their availability may have changed. The list has been refreshed."),
       ).toBeInTheDocument();
       expect(screen.queryByTestId("recycle-bin-bulk-action-bar")).not.toBeInTheDocument();
-      expect(screen.queryByTestId("recycle-bin-gallery-card-group-alpha")).not.toBeInTheDocument();
+      expect(screen.getByTestId("recycle-bin-gallery-card-group-alpha")).toBeInTheDocument();
+      expect(screen.getByTestId("recycle-bin-focused-title")).toHaveTextContent("alpha-main.jpg");
     });
   });
 
