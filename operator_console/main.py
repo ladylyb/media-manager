@@ -998,6 +998,24 @@ def create_app() -> FastAPI:
         payload: IntegrityScanPayload,
         services: OperationServices = Depends(get_operation_services),
     ) -> JSONResponse:
+        normalized_mode = payload.mode.strip().upper()
+        requested_file_count = len(payload.file_instance_ids)
+        scan_scope = "EXPLICIT_FILE_IDS" if payload.file_instance_ids else "DEFAULT_ACTIVE_LIBRARY"
+        LOGGER.info(
+            (
+                f"POST /api/integrity/scan received: mode={normalized_mode} "
+                f"requested_file_count={requested_file_count} scan_scope={scan_scope}"
+            ),
+            extra={
+                "phase": "operator_console",
+                "stage": "integrity_scan",
+                "status": "received",
+                "action": "manual_integrity_scan_request",
+                "action_type": "api_request",
+                "total_count": requested_file_count,
+                "scope": scan_scope,
+            },
+        )
         return _execute_mutation(
             "integrity-scan",
             lambda: services.integrity_scan(

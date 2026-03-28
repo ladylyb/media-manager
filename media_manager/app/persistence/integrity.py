@@ -38,6 +38,7 @@ class IntegrityScanSummary:
     run_id: str
     status: str
     scan_mode: str
+    eligible_file_count: int
     scanned_count: int
     issues_found: int
 
@@ -46,6 +47,7 @@ class IntegrityScanSummary:
             "run_id": self.run_id,
             "status": self.status,
             "scan_mode": self.scan_mode,
+            "eligible_file_count": self.eligible_file_count,
             "scanned_count": self.scanned_count,
             "issues_found": self.issues_found,
         }
@@ -183,6 +185,7 @@ class IntegrityService:
             run_id=str(run.id),
             status=run.status,
             scan_mode=run.scan_mode,
+            eligible_file_count=run.scanned_count,
             scanned_count=run.scanned_count,
             issues_found=run.issues_found,
         )
@@ -247,6 +250,7 @@ class IntegrityService:
         *,
         file_instance_ids: list[UUID] | None,
     ) -> list[FileInstance]:
+        # No explicit IDs means resolve the default eligible active-library scope.
         stmt = select(FileInstance).where(FileInstance.status == FileInstanceStatus.ACTIVE.value)
         if file_instance_ids:
             stmt = stmt.where(FileInstance.file_instance_id.in_(file_instance_ids))

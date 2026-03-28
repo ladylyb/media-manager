@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ShieldCheck, ShieldOff } from "lucide-react";
+import { AlertTriangle, Loader2, ShieldCheck, ShieldOff } from "lucide-react";
 
 import { ErrorAlert } from "@/components/ErrorAlert";
 import { TopSurfaceHeader } from "@/components/layout/TopSurfaceHeader";
@@ -27,8 +27,17 @@ type IntegrityScanResult = {
   run_id: string;
   status?: string;
   scan_mode: "FAST" | "DEEP";
+  eligible_file_count?: number;
   scanned_count: number;
   issues_found: number;
+};
+type IntegrityScanFeedback = {
+  mode: "FAST" | "DEEP";
+  phase: "running" | "completed" | "failed";
+  eligible_file_count?: number;
+  scanned_count?: number;
+  issues_found?: number;
+  message?: string;
 };
 
 function basename(path: string) {
@@ -68,8 +77,7 @@ export default function IntegrityPage() {
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState<IssueFilter>("ALL");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [lastScanResult, setLastScanResult] = useState<IntegrityScanResult | null>(null);
-  const [scanErrorMessage, setScanErrorMessage] = useState<string | null>(null);
+  const [scanFeedback, setScanFeedback] = useState<IntegrityScanFeedback | null>(null);
 
   const dashboardQuery = useQuery({
     queryKey: queryKeys.integrityDashboard,
@@ -119,28 +127,41 @@ export default function IntegrityPage() {
 
   const scanMutation = useMutation({
     mutationFn: (mode: "FAST" | "DEEP") => startIntegrityScan({ mode }),
-    onMutate: () => {
-      setScanErrorMessage(null);
+    onMutate: (mode) => {
+      setScanFeedback({ mode, phase: "running" });
+      return { mode };
     },
     onSuccess: (response) => {
       const payload = (response?.data ?? {}) as Partial<IntegrityScanResult>;
-      setLastScanResult({
+      const scanResult: IntegrityScanResult = {
         run_id: String(payload.run_id ?? ""),
         status: payload.status ? String(payload.status) : undefined,
         scan_mode: payload.scan_mode === "DEEP" ? "DEEP" : "FAST",
+        eligible_file_count:
+          typeof payload.eligible_file_count === "number" ? Number(payload.eligible_file_count) : undefined,
         scanned_count: Number(payload.scanned_count ?? 0),
         issues_found: Number(payload.issues_found ?? 0),
+      };
+      setScanFeedback({
+        mode: scanResult.scan_mode,
+        phase: "completed",
+        eligible_file_count: scanResult.eligible_file_count,
+        scanned_count: scanResult.scanned_count,
+        issues_found: scanResult.issues_found,
       });
-      setScanErrorMessage(null);
       void queryClient.invalidateQueries({ queryKey: queryKeys.integrityDashboard });
       void queryClient.invalidateQueries({ queryKey: ["integrity", "issues"] });
       if (selectedIssue?.check_id) {
         void queryClient.invalidateQueries({ queryKey: queryKeys.integrityFile(selectedIssue.check_id) });
       }
     },
-    onError: (error) => {
-      setLastScanResult(null);
-      setScanErrorMessage(error instanceof Error ? error.message : String(error));
+    onError: (error, _mode, context) => {
+      const activeMode = context?.mode ?? "FAST";
+      setScanFeedback({
+        mode: activeMode,
+        phase: "failed",
+        message: error instanceof Error ? error.message : String(error),
+      });
     },
   });
 
@@ -183,6 +204,10 @@ export default function IntegrityPage() {
     () => issues.filter((item) => !item.reviewed_decision && item.status !== "OK").length,
     [issues],
   );
+  const runningMode = scanMutation.isPending ? scanFeedback?.mode ?? null : null;
+  const quickLabel = runningMode === "FAST" ? "Running Quick Scan..." : "Quick Scan";
+  const deepLabel = runningMode === "DEEP" ? "Running Deep Scan..." : "Deep Scan";
+  const scanModeLabel = scanFeedback?.mode === "DEEP" ? "Deep scan" : "Quick scan";
 
   return (
     <div className="space-y-6 p-6">
@@ -197,39 +222,58 @@ export default function IntegrityPage() {
               Saved default scan mode: {policy.integrity.default_scan_mode === "DEEP" ? "Deep" : "Quick"}
             </p>
           ) : null}
+          <p className="text-xs text-muted-foreground">
+            Quick Scan: readability and probe checks
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Deep Scan: quick scan plus decode-level verification on eligible active files
+          </p>
           <div className="flex gap-2">
             <Button
               variant="outline"
               onClick={() => scanMutation.mutate("FAST")}
               disabled={scanMutation.isPending}
             >
-              Quick Scan
+              {runningMode === "FAST" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {quickLabel}
             </Button>
             <Button onClick={() => scanMutation.mutate("DEEP")} disabled={scanMutation.isPending}>
-              Deep Scan
+              {runningMode === "DEEP" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {deepLabel}
             </Button>
           </div>
         </div>
       </TopSurfaceHeader>
 
-      {scanErrorMessage ? <ErrorAlert message={`Integrity scan failed: ${scanErrorMessage}`} /> : null}
-
-      {lastScanResult ? (
+      {scanFeedback ? (
         <Card>
           <CardContent className="flex flex-col gap-2 p-4 text-sm">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-              <span className="font-medium">Last scan result</span>
-              <span>Mode: {lastScanResult.scan_mode === "DEEP" ? "Deep" : "Quick"}</span>
-              <span>Files scanned: {lastScanResult.scanned_count}</span>
-              <span>Issues found: {lastScanResult.issues_found}</span>
+              <span className="font-medium">Last scan summary</span>
+              <span>Mode used: {scanFeedback.mode === "DEEP" ? "Deep" : "Quick"}</span>
+              <span>Status: {scanFeedback.phase}</span>
+              {scanFeedback.eligible_file_count != null ? <span>Eligible files: {scanFeedback.eligible_file_count}</span> : null}
+              {scanFeedback.scanned_count != null ? <span>Files scanned: {scanFeedback.scanned_count}</span> : null}
+              {scanFeedback.issues_found != null ? <span>Issues found: {scanFeedback.issues_found}</span> : null}
             </div>
-            {lastScanResult.scanned_count === 0 ? (
-              <p className="text-muted-foreground">No eligible active files were scanned.</p>
-            ) : (
-              <p className="text-muted-foreground">
-                Scan completed and the dashboard, queue, and selected file detail were refreshed.
-              </p>
-            )}
+            {scanFeedback.phase === "running" ? (
+              <p className="text-muted-foreground">{scanModeLabel} started</p>
+            ) : null}
+            {scanFeedback.phase === "completed" ? (
+              <>
+                <p className="text-muted-foreground">{scanModeLabel} completed</p>
+                {scanFeedback.scanned_count === 0 ? (
+                  <p className="text-muted-foreground">No eligible active files were scanned.</p>
+                ) : (
+                  <p className="text-muted-foreground">
+                    Scan completed and the dashboard, queue, and selected file detail were refreshed.
+                  </p>
+                )}
+              </>
+            ) : null}
+            {scanFeedback.phase === "failed" ? (
+              <ErrorAlert message={`${scanModeLabel} failed: ${scanFeedback.message ?? "Unknown error"}`} />
+            ) : null}
           </CardContent>
         </Card>
       ) : null}

@@ -225,6 +225,58 @@ def test_integrity_playback_failure_uses_fast_scan_trigger(monkeypatch: pytest.M
     assert observed["file_instance_ids"] == [file_instance_id]
 
 
+def test_integrity_scan_logs_manual_request_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeIntegritySummary:
+        scan_mode = "DEEP"
+        eligible_file_count = 5
+        scanned_count = 5
+        issues_found = 2
+
+        def to_dict(self) -> dict[str, object]:
+            return {
+                "scan_mode": self.scan_mode,
+                "eligible_file_count": self.eligible_file_count,
+                "scanned_count": self.scanned_count,
+                "issues_found": self.issues_found,
+            }
+
+    class _FakeIntegrityService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def scan(self, *, scan_mode, file_instance_ids, operation_run_id):  # type: ignore[no-untyped-def]
+            _ = file_instance_ids, operation_run_id
+            assert scan_mode == "DEEP"
+            return _FakeIntegritySummary()
+
+    monkeypatch.setattr(operations_module, "IntegrityService", _FakeIntegrityService)
+    _install_fake_operation_run_service(monkeypatch)
+    _install_fake_policy_settings_service(monkeypatch, integrity_scan_default_mode="FAST")
+    info_calls: list[str] = []
+
+    def _record_info(message, *args, **kwargs):  # type: ignore[no-untyped-def]
+        _ = args, kwargs
+        info_calls.append(str(message))
+
+    monkeypatch.setattr(operations_module.LOGGER, "info", _record_info)
+
+    cache = _FakeCache(invalidations=[])
+    services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
+
+    payload = services.integrity_scan(mode="DEEP", file_instance_ids=None, trigger="manual")
+
+    assert payload["scan_mode"] == "DEEP"
+    assert (
+        "Manual integrity scan started: mode=DEEP requested_file_count=0 "
+        "scan_scope=DEFAULT_ACTIVE_LIBRARY" in info_calls
+    )
+    assert any(
+        "Manual integrity scan completed: mode=DEEP requested_file_count=0 scan_scope=DEFAULT_ACTIVE_LIBRARY eligible_file_count=5 "
+        "scanned_count=5 issues_found=2" in call
+        for call in info_calls
+    )
+
+
 def test_plan_returns_run_and_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     dataset = tmp_path / "dataset"
     dataset.mkdir()

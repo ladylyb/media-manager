@@ -5,10 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
+import time
 from uuid import UUID
 
 from media_manager.app.canonical.context import CanonicalContext
 from media_manager.app.canonical.factory import build_canonical_policy
+from media_manager.app.core.logging_config import get_logger
 from media_manager.app.core.naming import DEFAULT_CONTEXT, DEFAULT_OWNER, normalize_naming_strategy
 from media_manager.app.persistence.apply import ApplyService
 from media_manager.app.persistence.duplicate_reclaim import DuplicateReclaimService
@@ -27,6 +29,8 @@ from media_manager.app.service_layer.cache import ServiceCache
 
 _WINDOWS_DRIVE_PATH_RE = re.compile(r"^([A-Za-z]):[\\/](.*)$")
 _MNT_DRIVE_PATH_RE = re.compile(r"^/mnt/([A-Z])(?:/(.*))?$")
+LOGGER = get_logger(__name__)
+_DEFAULT_ACTIVE_LIBRARY_SCOPE = "DEFAULT_ACTIVE_LIBRARY"
 
 
 def _strip_wrapping_quotes(value: str) -> str:
@@ -678,6 +682,26 @@ class OperationServices:
             operation_type=OperationRunType.INTEGRITY_SCAN,
             context={"mode": mode, "file_instance_ids": [str(item) for item in parsed_file_ids or []], "trigger": trigger},
         )
+        requested_file_count = len(parsed_file_ids or [])
+        scan_scope = "EXPLICIT_FILE_IDS" if parsed_file_ids else _DEFAULT_ACTIVE_LIBRARY_SCOPE
+        started_at = time.perf_counter()
+        if trigger == "manual":
+            LOGGER.info(
+                (
+                    f"Manual integrity scan started: mode={mode.strip().upper()} "
+                    f"requested_file_count={requested_file_count} scan_scope={scan_scope}"
+                ),
+                extra={
+                    "run_id": run_log.operation_run_id,
+                    "phase": "integrity",
+                    "stage": "manual_scan",
+                    "status": "running",
+                    "action": "manual_integrity_scan",
+                    "action_type": OperationRunType.INTEGRITY_SCAN.value,
+                    "total_count": requested_file_count,
+                    "scope": scan_scope,
+                },
+            )
         try:
             summary = IntegrityService(self.session_factory).scan(
                 scan_mode=mode,
@@ -686,9 +710,54 @@ class OperationServices:
             )
             self._op_runs().complete(UUID(run_log.operation_run_id))
             self.cache.invalidate("integrity_dashboard", "integrity_issues")
+            duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            if trigger == "manual":
+                LOGGER.info(
+                    (
+                        f"Manual integrity scan completed: mode={summary.scan_mode} "
+                        f"requested_file_count={requested_file_count} "
+                        f"scan_scope={scan_scope} "
+                        f"eligible_file_count={summary.eligible_file_count} "
+                        f"scanned_count={summary.scanned_count} issues_found={summary.issues_found} "
+                        f"duration_ms={duration_ms}"
+                    ),
+                    extra={
+                        "run_id": run_log.operation_run_id,
+                        "phase": "integrity",
+                        "stage": "manual_scan",
+                        "status": "completed",
+                        "action": "manual_integrity_scan",
+                        "action_type": OperationRunType.INTEGRITY_SCAN.value,
+                        "total_count": requested_file_count,
+                        "scope": scan_scope,
+                        "files_count": summary.eligible_file_count,
+                        "scanned": summary.scanned_count,
+                        "duration_ms": duration_ms,
+                    },
+                )
             return {**summary.to_dict(), "trigger": trigger}
         except Exception as exc:
             self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))
+            duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            if trigger == "manual":
+                LOGGER.exception(
+                    (
+                        f"Manual integrity scan failed: mode={mode.strip().upper()} "
+                        f"requested_file_count={requested_file_count} "
+                        f"scan_scope={scan_scope} duration_ms={duration_ms}"
+                    ),
+                    extra={
+                        "run_id": run_log.operation_run_id,
+                        "phase": "integrity",
+                        "stage": "manual_scan",
+                        "status": "failed",
+                        "action": "manual_integrity_scan",
+                        "action_type": OperationRunType.INTEGRITY_SCAN.value,
+                        "total_count": requested_file_count,
+                        "scope": scan_scope,
+                        "duration_ms": duration_ms,
+                    },
+                )
             raise
 
     def integrity_playback_failure(self, *, file_instance_id: str) -> dict[str, object]:

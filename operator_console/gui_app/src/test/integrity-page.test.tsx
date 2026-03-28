@@ -43,6 +43,16 @@ function renderPage() {
   );
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("IntegrityPage", () => {
   beforeEach(() => {
     mocks.getPolicy.mockResolvedValue({
@@ -114,6 +124,7 @@ describe("IntegrityPage", () => {
       data: {
         run_id: "run-1",
         scan_mode: "FAST",
+        eligible_file_count: 12,
         scanned_count: 12,
         issues_found: 3,
       },
@@ -133,34 +144,57 @@ describe("IntegrityPage", () => {
     expect(screen.getAllByText("ffprobe_failed").length).toBeGreaterThan(0);
   });
 
-  it("quick scan visibly succeeds and sends FAST", async () => {
+  it("quick scan shows in-flight state and then success summary", async () => {
+    const deferred = createDeferred<{ data: { run_id: string; scan_mode: "FAST"; eligible_file_count: number; scanned_count: number; issues_found: number } }>();
+    mocks.startIntegrityScan.mockReturnValueOnce(deferred.promise);
     renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "Quick Scan" }));
 
+    expect(await screen.findByRole("button", { name: "Running Quick Scan..." })).toBeDisabled();
+    expect(screen.getByText("Quick scan started")).toBeInTheDocument();
+    deferred.resolve({
+      data: {
+        run_id: "run-1",
+        scan_mode: "FAST",
+        eligible_file_count: 12,
+        scanned_count: 12,
+        issues_found: 3,
+      },
+    });
     await waitFor(() => expect(mocks.startIntegrityScan).toHaveBeenCalledWith({ mode: "FAST" }));
-    expect(await screen.findByText("Last scan result")).toBeInTheDocument();
-    expect(screen.getByText("Mode: Quick")).toBeInTheDocument();
+    expect(await screen.findByText("Last scan summary")).toBeInTheDocument();
+    expect(screen.getByText("Quick scan completed")).toBeInTheDocument();
+    expect(screen.getByText("Mode used: Quick")).toBeInTheDocument();
+    expect(screen.getByText("Eligible files: 12")).toBeInTheDocument();
     expect(screen.getByText("Files scanned: 12")).toBeInTheDocument();
     expect(screen.getByText("Issues found: 3")).toBeInTheDocument();
   });
 
-  it("deep scan visibly succeeds and sends DEEP", async () => {
-    mocks.startIntegrityScan.mockResolvedValueOnce({
-      data: {
-        run_id: "run-2",
-        scan_mode: "DEEP",
-        scanned_count: 12,
-        issues_found: 4,
-      },
-    });
+  it("deep scan shows in-flight state and then success summary", async () => {
+    const deferred = createDeferred<{ data: { run_id: string; scan_mode: "DEEP"; eligible_file_count: number; scanned_count: number; issues_found: number } }>();
+    mocks.startIntegrityScan.mockReturnValueOnce(deferred.promise);
 
     renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "Deep Scan" }));
 
+    expect(await screen.findByRole("button", { name: "Running Deep Scan..." })).toBeDisabled();
+    expect(screen.getByText("Deep scan started")).toBeInTheDocument();
+    deferred.resolve({
+      data: {
+        run_id: "run-2",
+        scan_mode: "DEEP",
+        eligible_file_count: 12,
+        scanned_count: 12,
+        issues_found: 4,
+      },
+    });
+
     await waitFor(() => expect(mocks.startIntegrityScan).toHaveBeenCalledWith({ mode: "DEEP" }));
-    expect(await screen.findByText("Mode: Deep")).toBeInTheDocument();
+    expect(await screen.findByText("Deep scan completed")).toBeInTheDocument();
+    expect(screen.getByText("Mode used: Deep")).toBeInTheDocument();
+    expect(screen.getByText("Eligible files: 12")).toBeInTheDocument();
     expect(screen.getByText("Files scanned: 12")).toBeInTheDocument();
     expect(screen.getByText("Issues found: 4")).toBeInTheDocument();
   });
@@ -170,6 +204,7 @@ describe("IntegrityPage", () => {
       data: {
         run_id: "run-3",
         scan_mode: "FAST",
+        eligible_file_count: 0,
         scanned_count: 0,
         issues_found: 0,
       },
@@ -186,6 +221,8 @@ describe("IntegrityPage", () => {
     renderPage();
 
     expect(await screen.findByText("Saved default scan mode: Deep")).toBeInTheDocument();
+    expect(screen.getByText("Quick Scan: readability and probe checks")).toBeInTheDocument();
+    expect(screen.getByText("Deep Scan: quick scan plus decode-level verification on eligible active files")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Quick Scan" }));
 
     await waitFor(() => expect(mocks.startIntegrityScan).toHaveBeenCalledWith({ mode: "FAST" }));
@@ -198,7 +235,19 @@ describe("IntegrityPage", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Quick Scan" }));
 
-    expect(await screen.findByText("Integrity scan failed: ffprobe unavailable")).toBeInTheDocument();
+    expect(await screen.findByText("Quick scan failed: ffprobe unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Last scan summary")).toBeInTheDocument();
+    expect(screen.getByText("Status: failed")).toBeInTheDocument();
+  });
+
+  it("keeps the last scan summary visible after completion", async () => {
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Quick Scan" }));
+
+    expect(await screen.findByText("Last scan summary")).toBeInTheDocument();
+    expect(screen.getByText("Quick scan completed")).toBeInTheDocument();
+    expect(screen.getByText("Mode used: Quick")).toBeInTheDocument();
   });
 
   it("submits mark as ok review decisions", async () => {

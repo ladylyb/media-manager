@@ -2632,6 +2632,31 @@ def test_integrity_scan_endpoint_returns_summary() -> None:
     assert response.json()["data"]["result"]["trigger"] == "manual"
 
 
+def test_integrity_scan_endpoint_logs_manual_request() -> None:
+    logged_messages: list[str] = []
+
+    def _record_info(message, *args, **kwargs):  # type: ignore[no-untyped-def]
+        _ = args, kwargs
+        logged_messages.append(str(message))
+
+    original_info = main_module.LOGGER.info
+    main_module.LOGGER.info = _record_info  # type: ignore[assignment]
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.post("/api/integrity/scan", json={"mode": "DEEP", "file_instance_ids": []})
+    finally:
+        app.dependency_overrides.clear()
+        main_module.LOGGER.info = original_info  # type: ignore[assignment]
+
+    assert response.status_code == 200
+    assert any(
+        "POST /api/integrity/scan received: mode=DEEP requested_file_count=0 scan_scope=DEFAULT_ACTIVE_LIBRARY"
+        in line
+        for line in logged_messages
+    )
+
+
 def test_integrity_playback_failure_endpoint_returns_summary() -> None:
     app.dependency_overrides[get_operation_services] = _FakeOperationServices
     client = TestClient(app)
