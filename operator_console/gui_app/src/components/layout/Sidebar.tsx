@@ -25,7 +25,7 @@ const mainNav = [
 const mediaNav = [
   { title: "Library", url: "/gallery", icon: Image },
   { title: "Duplicate Review", url: "/duplicates", icon: Copy },
-  { title: "Integrity", url: "/integrity", icon: ShieldAlert },
+  { title: "Integrity Checks", url: "/integrity", icon: ShieldAlert },
 ];
 
 const systemNav = [

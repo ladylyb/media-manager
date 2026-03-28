@@ -1099,6 +1099,7 @@ class _FakeReadServices:
             "absolute_path": "/dataset/problem.mp4",
             "status": "BROKEN",
             "confidence": 0.93,
+            "last_checked_at": "2026-03-25T09:00:00+00:00",
             "probe_status": "FAILED",
             "decode_status": "SKIPPED",
             "reviewed_decision": None,
@@ -2765,6 +2766,19 @@ def test_integrity_quarantine_items_endpoint_returns_rows() -> None:
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert response.json()["data"]["result"]["items"][0]["quarantine_status"] == "QUARANTINED"
+
+
+def test_integrity_file_endpoint_includes_last_checked_at() -> None:
+    app.dependency_overrides[get_read_services] = _FakeReadServices
+    client = TestClient(app)
+    try:
+        response = client.get("/api/integrity/file/99999999-0000-0000-0000-000000000001")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"]["last_checked_at"] == "2026-03-25T09:00:00+00:00"
 
 
 def test_integrity_quarantine_endpoint_executes() -> None:

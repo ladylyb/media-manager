@@ -1272,12 +1272,12 @@ export default function OperationsPage() {
                 Run Integrity Scan
               </Button>
               <Button asChild type="button" variant="outline">
-                <Link to="/integrity">Open Integrity Review</Link>
+                <Link to="/integrity">Open Integrity Checks</Link>
               </Button>
             </div>
             {integrityState.loading ? (
               <p className="text-sm font-medium text-foreground">
-                Integrity scan started. Review results will refresh in the Integrity workspace when it completes.
+                Integrity scan started. Results will refresh in Integrity Checks when it completes.
               </p>
             ) : null}
           </div>
@@ -1339,7 +1339,7 @@ export default function OperationsPage() {
                 <Link to="/duplicates">Open Duplicate Review</Link>
               </Button>
               <Button asChild type="button" variant="outline">
-                <Link to="/integrity">Open Integrity Review</Link>
+                <Link to="/integrity">Open Integrity Checks</Link>
               </Button>
               <Button
                 type="button"

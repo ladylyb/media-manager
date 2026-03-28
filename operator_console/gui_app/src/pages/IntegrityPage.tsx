@@ -65,6 +65,11 @@ function formatScanMode(mode: "FAST" | "DEEP") {
   return mode === "DEEP" ? "Deep" : "Quick";
 }
 
+function formatTimestamp(value: string | null | undefined) {
+  if (!value) return "Not available yet";
+  return new Date(value).toLocaleString();
+}
+
 function StatCard({
   title,
   value,
@@ -248,7 +253,7 @@ export default function IntegrityPage() {
           ...(scanFeedback.eligible_file_count != null
             ? [
                 {
-                  label: "Eligible files",
+                  label: "Files considered",
                   value: scanFeedback.eligible_file_count,
                 },
               ]
@@ -256,7 +261,7 @@ export default function IntegrityPage() {
           ...(scanFeedback.scanned_count != null
             ? [
                 {
-                  label: "Files scanned",
+                  label: "Files checked now",
                   value: scanFeedback.scanned_count,
                 },
               ]
@@ -264,7 +269,7 @@ export default function IntegrityPage() {
           ...(scanFeedback.skipped_count != null
             ? [
                 {
-                  label: "Files skipped",
+                  label: "Files skipped because unchanged",
                   value: scanFeedback.skipped_count,
                 },
               ]
@@ -272,7 +277,7 @@ export default function IntegrityPage() {
           ...(scanFeedback.issues_found != null
             ? [
                 {
-                  label: "Issues found",
+                  label: "Files with problems",
                   value: scanFeedback.issues_found,
                 },
               ]
@@ -283,17 +288,12 @@ export default function IntegrityPage() {
     scanFeedback?.phase === "completed"
       ? [
           scanFeedback.full_rescan
-            ? `${scanModeLabel} completed as a full rescan and refreshed the dashboard, review queue, and selected file detail.`
-            : `${scanModeLabel} completed incrementally and refreshed the dashboard, review queue, and selected file detail.`,
-          ...(scanFeedback.eligible_file_count === 0 ? ["No eligible active files were found."] : []),
+            ? `${scanModeLabel} finished as a full rescan. All files were checked again.`
+            : `${scanModeLabel} finished. Unchanged files were skipped.`,
+          "The results below have been refreshed.",
+          ...(scanFeedback.eligible_file_count === 0 ? ["No library files were ready to be checked right now."] : []),
           ...(scanFeedback.skipped_count && scanFeedback.skipped_count > 0
-            ? [`${scanFeedback.skipped_count} unchanged files kept their existing integrity facts.`]
-            : []),
-          ...(scanFeedback.eligible_file_count != null &&
-          scanFeedback.eligible_file_count > 0 &&
-          scanFeedback.scanned_count === 0 &&
-          (scanFeedback.skipped_count ?? 0) === scanFeedback.eligible_file_count
-            ? ["All eligible files were skipped because their existing scan facts were still sufficient."]
+            ? [`${scanFeedback.skipped_count} files kept their previous check results.`]
             : []),
         ]
       : scanFeedback?.phase === "failed"
@@ -307,7 +307,7 @@ export default function IntegrityPage() {
     <div className="space-y-6 p-6">
       <TopSurfaceHeader
         badge="Integrity"
-        title="Integrity Review"
+        title="Integrity Checks"
         description="Read-only scan results for playback and file-health issues."
       >
         <div className="flex flex-col items-end gap-2">
@@ -316,12 +316,12 @@ export default function IntegrityPage() {
               Saved default scan mode: {policy.integrity.default_scan_mode === "DEEP" ? "Deep" : "Quick"}
             </p>
           ) : null}
-          <p className="text-xs text-muted-foreground">
-            Quick Scan: readability and probe checks
-          </p>
-          <p className="text-xs text-muted-foreground">
-            Deep Scan: quick scan plus decode-level verification on eligible active files
-          </p>
+          <div className="space-y-1 text-xs text-muted-foreground">
+            <p>Quick Scan checks file readability and basic media structure.</p>
+            <p>Deep Scan adds a short playback-level check.</p>
+            <p>By default, unchanged files are skipped.</p>
+            <p>Full rescan checks everything again.</p>
+          </div>
           <div className="flex gap-2">
             <Button
               variant="outline"
@@ -452,7 +452,11 @@ export default function IntegrityPage() {
         <StatCard
           title="Files Scanned"
           value={dashboardQuery.data?.total_files_scanned ?? 0}
-          helper={dashboardQuery.data?.last_scan_at ? `Last scan ${new Date(dashboardQuery.data.last_scan_at).toLocaleString()}` : "No scan yet"}
+          helper={
+            dashboardQuery.data?.last_scan_at
+              ? `Last library scan run ${formatTimestamp(dashboardQuery.data.last_scan_at)}`
+              : "No library scan run yet"
+          }
         />
         <StatCard title="Playback Issues" value={dashboardQuery.data?.playback_issues ?? 0} helper="Broken and suspect files needing review." />
         <StatCard title="Broken" value={dashboardQuery.data?.broken_count ?? 0} helper="Highest confidence integrity failures." />
@@ -574,6 +578,19 @@ export default function IntegrityPage() {
                   <div className="rounded-xl bg-muted/50 p-3">
                     <p className="text-xs uppercase tracking-wide text-muted-foreground">Probe / Decode</p>
                     <p className="mt-1 text-sm font-medium">{detail.probe_status ?? "N/A"} / {detail.decode_status ?? "N/A"}</p>
+                  </div>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-xl bg-muted/50 p-3">
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Last checked for this file</p>
+                    <p className="mt-1 text-sm font-medium">{formatTimestamp(detail.last_checked_at)}</p>
+                  </div>
+                  <div className="rounded-xl bg-muted/50 p-3">
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Review recorded</p>
+                    <p className="mt-1 text-sm font-medium">
+                      {detail.reviewed_at ? formatTimestamp(detail.reviewed_at) : "No review recorded"}
+                    </p>
                   </div>
                 </div>
 

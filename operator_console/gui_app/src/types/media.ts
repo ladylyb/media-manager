@@ -110,6 +110,7 @@ export interface IntegrityIssue {
 }
 
 export interface IntegrityFileDetail extends IntegrityIssue {
+  last_checked_at: string;
   signals: Array<{
     signal_type: string;
     severity: string;

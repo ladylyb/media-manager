@@ -333,6 +333,7 @@ class IntegrityFileDetail:
     absolute_path: str
     status: str
     confidence: float
+    last_checked_at: str
     probe_status: str | None
     decode_status: str | None
     reviewed_decision: str | None
@@ -346,6 +347,7 @@ class IntegrityFileDetail:
             "absolute_path": self.absolute_path,
             "status": self.status,
             "confidence": self.confidence,
+            "last_checked_at": self.last_checked_at,
             "probe_status": self.probe_status,
             "decode_status": self.decode_status,
             "reviewed_decision": self.reviewed_decision,
@@ -1161,6 +1163,7 @@ class OperatorConsoleReadService:
             absolute_path=file_instance.absolute_path,
             status=check.status,
             confidence=round(float(check.confidence), 3),
+            last_checked_at=check.last_checked_at.isoformat(),
             probe_status=check.probe_status,
             decode_status=check.decode_status,
             reviewed_decision=review.decision if review is not None else None,
