@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Copy, ExternalLink, PanelLeft, PanelLeftClose, ShieldAlert } from "lucide-react";
+import { AlertTriangle, Copy, ExternalLink, LayoutGrid, List, PanelLeft, PanelLeftClose, ShieldAlert } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { ErrorAlert } from "@/components/ErrorAlert";
@@ -13,10 +13,12 @@ import { DuplicateReviewActionBar } from "@/components/duplicates/DuplicateRevie
 import { TopSurfaceHeader } from "@/components/layout/TopSurfaceHeader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   executeDuplicateReclaim,
   getDuplicateReclaimItems,
@@ -37,6 +39,7 @@ type ReviewFilter = "all" | "unreviewed" | ReviewMark;
 type DuplicatesTab = "review" | "removal" | "playback-issues";
 type ReclaimSyncStatus = "UNREVIEWED" | "REVIEWED_SAFE_TO_RECLAIM";
 type FeedbackTone = "success" | "warning";
+type RecycleBinViewMode = "gallery" | "list";
 
 interface MutationSummary {
   applied_count?: number;
@@ -187,11 +190,37 @@ function isPendingRemovalStatus(status: DuplicateGroup["reclaim_status"] | undef
   return status === "ARCHIVED" || status === "RESTORED" || status === "SCHEDULED_FOR_DELETE";
 }
 
+function getKeepCopy(group: DuplicateGroup): DuplicateFile | null {
+  return group.duplicates.find((file) => file.is_canonical) ?? group.duplicates[0] ?? null;
+}
+
+function getExtraCopies(group: DuplicateGroup): DuplicateFile[] {
+  return group.duplicates.filter((file) => !file.is_canonical);
+}
+
+function getGalleryActionSummary(groupCount: number, appliedCount: number) {
+  const groupLabel = `${groupCount} group${groupCount === 1 ? "" : "s"}`;
+  const fileLabel = `${appliedCount} duplicate file${appliedCount === 1 ? "" : "s"}`;
+  return `${fileLabel} moved from ${groupLabel} into the configured holding area. The keep copy stayed in place.`;
+}
+
+function getGalleryNoOpSummary(scope: "selected" | "all" | "single") {
+  if (scope === "selected") {
+    return "No new files were moved from the selected groups. Eligible duplicates were already processed or were no longer available to move.";
+  }
+  if (scope === "single") {
+    return "No new files were moved from this group. Its eligible duplicates were already processed or were no longer available to move.";
+  }
+  return "No new files were moved. Eligible duplicates were already processed or were no longer available to move.";
+}
+
 export default function DuplicatesPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedDuplicateId, setSelectedDuplicateId] = useState<string | null>(null);
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("unreviewed");
   const [isReviewQueueOpen, setIsReviewQueueOpen] = useState(false);
+  const [recycleBinViewMode, setRecycleBinViewMode] = useState<RecycleBinViewMode>("gallery");
+  const [selectedReadyGroupIds, setSelectedReadyGroupIds] = useState<string[]>([]);
   const [reclaimBridgeBlockedIds, setReclaimBridgeBlockedIds] = useState<string[]>([]);
   const [reclaimBridgeWarning, setReclaimBridgeWarning] = useState<string | null>(null);
   const [recycleBinFeedback, setRecycleBinFeedback] = useState<RecycleBinFeedback | null>(null);
@@ -362,6 +391,14 @@ export default function DuplicatesPage() {
   const reclaimItems = ((reclaimItemsQuery.data?.items ?? []) as DuplicateReclaimItem[]) ?? [];
   const archivedItems = reclaimItems.filter((item) => item.item_status === "ARCHIVED");
   const restoredItems = reclaimItems.filter((item) => item.item_status === "RESTORED");
+  const groupsById = useMemo(
+    () =>
+      sortedGroups.reduce<Record<string, DuplicateGroup>>((acc, group) => {
+        acc[group.group_id] = group;
+        return acc;
+      }, {}),
+    [sortedGroups],
+  );
   const readyGroups = sortedGroups.filter(
     (group) =>
       currentReviewMark(group) === "looks_right" &&
@@ -372,6 +409,7 @@ export default function DuplicatesPage() {
   const readyExtraCopyCount = readyGroups.reduce((sum, group) => sum + (group.reclaimable_file_count ?? 0), 0);
   const readyEstimatedBytes = readyGroups.reduce((sum, group) => sum + (group.estimated_reclaim_bytes ?? 0), 0);
   const readyGroupIds = new Set(readyGroups.map((group) => group.group_id));
+  const selectedReadyGroups = readyGroups.filter((group) => selectedReadyGroupIds.includes(group.group_id));
   const removalReviewGroups = sortedGroups.filter(
     (group) =>
       (group.reclaimable_file_count ?? 0) > 0 &&
@@ -427,6 +465,12 @@ export default function DuplicatesPage() {
     ? `${reviewProgressLabel} • ${selectedDuplicates.length === 1 ? "1 matching copy" : `${selectedDuplicates.length} matching copies`} • ${reviewedCount} reviewed`
     : `${reviewProgressLabel} • ${reviewedCount} reviewed`;
 
+  const readyGroupIdList = readyGroups.map((group) => group.group_id).join("|");
+
+  useEffect(() => {
+    setSelectedReadyGroupIds((current) => current.filter((groupId) => readyGroupIds.has(groupId)));
+  }, [readyGroupIdList]);
+
   function setActiveTab(nextTab: DuplicatesTab) {
     const nextParams = new URLSearchParams(searchParams);
     nextParams.set("tab", nextTab);
@@ -481,27 +525,48 @@ export default function DuplicatesPage() {
     return true;
   }
 
-  async function handleMoveEligibleDuplicates() {
+  function toggleReadyGroupSelection(groupId: string, checked?: boolean) {
+    setSelectedReadyGroupIds((current) => {
+      const next = new Set(current);
+      const shouldSelect = typeof checked === "boolean" ? checked : !next.has(groupId);
+      if (shouldSelect) {
+        next.add(groupId);
+      } else {
+        next.delete(groupId);
+      }
+      return [...next];
+    });
+  }
+
+  function clearReadyGroupSelection() {
+    setSelectedReadyGroupIds([]);
+  }
+
+  async function handleMoveEligibleDuplicates(groupsToMove: DuplicateGroup[] = readyGroups, scope: "selected" | "all" | "single" = "all") {
     setRecycleBinFeedback(null);
     if (recycleConfigWarning) {
       setRecycleBinFeedback({ tone: "warning", message: recycleConfigWarning });
       return;
     }
-    if (!readyGroups.length) {
+    if (!groupsToMove.length) {
       setRecycleBinFeedback({
         tone: "warning",
-        message: "No new files were moved. No eligible extra copies are left to move from the main library.",
+        message:
+          scope === "selected"
+            ? "Select one or more eligible groups to move their extra copies into the configured holding area."
+            : "No new files were moved. No eligible extra copies are left to move from the main library.",
       });
       return;
     }
 
-    const groupsNeedingSync = readyGroups.filter((group) => group.reclaim_status !== "REVIEWED_SAFE_TO_RECLAIM");
+    const targetGroupIds = new Set(groupsToMove.map((group) => group.group_id));
+    const groupsNeedingSync = groupsToMove.filter((group) => group.reclaim_status !== "REVIEWED_SAFE_TO_RECLAIM");
     const synced = await runPreflightReclaimSync(groupsNeedingSync);
     if (!synced) return;
 
     try {
       const result = await executeReclaimMutation.mutateAsync({
-        content_ids: readyGroups.map((group) => group.group_id),
+        content_ids: groupsToMove.map((group) => group.group_id),
         retention_days: archiveRetentionDays ?? 14,
       });
       const summary = getMutationSummary(result.data);
@@ -510,14 +575,16 @@ export default function DuplicatesPage() {
         applied > 0
           ? {
               tone: "success",
-              message: `${applied} duplicate file${applied === 1 ? "" : "s"} moved to the configured holding area. The keep copy stayed in place.`,
+              message: getGalleryActionSummary(groupsToMove.length, applied),
             }
           : {
               tone: "warning",
-              message:
-                "No new files were moved. Eligible duplicates were already processed or were no longer available to move.",
+              message: getGalleryNoOpSummary(scope),
             },
       );
+      if (applied > 0) {
+        setSelectedReadyGroupIds((current) => current.filter((groupId) => !targetGroupIds.has(groupId)));
+      }
     } catch {
       setRecycleBinFeedback({
         tone: "warning",
@@ -595,6 +662,226 @@ export default function DuplicatesPage() {
     if (nextSelectedId && nextSelectedId !== selected.group_id) {
       setSelectedId(nextSelectedId);
     }
+  }
+
+  function renderGalleryReadyCard(group: DuplicateGroup) {
+    const keepCopy = getKeepCopy(group);
+    const extraCopies = getExtraCopies(group);
+    if (!keepCopy) return null;
+    const isSelected = selectedReadyGroupIds.includes(group.group_id);
+
+    return (
+      <Card
+        key={group.group_id}
+        data-testid={`recycle-bin-gallery-card-${group.group_id}`}
+        className={cn(
+          "rounded-[24px] border-border/70 bg-card/95 shadow-sm transition-all",
+          isSelected && "border-primary/45 ring-2 ring-primary/15",
+        )}
+      >
+        <CardContent className="space-y-4 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 space-y-1">
+              <p className="truncate text-base font-semibold text-foreground">{basename(group.canonical_path)}</p>
+              <p className="text-sm text-muted-foreground">
+                {extraCopies.length === 1 ? "1 extra copy" : `${extraCopies.length} extra copies`} • {formatBytes(group.estimated_reclaim_bytes ?? 0)}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Checkbox
+                checked={isSelected}
+                aria-label={`Select group ${basename(group.canonical_path)}`}
+                onCheckedChange={(checked) => toggleReadyGroupSelection(group.group_id, Boolean(checked))}
+                onClick={(event) => event.stopPropagation()}
+              />
+              <span className="text-xs text-muted-foreground">{isSelected ? "Selected" : "Select"}</span>
+            </div>
+          </div>
+
+          <div
+            role="button"
+            tabIndex={0}
+            className="space-y-4 outline-none"
+            onClick={() => toggleReadyGroupSelection(group.group_id)}
+            onKeyDown={(event) => {
+              if (event.key === " " || event.key === "Enter") {
+                event.preventDefault();
+                toggleReadyGroupSelection(group.group_id);
+              }
+            }}
+          >
+            <div className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+              <div className="space-y-2">
+                <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Keep copy</p>
+                <DuplicateMediaPreview
+                  src={keepCopy.preview_url ?? (keepCopy.is_image ? keepCopy.media_url ?? keepCopy.thumbnail_url : null)}
+                  alt={basename(keepCopy.path)}
+                  isImage={keepCopy.is_image}
+                  mediaType={keepCopy.media_type}
+                  className="aspect-[4/3] sm:aspect-[16/10]"
+                  fit="cover"
+                />
+              </div>
+              <div className="space-y-2">
+                <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Extra copies</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {extraCopies.slice(0, 4).map((file) => (
+                    <DuplicateMediaPreview
+                      key={file.file_instance_id}
+                      src={file.preview_url ?? (file.is_image ? file.media_url ?? file.thumbnail_url : null)}
+                      alt={basename(file.path)}
+                      isImage={file.is_image}
+                      mediaType={file.media_type}
+                      className="aspect-square"
+                      fit="cover"
+                    />
+                  ))}
+                </div>
+                {extraCopies.length > 4 ? (
+                  <p className="text-xs text-muted-foreground">+{extraCopies.length - 4} more extra copies</p>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-3 border-t border-border/70 pt-3">
+            <p className="text-xs text-muted-foreground">Only the extra copies in this group move into the configured holding area.</p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void handleMoveEligibleDuplicates([group], "single")}
+              disabled={executeReclaimMutation.isPending || Boolean(recycleConfigWarning)}
+            >
+              Move this group
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  function renderGalleryReviewCard(group: DuplicateGroup) {
+    const keepCopy = getKeepCopy(group);
+    if (!keepCopy) return null;
+    const extraCopies = getExtraCopies(group);
+    const reviewLabel = getReviewPresentation(currentReviewMark(group), Boolean(group.is_stale)).label;
+
+    return (
+      <Card key={group.group_id} className="rounded-[24px] border-border/70 bg-card/95 shadow-sm">
+        <CardContent className="space-y-4 p-4">
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
+            <div className="space-y-2">
+              <p className="truncate text-base font-semibold text-foreground">{basename(group.canonical_path)}</p>
+              <p className="text-sm text-muted-foreground">
+                {reviewLabel}
+                {reclaimBridgeBlockedIds.includes(group.group_id) ? " • Eligibility sync needs attention" : ""}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {extraCopies.length === 1 ? "1 extra copy" : `${extraCopies.length} extra copies`} • {formatBytes(group.estimated_reclaim_bytes ?? 0)}
+              </p>
+            </div>
+            <DuplicateMediaPreview
+              src={keepCopy.preview_url ?? (keepCopy.is_image ? keepCopy.media_url ?? keepCopy.thumbnail_url : null)}
+              alt={basename(keepCopy.path)}
+              isImage={keepCopy.is_image}
+              mediaType={keepCopy.media_type}
+              className="aspect-[4/3]"
+              fit="cover"
+            />
+          </div>
+          {extraCopies.length ? (
+            <div className="space-y-2">
+              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Extra copies</p>
+              <div className="grid grid-cols-3 gap-2">
+                {extraCopies.slice(0, 3).map((file) => (
+                  <DuplicateMediaPreview
+                    key={file.file_instance_id}
+                    src={file.preview_url ?? (file.is_image ? file.media_url ?? file.thumbnail_url : null)}
+                    alt={basename(file.path)}
+                    isImage={file.is_image}
+                    mediaType={file.media_type}
+                    className="aspect-square"
+                    fit="cover"
+                  />
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  function renderGalleryHoldingCard(item: DuplicateReclaimItem) {
+    const group = groupsById[item.content_id];
+    const keepCopy = group ? getKeepCopy(group) : null;
+    const movedCopy =
+      group?.duplicates.find((file) => file.file_instance_id === item.file_instance_id) ??
+      group?.duplicates.find((file) => !file.is_canonical) ??
+      null;
+
+    return (
+      <Card key={item.file_instance_id} className="rounded-[24px] border-border/70 bg-card/95 shadow-sm">
+        <CardContent className="space-y-4 p-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0 space-y-1">
+              <p className="truncate text-base font-semibold text-foreground">{basename(item.original_path)}</p>
+              <p className="text-sm text-muted-foreground">
+                Restore is available here. Later retention recycle/purge still happens elsewhere.
+              </p>
+              {item.expires_at ? <p className="text-xs text-muted-foreground">{formatDaysRemaining(item.expires_at) ?? binStateLabels.daysRemaining}</p> : null}
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void handleRestore(item)}
+              disabled={restoreReclaimMutation.isPending}
+            >
+              Restore
+            </Button>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="space-y-2">
+              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Keep copy</p>
+              {keepCopy ? (
+                <DuplicateMediaPreview
+                  src={keepCopy.preview_url ?? (keepCopy.is_image ? keepCopy.media_url ?? keepCopy.thumbnail_url : null)}
+                  alt={basename(keepCopy.path)}
+                  isImage={keepCopy.is_image}
+                  mediaType={keepCopy.media_type}
+                  className="aspect-[4/3]"
+                  fit="cover"
+                />
+              ) : (
+                <div className="rounded-[24px] border border-border/70 bg-background/70 p-4 text-sm text-muted-foreground">
+                  Keep copy preview is not available for this item.
+                </div>
+              )}
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Extra copy in holding</p>
+              {movedCopy ? (
+                <DuplicateMediaPreview
+                  src={movedCopy.preview_url ?? (movedCopy.is_image ? movedCopy.media_url ?? movedCopy.thumbnail_url : null)}
+                  alt={basename(movedCopy.path)}
+                  isImage={movedCopy.is_image}
+                  mediaType={movedCopy.media_type}
+                  className="aspect-[4/3]"
+                  fit="cover"
+                />
+              ) : (
+                <div className="rounded-[24px] border border-border/70 bg-background/70 p-4 text-sm text-muted-foreground">
+                  Preview is not available for this held extra copy.
+                </div>
+              )}
+            </div>
+          </div>
+          <p className="truncate text-xs text-muted-foreground">{item.archive_path}</p>
+        </CardContent>
+      </Card>
+    );
   }
 
   useEffect(() => {
@@ -1034,6 +1321,37 @@ export default function DuplicatesPage() {
               </div>
 
               <Card className="rounded-[24px] border-border/70 bg-card/95 shadow-sm">
+                <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">View</p>
+                    <p className="text-sm text-muted-foreground">
+                      Gallery keeps the media visible. List keeps the same compact operational scan.
+                    </p>
+                  </div>
+                  <ToggleGroup
+                    type="single"
+                    value={recycleBinViewMode}
+                    onValueChange={(value) => {
+                      if (value === "gallery" || value === "list") setRecycleBinViewMode(value);
+                    }}
+                    variant="outline"
+                    size="sm"
+                    className="justify-start"
+                    data-testid="recycle-bin-view-toggle"
+                  >
+                    <ToggleGroupItem value="gallery" aria-label="Gallery view" data-testid="recycle-bin-view-gallery">
+                      <LayoutGrid className="h-4 w-4" />
+                      Gallery
+                    </ToggleGroupItem>
+                    <ToggleGroupItem value="list" aria-label="List view" data-testid="recycle-bin-view-list">
+                      <List className="h-4 w-4" />
+                      List
+                    </ToggleGroupItem>
+                  </ToggleGroup>
+                </CardContent>
+              </Card>
+
+              <Card className="rounded-[24px] border-border/70 bg-card/95 shadow-sm">
                 <CardContent className="space-y-4 p-4">
                   {recycleBinFeedback ? (
                     <div
@@ -1054,13 +1372,16 @@ export default function DuplicatesPage() {
                         Only groups marked “Looks right” can be moved from this page. The keep copy stays in place.
                       </p>
                     </div>
-                    <Button
-                      type="button"
-                      onClick={() => void handleMoveEligibleDuplicates()}
-                      disabled={executeReclaimMutation.isPending || readyGroups.length === 0 || Boolean(recycleConfigWarning)}
-                    >
-                      Move eligible duplicates
-                    </Button>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void handleMoveEligibleDuplicates(readyGroups, "all")}
+                        disabled={executeReclaimMutation.isPending || readyGroups.length === 0 || Boolean(recycleConfigWarning)}
+                      >
+                        Move all eligible groups
+                      </Button>
+                    </div>
                   </div>
                   <div className="rounded-[18px] border border-border/70 bg-background/70 px-4 py-3 text-sm text-muted-foreground">
                     <p>Only extra copies move from this page. They go into the configured duplicate holding area, and restore is supported from that stage.</p>
@@ -1076,30 +1397,87 @@ export default function DuplicatesPage() {
                     <p className="text-sm text-muted-foreground">No eligible extra copies are left to move from the main library.</p>
                   ) : null}
 
-                  {readyGroups.length ? (
-                    <div className="space-y-3">
-                      {readyGroups.map((group) => (
-                        <div
-                          key={group.group_id}
-                          className="flex flex-col gap-3 rounded-[22px] border border-border/70 bg-background/70 p-4 lg:flex-row lg:items-center lg:justify-between"
+                  {selectedReadyGroups.length ? (
+                    <div
+                      data-testid="recycle-bin-bulk-action-bar"
+                      className="flex flex-col gap-3 rounded-[20px] border border-primary/20 bg-primary/5 px-4 py-3 lg:flex-row lg:items-center lg:justify-between"
+                    >
+                      <div className="space-y-1">
+                        <p className="text-sm font-semibold text-foreground">
+                          {selectedReadyGroups.length} selected group{selectedReadyGroups.length === 1 ? "" : "s"}
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          Move only the extra copies from the selected groups into the configured holding area. Keep copies stay in place.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          onClick={() => void handleMoveEligibleDuplicates(selectedReadyGroups, "selected")}
+                          disabled={executeReclaimMutation.isPending || Boolean(recycleConfigWarning)}
                         >
-                          <div className="min-w-0 space-y-2">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <StatusBadge label={binStateLabels.ready} severity="success" />
-                              <StatusBadge
-                                label={`${group.reclaimable_file_count ?? 0} extra cop${(group.reclaimable_file_count ?? 0) === 1 ? "y" : "ies"}`}
-                                severity="neutral"
-                              />
-                              <StatusBadge label={formatBytes(group.estimated_reclaim_bytes ?? 0)} severity="info" />
-                            </div>
-                            <p className="truncate text-sm font-semibold text-foreground">{basename(group.canonical_path)}</p>
-                            <p className="text-xs text-muted-foreground">
-                              Review state: Looks right
-                            </p>
-                          </div>
-                        </div>
-                      ))}
+                          Move selected groups
+                        </Button>
+                        <Button type="button" variant="outline" onClick={clearReadyGroupSelection}>
+                          Clear selection
+                        </Button>
+                      </div>
                     </div>
+                  ) : null}
+
+                  {readyGroups.length ? (
+                    recycleBinViewMode === "gallery" ? (
+                      <div
+                        data-testid="recycle-bin-ready-gallery"
+                        className="grid gap-4 xl:grid-cols-2"
+                      >
+                        {readyGroups.map((group) => renderGalleryReadyCard(group))}
+                      </div>
+                    ) : (
+                      <div data-testid="recycle-bin-ready-list" className="space-y-3">
+                        {readyGroups.map((group) => {
+                          const isSelected = selectedReadyGroupIds.includes(group.group_id);
+                          return (
+                            <div
+                              key={group.group_id}
+                              className={cn(
+                                "flex flex-col gap-3 rounded-[22px] border border-border/70 bg-background/70 p-4 lg:flex-row lg:items-center lg:justify-between",
+                                isSelected && "border-primary/45 ring-2 ring-primary/15",
+                              )}
+                            >
+                              <div className="flex min-w-0 items-start gap-3">
+                                <Checkbox
+                                  checked={isSelected}
+                                  aria-label={`Select group ${basename(group.canonical_path)}`}
+                                  onCheckedChange={(checked) => toggleReadyGroupSelection(group.group_id, Boolean(checked))}
+                                />
+                                <div className="min-w-0 space-y-2">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <StatusBadge label={binStateLabels.ready} severity="success" />
+                                    <StatusBadge
+                                      label={`${group.reclaimable_file_count ?? 0} extra cop${(group.reclaimable_file_count ?? 0) === 1 ? "y" : "ies"}`}
+                                      severity="neutral"
+                                    />
+                                    <StatusBadge label={formatBytes(group.estimated_reclaim_bytes ?? 0)} severity="info" />
+                                  </div>
+                                  <p className="truncate text-sm font-semibold text-foreground">{basename(group.canonical_path)}</p>
+                                  <p className="text-xs text-muted-foreground">Review state: Looks right</p>
+                                </div>
+                              </div>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => void handleMoveEligibleDuplicates([group], "single")}
+                                disabled={executeReclaimMutation.isPending || Boolean(recycleConfigWarning)}
+                              >
+                                Move this group
+                              </Button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )
                   ) : null}
                 </CardContent>
               </Card>
@@ -1115,6 +1493,10 @@ export default function DuplicatesPage() {
 
                   {!removalReviewGroups.length ? (
                     <p className="text-sm text-muted-foreground">No additional duplicate groups are waiting for review.</p>
+                  ) : recycleBinViewMode === "gallery" ? (
+                    <div data-testid="recycle-bin-review-gallery" className="grid gap-4 xl:grid-cols-2">
+                      {removalReviewGroups.map((group) => renderGalleryReviewCard(group))}
+                    </div>
                   ) : (
                     <div className="space-y-3">
                       {removalReviewGroups.map((group) => (
@@ -1157,6 +1539,10 @@ export default function DuplicatesPage() {
 
                   {!archivedItems.length ? (
                     <p className="text-sm text-muted-foreground">No duplicate files are in the holding area right now.</p>
+                  ) : recycleBinViewMode === "gallery" ? (
+                    <div data-testid="recycle-bin-holding-gallery" className="grid gap-4 xl:grid-cols-2">
+                      {archivedItems.map((item) => renderGalleryHoldingCard(item))}
+                    </div>
                   ) : (
                     <div className="space-y-3">
                       {archivedItems.map((item) => (

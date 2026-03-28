@@ -322,12 +322,89 @@ describe("DuplicatesPage", () => {
 
     expect(await screen.findByRole("heading", { name: "Recycle Bin" })).toBeInTheDocument();
     expect(screen.getAllByText("Ready to move").length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "Move eligible duplicates" })).toBeInTheDocument();
+    expect(screen.getByTestId("recycle-bin-view-gallery")).toBeInTheDocument();
+    expect(screen.getByTestId("recycle-bin-ready-gallery")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Move all eligible groups" })).toBeInTheDocument();
     expect(
       screen.getByText(
         "Move eligible extra copies into the configured duplicate holding area, restore them if needed, and keep later retention steps separate.",
       ),
     ).toBeInTheDocument();
+  });
+
+  it("defaults the Recycle Bin to Gallery and toggles the full tab to List", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        review_status: "looks_right",
+      },
+      buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
+    ];
+    reclaimItemsData = [
+      {
+        file_instance_id: "archived-1",
+        content_id: "group-beta",
+        original_path: "/library/beta-copy.jpg",
+        archive_path: "/archive/beta-copy.jpg",
+        item_status: "ARCHIVED",
+        expires_at: "2026-04-10T10:00:00+00:00",
+      },
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+
+    renderPage("/duplicates?tab=removal");
+
+    expect(await screen.findByTestId("recycle-bin-ready-gallery")).toBeInTheDocument();
+    expect(screen.getByTestId("recycle-bin-review-gallery")).toBeInTheDocument();
+    expect(screen.getByTestId("recycle-bin-holding-gallery")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("recycle-bin-view-list"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("recycle-bin-ready-gallery")).not.toBeInTheDocument();
+      expect(screen.getByTestId("recycle-bin-ready-list")).toBeInTheDocument();
+      expect(screen.queryByTestId("recycle-bin-review-gallery")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("recycle-bin-holding-gallery")).not.toBeInTheDocument();
+    });
+  });
+
+  it("supports group-level multi-select in Gallery and moves only the selected groups", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        review_status: "looks_right",
+      },
+      {
+        ...buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
+        review_status: "looks_right",
+      },
+      buildGroup("group-gamma", "gamma-main.jpg", ["gamma-copy.jpg"]),
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+    mocks.executeDuplicateReclaim.mockResolvedValue({
+      data: { summary: { applied_count: 2, skipped_count: 0, moves_count: 2 } },
+    });
+
+    renderPage("/duplicates?tab=removal");
+
+    expect(await screen.findByTestId("recycle-bin-gallery-card-group-alpha")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Select group alpha-main.jpg"));
+    fireEvent.click(screen.getByLabelText("Select group beta-main.jpg"));
+
+    expect(screen.getByTestId("recycle-bin-bulk-action-bar")).toBeInTheDocument();
+    expect(screen.getByText("2 selected groups")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Move selected groups" }));
+
+    await waitFor(() => {
+      expect(mocks.executeDuplicateReclaim).toHaveBeenCalledWith({
+        content_ids: ["group-alpha", "group-beta"],
+        retention_days: 21,
+      });
+      expect(
+        screen.getByText("2 duplicate files moved from 2 groups into the configured holding area. The keep copy stayed in place."),
+      ).toBeInTheDocument();
+    });
   });
 
   it("uses Looks right groups as the only move-eligible groups and shows move and restore feedback", async () => {
@@ -400,7 +477,7 @@ describe("DuplicatesPage", () => {
     expect(screen.getByText("alpha-main.jpg")).toBeInTheDocument();
     expect(screen.getByText("beta-main.jpg")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Move eligible duplicates" }));
+    fireEvent.click(screen.getByRole("button", { name: "Move all eligible groups" }));
 
     await waitFor(() => {
       expect(mocks.setDuplicateReclaim).toHaveBeenCalledWith({
@@ -412,7 +489,7 @@ describe("DuplicatesPage", () => {
         retention_days: 21,
       });
       expect(
-        screen.getByText("1 duplicate file moved to the configured holding area. The keep copy stayed in place."),
+        screen.getByText("1 duplicate file moved from 1 group into the configured holding area. The keep copy stayed in place."),
       ).toBeInTheDocument();
     });
 
@@ -449,7 +526,7 @@ describe("DuplicatesPage", () => {
 
     renderPage("/duplicates?tab=removal");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Move eligible duplicates" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Move all eligible groups" }));
 
     await waitFor(() => {
       expect(mocks.setDuplicateReclaim).toHaveBeenCalledWith({
@@ -480,7 +557,7 @@ describe("DuplicatesPage", () => {
 
     renderPage("/duplicates?tab=removal");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Move eligible duplicates" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Move all eligible groups" }));
 
     await waitFor(() => {
       expect(mocks.executeDuplicateReclaim).toHaveBeenCalledWith({
@@ -505,7 +582,7 @@ describe("DuplicatesPage", () => {
         "Recycle Bin details are unavailable right now. The app cannot confirm the configured holding area or retention window for this page.",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Move eligible duplicates" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Move all eligible groups" })).toBeDisabled();
     expect(screen.queryByText(/Holding area:/)).not.toBeInTheDocument();
   });
 
