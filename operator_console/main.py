@@ -21,6 +21,7 @@ from media_manager.app.core.logging_buffer import get_buffered_logs
 from media_manager.app.core.logging_config import get_logger
 from media_manager.app.observability import mount_metrics_endpoint
 from media_manager.app.persistence.base import create_db_engine, create_session_factory
+from media_manager.app.persistence.operation_runs import OperationRunService
 from media_manager.app.persistence.operator_console import OperatorConsoleReadService
 from media_manager.app.persistence.models import TagSource
 from media_manager.app.service_layer import (
@@ -178,6 +179,12 @@ class DiscoveryBenchmarkPayload(BaseModel):
 
     items: int = 1000
     challenge_word: str | None = None
+
+
+class StaleOperationRunReconcilePayload(BaseModel):
+    """Payload for stale operation run reconciliation."""
+
+    include_current_day: bool = False
 
 
 class IngestPayload(BaseModel):
@@ -579,6 +586,26 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Media Manager Operator Console")
     app.mount("/static-v2", StaticFiles(directory=str(console_static_dir), check_dir=False), name="static-v2")
     mount_metrics_endpoint(app)
+
+    @app.on_event("startup")
+    async def _reconcile_stale_operation_runs_on_startup() -> None:
+        try:
+            result = OperationRunService(get_service_session_factory()).reconcile_stale_started_runs(
+                include_current_day=False,
+            )
+            LOGGER.info(
+                "Startup stale operation run reconciliation completed",
+                extra={
+                    "phase": "operator_console",
+                    "action": "startup_reconcile_stale_operation_runs",
+                    "cutoff": result.cutoff,
+                    "scanned_count": result.scanned_count,
+                    "updated_count": result.updated_count,
+                    "include_current_day": False,
+                },
+            )
+        except Exception:
+            LOGGER.exception("Startup stale operation run reconciliation failed")
 
     @app.exception_handler(HTTPException)
     async def _handle_http_exception(request: Request, exc: HTTPException) -> Response:
@@ -1385,6 +1412,16 @@ def create_app() -> FastAPI:
         return _execute_mutation(
             "db-reset",
             lambda: services.db_reset(dry_run=bool(payload.dry_run), challenge_word=payload.challenge_word),
+        )
+
+    @app.post("/api/admin/operation-runs/reconcile-stale")
+    def post_admin_reconcile_stale_operation_runs(
+        payload: StaleOperationRunReconcilePayload,
+        services: AdminServices = Depends(get_admin_services),
+    ) -> JSONResponse:
+        return _execute_mutation(
+            "admin-operation-runs-reconcile-stale",
+            lambda: services.reconcile_stale_operation_runs(include_current_day=payload.include_current_day),
         )
 
     @app.post("/api/admin/benchmarks/metadata")

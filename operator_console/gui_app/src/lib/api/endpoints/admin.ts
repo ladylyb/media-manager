@@ -7,6 +7,7 @@ import type {
   DbResetPreview,
   DbResetResult,
   ObservabilityMetricsSeries,
+  OperationRunReconcileResult,
   ObservabilitySummary,
 } from "@/types";
 
@@ -46,6 +47,11 @@ export const getAdminObservabilityMetricsSeries = async (params?: { hours?: numb
     "/admin/observability/metrics-series",
     params as Record<string, string | number>,
   );
+
+export const reconcileStaleOperationRuns = async (params?: { include_current_day?: boolean }) =>
+  apiPost<OperationRunReconcileResult>("/admin/operation-runs/reconcile-stale", {
+    include_current_day: Boolean(params?.include_current_day),
+  });
 
 export const queueMetadataBenchmark = async (params: {
   items: number;

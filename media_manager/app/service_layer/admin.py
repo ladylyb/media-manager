@@ -186,6 +186,21 @@ class AdminServices:
     def benchmark_runs(self, *, limit: int = 50) -> list[dict[str, object]]:
         return [item.to_dict() for item in self._benchmark_runs().list_history(limit=limit)]
 
+    def reconcile_stale_operation_runs(self, *, include_current_day: bool = False) -> dict[str, object]:
+        result = self._op_runs().reconcile_stale_started_runs(include_current_day=include_current_day)
+        LOGGER.info(
+            "Manual stale operation run reconciliation completed",
+            extra={
+                "phase": "admin",
+                "action": "reconcile_stale_operation_runs",
+                "cutoff": result.cutoff,
+                "scanned_count": result.scanned_count,
+                "updated_count": result.updated_count,
+                "include_current_day": include_current_day,
+            },
+        )
+        return result.to_dict()
+
     def benchmark_run_detail(self, *, operation_run_id: str) -> dict[str, object]:
         parsed = self._parse_operation_run_id(operation_run_id)
         snapshot = self._benchmark_runs().get(parsed)

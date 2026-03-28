@@ -80,6 +80,7 @@ def test_canonical_api_route_inventory_and_v1_removal() -> None:
         "/api/media-file/validate",
         "/api/admin/hash-audit",
         "/api/admin/db-reset",
+        "/api/admin/operation-runs/reconcile-stale",
         "/api/admin/observability/summary",
         "/api/admin/observability/operation-runs",
         "/api/admin/observability/failures",
@@ -1730,6 +1731,14 @@ class _FakeAdminServices:
             "message": "Dry-run only. No data deleted." if dry_run else "Database reset completed.",
         }
 
+    def reconcile_stale_operation_runs(self, *, include_current_day: bool = False) -> dict[str, object]:
+        return {
+            "cutoff": "2026-03-14T00:00:00+00:00" if not include_current_day else "2026-03-14T10:30:00+00:00",
+            "scanned_count": 3 if not include_current_day else 5,
+            "updated_count": 2 if not include_current_day else 4,
+            "include_current_day": include_current_day,
+        }
+
     def benchmark_metadata_queue(self, *, items: int, batch_size: int, challenge_word: str | None) -> dict[str, object]:
         if challenge_word != "media-manager":
             raise ValueError("challenge_word is incorrect.")
@@ -3373,6 +3382,19 @@ def test_post_db_reset_env_forbidden_returns_403() -> None:
     assert payload["errors"][0]["code"] == "FORBIDDEN_ENV"
 
 
+def test_post_admin_reconcile_stale_operation_runs_returns_envelope() -> None:
+    app.dependency_overrides[get_admin_services] = _FakeAdminServices
+    client = TestClient(app)
+    try:
+        response = client.post("/api/admin/operation-runs/reconcile-stale", json={"include_current_day": True})
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 200
+    payload = response.json()["data"]["result"]
+    assert payload["include_current_day"] is True
+    assert payload["updated_count"] == 4
+
+
 def test_admin_observability_summary_returns_envelope() -> None:
     app.dependency_overrides[get_read_services] = _FakeReadServices
     client = TestClient(app)
@@ -3434,6 +3456,54 @@ def test_admin_benchmark_queue_and_reads_use_envelope() -> None:
     assert detail.json()["data"]["result"]["summary_payload"]["throughput_files_per_s"] == 1000.0
     assert cancel.status_code == 200
     assert cancel.json()["data"]["result"]["status"] == "CANCEL_REQUESTED"
+
+
+def test_create_app_startup_reconciles_stale_operation_runs(monkeypatch, tmp_path: Path) -> None:
+    dist_dir = _create_console_build(tmp_path)
+    monkeypatch.setattr(main_module, "_resolve_console_static_dir", lambda _package_root: dist_dir)
+    captured: dict[str, object] = {}
+
+    class _Result:
+        cutoff = "2026-03-14T00:00:00+00:00"
+        scanned_count = 2
+        updated_count = 1
+
+    class _FakeOperationRunService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def reconcile_stale_started_runs(self, *, include_current_day: bool = False):  # type: ignore[no-untyped-def]
+            captured["include_current_day"] = include_current_day
+            return _Result()
+
+    monkeypatch.setattr(main_module, "OperationRunService", _FakeOperationRunService)
+    monkeypatch.setattr(main_module, "get_service_session_factory", lambda: object())
+
+    with TestClient(create_app()):
+        pass
+
+    assert captured == {"include_current_day": False}
+
+
+def test_create_app_startup_reconcile_failure_does_not_abort(monkeypatch, tmp_path: Path) -> None:
+    dist_dir = _create_console_build(tmp_path)
+    monkeypatch.setattr(main_module, "_resolve_console_static_dir", lambda _package_root: dist_dir)
+
+    class _FailingOperationRunService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def reconcile_stale_started_runs(self, *, include_current_day: bool = False):  # type: ignore[no-untyped-def]
+            _ = include_current_day
+            raise RuntimeError("startup cleanup exploded")
+
+    monkeypatch.setattr(main_module, "OperationRunService", _FailingOperationRunService)
+    monkeypatch.setattr(main_module, "get_service_session_factory", lambda: object())
+
+    with TestClient(create_app()) as client:
+        response = client.get("/")
+
+    assert response.status_code == 200
 
 
 def test_main_entrypoint_starts_uvicorn(monkeypatch) -> None:

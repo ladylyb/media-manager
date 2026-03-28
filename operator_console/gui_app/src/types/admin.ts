@@ -57,6 +57,13 @@ export interface ObservabilityMetricsSeries {
   };
 }
 
+export interface OperationRunReconcileResult {
+  cutoff: string;
+  scanned_count: number;
+  updated_count: number;
+  include_current_day: boolean;
+}
+
 export interface BenchmarkRun {
   benchmark_run_id: string;
   operation_run_id: string;

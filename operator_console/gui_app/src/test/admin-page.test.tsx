@@ -5,6 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import AdminPage from "@/pages/AdminPage";
 
+class MockResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
 const mocks = vi.hoisted(() => ({
   adminDbReset: vi.fn(),
   cancelBenchmarkRun: vi.fn(),
@@ -26,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   invalidateReadsAfterPolicyUpdate: vi.fn(),
   queueDiscoveryBenchmark: vi.fn(),
   queueMetadataBenchmark: vi.fn(),
+  reconcileStaleOperationRuns: vi.fn(),
   updatePolicy: vi.fn(),
 }));
 
@@ -50,6 +57,7 @@ vi.mock("@/lib/api/endpoints", () => ({
   invalidateReadsAfterPolicyUpdate: mocks.invalidateReadsAfterPolicyUpdate,
   queueDiscoveryBenchmark: mocks.queueDiscoveryBenchmark,
   queueMetadataBenchmark: mocks.queueMetadataBenchmark,
+  reconcileStaleOperationRuns: mocks.reconcileStaleOperationRuns,
   updatePolicy: mocks.updatePolicy,
 }));
 
@@ -89,8 +97,27 @@ function renderLibraryRulesPage() {
   );
 }
 
+function renderSystemHealthPage() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+
+  return render(
+    <MemoryRouter initialEntries={["/admin?tab=system-health"]}>
+      <QueryClientProvider client={queryClient}>
+        <AdminPage />
+      </QueryClientProvider>
+    </MemoryRouter>,
+  );
+}
+
 describe("Admin page", () => {
   beforeEach(() => {
+    vi.stubGlobal("ResizeObserver", MockResizeObserver);
     vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
       json: async () => [],
@@ -154,10 +181,70 @@ describe("Admin page", () => {
         },
       },
     });
+    mocks.getAdminObservabilitySummary.mockResolvedValue({
+      data: {
+        metrics_enabled: true,
+        prometheus_url: null,
+        grafana_url: null,
+        generated_at: "2026-03-20T10:00:00Z",
+        window_hours: 24,
+        recent_failure_count: 2,
+        recent_runs_by_status: { COMPLETED: 8, FAILED: 2, STARTED: 1 },
+        recent_runs_by_type: { PLAN: 4 },
+        last_success_by_type: { PLAN: "2026-03-20T09:00:00Z" },
+        latest_metrics: {
+          apply_time_ms: 88.5,
+          cache_hit_rate: 91.2,
+          ingest_time_ms: 12,
+          canonicalize_time_ms: 10,
+          tag_time_ms: 9,
+        },
+      },
+    });
+    mocks.getAdminObservabilityOperationRuns.mockResolvedValue({
+      data: [
+        {
+          operation_run_id: "run-1",
+          operation_type: "PLAN",
+          status: "STARTED",
+          started_at: "2026-03-15T10:00:00Z",
+          completed_at: null,
+          duration_ms: null,
+          linked_run_id: null,
+          context: {},
+          error_message: null,
+        },
+      ],
+    });
+    mocks.getAdminObservabilityFailures.mockResolvedValue({
+      data: {
+        failure_events: [],
+        failed_operation_runs: [],
+      },
+    });
+    mocks.getAdminObservabilityMetricsSeries.mockResolvedValue({
+      data: {
+        hours: 24,
+        series: {
+          operation_volume: [{ timestamp: "2026-03-20T09:00:00Z", value: 4 }],
+          failure_volume: [{ timestamp: "2026-03-20T09:00:00Z", value: 1 }],
+          latency_ms_avg: [{ timestamp: "2026-03-20T09:00:00Z", value: 88.5 }],
+        },
+      },
+    });
+    mocks.reconcileStaleOperationRuns.mockResolvedValue({
+      data: {
+        cutoff: "2026-03-20T00:00:00+00:00",
+        scanned_count: 3,
+        updated_count: 2,
+        include_current_day: false,
+      },
+    });
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("renders the live progress panel in the activity detail rail", async () => {
@@ -248,5 +335,47 @@ describe("Admin page", () => {
         version: 3,
       }),
     );
+  });
+
+  it("renders stale operation run reconciliation controls on system health", async () => {
+    renderSystemHealthPage();
+
+    expect(await screen.findByText("Reconcile stale operation runs")).toBeInTheDocument();
+    expect(screen.getByLabelText("Include today's STARTED runs")).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Reconcile Stale Runs" })).toBeInTheDocument();
+  });
+
+  it("runs stale operation reconciliation without current-day override by default", async () => {
+    renderSystemHealthPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Reconcile Stale Runs" }));
+
+    await waitFor(() =>
+      expect(mocks.reconcileStaleOperationRuns).toHaveBeenCalledWith({ include_current_day: false }),
+    );
+    expect(await screen.findByText(/Scanned: 3/)).toBeInTheDocument();
+    expect(screen.getByText(/Updated: 2/)).toBeInTheDocument();
+    expect(screen.getByText(/Included today: No/)).toBeInTheDocument();
+  });
+
+  it("passes the current-day override when selected", async () => {
+    mocks.reconcileStaleOperationRuns.mockResolvedValueOnce({
+      data: {
+        cutoff: "2026-03-20T10:30:00+00:00",
+        scanned_count: 5,
+        updated_count: 4,
+        include_current_day: true,
+      },
+    });
+
+    renderSystemHealthPage();
+
+    fireEvent.click(await screen.findByLabelText("Include today's STARTED runs"));
+    fireEvent.click(screen.getByRole("button", { name: "Reconcile Stale Runs" }));
+
+    await waitFor(() =>
+      expect(mocks.reconcileStaleOperationRuns).toHaveBeenCalledWith({ include_current_day: true }),
+    );
+    expect(await screen.findByText(/Included today: Yes/)).toBeInTheDocument();
   });
 });
