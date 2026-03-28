@@ -157,7 +157,7 @@ describe("DuplicatesPage", () => {
     vi.clearAllMocks();
   });
 
-  it("defaults to the review tab with comparison content dominant and no reclaim actions", async () => {
+  it("defaults to the review tab with comparison content dominant and no Recycle Bin actions", async () => {
     renderPage();
 
     expect(await screen.findByRole("heading", { name: "Review duplicates" })).toBeInTheDocument();
@@ -284,7 +284,7 @@ describe("DuplicatesPage", () => {
     expect(within(navigation).queryByRole("img")).toBeNull();
   });
 
-  it("keeps deep-link tab navigation on the removal review tab", async () => {
+  it("keeps deep-link tab navigation on the Recycle Bin tab", async () => {
     groupsData = [
       {
         ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
@@ -298,6 +298,7 @@ describe("DuplicatesPage", () => {
     expect(await screen.findByRole("heading", { name: "Recycle Bin" })).toBeInTheDocument();
     expect(screen.getAllByText("Ready to move to bin").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Move ready duplicates to bin" })).toBeInTheDocument();
+    expect(screen.getByText("Move safe extra copies out of the main library, restore them if needed, and keep track of the retention window.")).toBeInTheDocument();
   });
 
   it("keeps recycle-bin actions in distinct operator-facing sections", async () => {
@@ -327,7 +328,8 @@ describe("DuplicatesPage", () => {
     renderPage("/duplicates?tab=removal");
 
     expect(await screen.findByText("Needs review before moving to bin")).toBeInTheDocument();
-    expect(screen.getByText("In the bin")).toBeInTheDocument();
+    expect(screen.getAllByText("In the bin").length).toBeGreaterThan(0);
+    expect(screen.getByText("Items in the bin can be restored before they are permanently deleted.")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Mark safe to remove" }));
 

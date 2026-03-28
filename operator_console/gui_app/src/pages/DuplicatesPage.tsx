@@ -47,7 +47,8 @@ const reviewOptions: Array<{ value: ReviewFilter; label: string }> = [
 const binStateLabels = {
   ready: "Ready to move to bin",
   inBin: "In the bin",
-  needsReview: "Safe to remove",
+  needsReview: "Needs review",
+  safeToRemove: "Safe to remove",
   restore: "Restore",
   moveToBin: "Move ready duplicates to bin",
   daysRemaining: "Days remaining",
@@ -314,8 +315,6 @@ export default function DuplicatesPage() {
   const selectedIndex = selected ? filteredGroups.findIndex((group) => group.group_id === selected.group_id) : -1;
   const selectedOverallIndex = selected ? sortedGroups.findIndex((group) => group.group_id === selected.group_id) : -1;
   const reviewedCount = sortedGroups.filter((group) => currentReviewMark(group)).length;
-  const totalReclaimableFiles = sortedGroups.reduce((sum, group) => sum + (group.reclaimable_file_count ?? 0), 0);
-  const totalEstimatedBytes = sortedGroups.reduce((sum, group) => sum + (group.estimated_reclaim_bytes ?? 0), 0);
   const selectedCanonical = selected?.duplicates.find((file) => file.is_canonical) ?? null;
   const selectedDuplicates = useMemo(
     () => selected?.duplicates.filter((file) => !file.is_canonical) ?? [],
@@ -337,6 +336,8 @@ export default function DuplicatesPage() {
   const reclaimItems = ((reclaimItemsQuery.data?.items ?? []) as DuplicateReclaimItem[]) ?? [];
   const archivedItems = reclaimItems.filter((item) => item.item_status === "ARCHIVED");
   const readyGroups = sortedGroups.filter((group) => group.reclaim_status === "REVIEWED_SAFE_TO_RECLAIM");
+  const readyExtraCopyCount = readyGroups.reduce((sum, group) => sum + (group.reclaimable_file_count ?? 0), 0);
+  const readyEstimatedBytes = readyGroups.reduce((sum, group) => sum + (group.estimated_reclaim_bytes ?? 0), 0);
   const removalReviewGroups = sortedGroups.filter(
     (group) =>
       (group.reclaimable_file_count ?? 0) > 0 &&
@@ -464,7 +465,7 @@ export default function DuplicatesPage() {
       className={cn(
         "mx-auto flex flex-col",
         activeTab === "review"
-          ? "max-w-[96rem] gap-3 px-4 py-4 lg:px-5"
+          ? "max-w-[120rem] gap-3 px-2 py-3 sm:px-2.5 lg:px-3"
           : "max-w-7xl gap-5 p-6",
       )}
     >
@@ -475,6 +476,7 @@ export default function DuplicatesPage() {
         icon={Copy}
         density={activeTab === "review" ? "compact" : "default"}
         className={activeTab === "review" ? "rounded-[24px]" : undefined}
+        contentClassName={activeTab === "review" ? "px-4 py-3 sm:px-4 lg:px-5 lg:py-4" : undefined}
       />
 
       {duplicatesQuery.error && (
@@ -510,7 +512,7 @@ export default function DuplicatesPage() {
       ) : (
         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as DuplicatesTab)} className="space-y-4">
           <Card className={cn("rounded-[24px] border-border/70 bg-card/95 shadow-sm", activeTab === "review" && "shadow-none")}>
-            <CardContent className={cn("space-y-4 p-4", activeTab === "review" && "space-y-3 p-3")}>
+            <CardContent className={cn("space-y-4 p-4", activeTab === "review" && "space-y-3 p-2.5 sm:p-3")}>
               <TabsList className="flex h-auto w-full flex-wrap justify-start gap-2 rounded-[18px] bg-muted/60 p-1">
                 <TabsTrigger value="review">Review duplicates</TabsTrigger>
                 <TabsTrigger value="removal">Recycle Bin</TabsTrigger>
@@ -618,7 +620,7 @@ export default function DuplicatesPage() {
                 )}
 
                 <Card className="rounded-[26px] border-border/70 bg-card/95 shadow-sm">
-                  <CardContent className="space-y-4 p-3 sm:p-4">
+                  <CardContent className="space-y-4 p-2.5 sm:p-3">
                     {selected && selectedCanonical ? (
                       <>
                         <div className="space-y-3">
@@ -667,7 +669,7 @@ export default function DuplicatesPage() {
                           ) : null}
                         </div>
 
-                        <div className="grid gap-3 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1.1fr)]">
+                        <div className="grid gap-2.5 xl:grid-cols-[minmax(0,1.65fr)_minmax(0,1.05fr)]">
                           <DuplicateFocusCard
                             badge="Keep copy"
                             description="Use this copy as the point of comparison for the current review."
@@ -836,13 +838,15 @@ export default function DuplicatesPage() {
                   <CardContent className="space-y-1 p-4">
                     <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Ready to move to bin</p>
                     <p className="text-2xl font-semibold text-foreground">{readyGroups.length}</p>
-                    <p className="text-sm text-muted-foreground">{totalReclaimableFiles} extra copies are currently marked safe to remove.</p>
+                    <p className="text-sm text-muted-foreground">
+                      {readyExtraCopyCount} extra copies are currently marked {binStateLabels.safeToRemove.toLowerCase()}.
+                    </p>
                   </CardContent>
                 </Card>
                 <Card className="rounded-[22px] border-border/70 bg-card/95 shadow-sm">
                   <CardContent className="space-y-1 p-4">
                     <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Space you could free up</p>
-                    <p className="text-2xl font-semibold text-foreground">{formatBytes(totalEstimatedBytes)}</p>
+                    <p className="text-2xl font-semibold text-foreground">{formatBytes(readyEstimatedBytes)}</p>
                     <p className="text-sm text-muted-foreground">Estimated space if the ready extra copies move out of the main library.</p>
                   </CardContent>
                 </Card>
@@ -1045,11 +1049,11 @@ export default function DuplicatesPage() {
                   <div className="flex flex-wrap gap-2">
                     <StatusBadge label={`${duplicatePlaybackGroups.length} group${duplicatePlaybackGroups.length === 1 ? "" : "s"} with playback issues`} severity="neutral" />
                     <StatusBadge
-                      label={`${duplicatePlaybackGroups.filter((entry) => entry.brokenCount > 0).length} won't play${duplicatePlaybackGroups.filter((entry) => entry.brokenCount > 0).length === 1 ? "" : " items"}`}
+                      label={`${duplicatePlaybackGroups.filter((entry) => entry.brokenCount > 0).length} item${duplicatePlaybackGroups.filter((entry) => entry.brokenCount > 0).length === 1 ? "" : "s"} won't play`}
                       severity="destructive"
                     />
                     <StatusBadge
-                      label={`${duplicatePlaybackGroups.filter((entry) => entry.brokenCount === 0 && entry.suspectCount > 0).length} need checking${duplicatePlaybackGroups.filter((entry) => entry.brokenCount === 0 && entry.suspectCount > 0).length === 1 ? "" : " items"}`}
+                      label={`${duplicatePlaybackGroups.filter((entry) => entry.brokenCount === 0 && entry.suspectCount > 0).length} item${duplicatePlaybackGroups.filter((entry) => entry.brokenCount === 0 && entry.suspectCount > 0).length === 1 ? "" : "s"} need checking`}
                       severity="caution"
                     />
                   </div>
@@ -1079,7 +1083,12 @@ export default function DuplicatesPage() {
                                   severity={hasBlockingCue ? "destructive" : "caution"}
                                 />
                                 {brokenCount > 0 ? <StatusBadge label={`${brokenCount} ${binStateLabels.wontPlay.toLowerCase()}`} severity="destructive" /> : null}
-                                {suspectCount > 0 ? <StatusBadge label={`${suspectCount} ${binStateLabels.needsChecking.toLowerCase()}`} severity="caution" /> : null}
+                                {suspectCount > 0 ? (
+                                  <StatusBadge
+                                    label={`${suspectCount} item${suspectCount === 1 ? "" : "s"} ${binStateLabels.needsChecking.toLowerCase()}`}
+                                    severity="caution"
+                                  />
+                                ) : null}
                               </div>
                               <p className="truncate text-lg font-semibold text-foreground">{basename(group.canonical_path)}</p>
                               <p className="text-sm text-muted-foreground">

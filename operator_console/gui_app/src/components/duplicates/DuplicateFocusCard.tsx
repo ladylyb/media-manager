@@ -49,7 +49,7 @@ export function DuplicateFocusCard({
         } ${className ?? ""}`
       }
     >
-      <CardContent className="space-y-3 p-3">
+      <CardContent className="space-y-2.5 p-2.5">
         <DuplicateMediaPreview
           src={previewSrc}
           alt={basename(file.path)}
