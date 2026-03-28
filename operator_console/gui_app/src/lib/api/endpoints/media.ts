@@ -119,10 +119,12 @@ export const getIntegrityFile = async (checkId: string) => {
 export const startIntegrityScan = async (payload?: {
   mode?: "FAST" | "DEEP";
   file_instance_ids?: string[];
+  full_rescan?: boolean;
 }) => {
   const envelope = await apiPost<Record<string, unknown>>("/integrity/scan", {
     mode: payload?.mode ?? "FAST",
     file_instance_ids: payload?.file_instance_ids ?? [],
+    full_rescan: Boolean(payload?.full_rescan),
   });
   return withData(envelope, envelope.data);
 };

@@ -3,6 +3,9 @@ import type { LogPhase, ParsedLogState } from "@/types/logs";
 const MESSAGE_PROGRESS_PATTERN =
   /Progress:\s*(\d+)\/(\d+)\s+(?:files|items)\s+\(([\d.]+)%\)\s+\|\s+([\d.]+)\s+(?:files|items)\/sec/i;
 
+const INTEGRITY_COMPLETION_PATTERN =
+  /eligible_file_count=(\d+)\s+scanned_count=(\d+)\s+issues_found=(\d+)\s+skipped_count=(\d+)\s+full_rescan=(?:True|False|true|false)\s+duration_ms=([0-9.]+)/i;
+
 function extractNumber(line: string, field: string): number | null {
   const match = line.match(new RegExp(`${field}=([0-9.]+)`));
   if (!match) return null;
@@ -11,7 +14,7 @@ function extractNumber(line: string, field: string): number | null {
 }
 
 function extractPhase(line: string): LogPhase {
-  const match = line.match(/phase=(ingest|plan|apply|canonical|tag_enrichment|tag)\b/);
+  const match = line.match(/phase=(ingest|plan|apply|canonical|integrity|tag_enrichment|tag)\b/);
   const phase = match?.[1];
   if (phase === "tag_enrichment") return "tag";
   return (phase as LogPhase | undefined) ?? null;
@@ -45,15 +48,35 @@ function parseLine(line: string) {
   }
 
   const messageMatch = line.match(MESSAGE_PROGRESS_PATTERN);
-  if (!messageMatch) return null;
+  if (messageMatch) {
+    return {
+      phase: extractPhase(line),
+      stage: extractStage(line),
+      processedCount: Number(messageMatch[1]),
+      totalCount: Number(messageMatch[2]),
+      progressPercent: Number(messageMatch[3]),
+      throughputFps: Number(messageMatch[4]),
+    };
+  }
+
+  const completionMatch = line.match(INTEGRITY_COMPLETION_PATTERN);
+  if (!completionMatch) return null;
+
+  const eligibleCount = Number(completionMatch[1]);
+  const scannedCount = Number(completionMatch[2]);
+  const skippedCount = Number(completionMatch[4]);
+  const durationMs = Number(completionMatch[5]);
+  const processedCountFromSummary = scannedCount + skippedCount;
+  const completionThroughputFps =
+    durationMs > 0 ? Number(((processedCountFromSummary * 1000) / durationMs).toFixed(1)) : 0;
 
   return {
     phase: extractPhase(line),
     stage: extractStage(line),
-    processedCount: Number(messageMatch[1]),
-    totalCount: Number(messageMatch[2]),
-    progressPercent: Number(messageMatch[3]),
-    throughputFps: Number(messageMatch[4]),
+    processedCount: processedCountFromSummary,
+    totalCount: eligibleCount,
+    progressPercent: 100,
+    throughputFps: completionThroughputFps,
   };
 }
 

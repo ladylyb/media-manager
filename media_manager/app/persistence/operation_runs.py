@@ -72,6 +72,22 @@ class OperationRunHistoryItem:
         }
 
 
+@dataclass(frozen=True)
+class OperationRunReconciliationResult:
+    cutoff: str
+    scanned_count: int
+    updated_count: int
+    include_current_day: bool
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "cutoff": self.cutoff,
+            "scanned_count": self.scanned_count,
+            "updated_count": self.updated_count,
+            "include_current_day": self.include_current_day,
+        }
+
+
 def _normalize_context(context: dict[str, object]) -> dict[str, object]:
     payload = dict(context)
     encoded = json.dumps(payload, default=str, sort_keys=True)
@@ -176,6 +192,39 @@ class OperationRunService:
         with self._session_factory() as session:
             value = session.scalar(select(func.count()).select_from(OperationRun))
         return int(value or 0)
+
+    def reconcile_stale_started_runs(self, *, include_current_day: bool = False) -> OperationRunReconciliationResult:
+        now_utc = _now_utc()
+        cutoff = now_utc if include_current_day else now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        stale_message = (
+            "Operation run left in STARTED state after interrupted process termination; "
+            "marked failed during stale-run cleanup."
+        )[:_MAX_ERROR_MESSAGE_LEN]
+
+        with transactional_session(self._session_factory) as session:
+            rows = session.scalars(
+                select(OperationRun)
+                .where(
+                    OperationRun.status == OperationRunStatus.STARTED,
+                    OperationRun.started_at < cutoff,
+                )
+                .with_for_update(skip_locked=True)
+            ).all()
+
+            for row in rows:
+                row.status = OperationRunStatus.FAILED
+                row.completed_at = now_utc
+                row.error_message = stale_message
+                row.updated_at = now_utc
+
+            session.flush()
+
+        return OperationRunReconciliationResult(
+            cutoff=cutoff.isoformat(),
+            scanned_count=len(rows),
+            updated_count=len(rows),
+            include_current_day=include_current_day,
+        )
 
     def _get_row_for_update(self, session: Session, operation_run_id: uuid.UUID) -> OperationRun:
         stmt = select(OperationRun).where(OperationRun.id == operation_run_id).with_for_update()

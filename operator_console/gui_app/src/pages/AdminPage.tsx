@@ -45,6 +45,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -71,6 +72,7 @@ import {
   invalidateReadsAfterPolicyUpdate,
   queueDiscoveryBenchmark,
   queueMetadataBenchmark,
+  reconcileStaleOperationRuns,
   updatePolicy,
 } from "@/lib/api/endpoints";
 import { queryKeys } from "@/lib/api/queryKeys";
@@ -84,6 +86,7 @@ import type {
   HashAuditResult,
   MediaFileRecord,
   ObservabilityMetricsSeries,
+  OperationRunReconcileResult,
   ObservabilitySummary,
   PaginatedResponse,
   Policy,
@@ -1881,6 +1884,8 @@ function IntegrityCheckTab() {
 }
 
 function SystemHealthTab() {
+  const queryClient = useQueryClient();
+  const [includeCurrentDay, setIncludeCurrentDay] = useState(false);
   const summaryQuery = useQuery({
     queryKey: queryKeys.adminObservabilitySummary,
     queryFn: getAdminObservabilitySummary,
@@ -1905,6 +1910,15 @@ function SystemHealthTab() {
   const summary = summaryQuery.data?.data as ObservabilitySummary | undefined;
   const failures = failuresQuery.data?.data;
   const series = seriesQuery.data?.data as ObservabilityMetricsSeries | undefined;
+  const reconcileMutation = useMutation({
+    mutationFn: () => reconcileStaleOperationRuns({ include_current_day: includeCurrentDay }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.adminObservabilitySummary });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.adminObservabilityRuns({ limit: 25 }) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.adminObservabilityFailures(20) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runsRoot });
+    },
+  });
   const chartRows = useMemo(() => {
     if (!series) return [];
     const operations = new Map(series.series.operation_volume.map((point) => [point.timestamp, point.value]));
@@ -1923,10 +1937,12 @@ function SystemHealthTab() {
     return <div className="text-sm text-muted-foreground">Loading system health data…</div>;
   }
 
-  const error = summaryQuery.error || runsQuery.error || failuresQuery.error || seriesQuery.error;
+  const error = summaryQuery.error || runsQuery.error || failuresQuery.error || seriesQuery.error || reconcileMutation.error;
   if (error instanceof Error) {
     return <ErrorAlert message={error.message} />;
   }
+
+  const reconcileResult = reconcileMutation.data?.data as OperationRunReconcileResult | undefined;
 
   return (
     <div className="space-y-6">
@@ -1943,6 +1959,45 @@ function SystemHealthTab() {
         <AdminMetricCard title="Avg apply latency" value={`${Number(summary?.latest_metrics?.apply_time_ms ?? 0).toFixed(1)} ms`} hint="Latest persisted perf artifact" />
         <AdminMetricCard title="Cache hit rate" value={`${Number(summary?.latest_metrics?.cache_hit_rate ?? 0).toFixed(1)}%`} hint="Latest persisted cache signal" />
       </div>
+
+      <Card className="rounded-[28px] border-border/70 shadow-sm">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><RefreshCw className="h-4 w-4" /> Reconcile stale operation runs</CardTitle>
+          <CardDescription>Mark historical STARTED operation runs as failed when they were left incomplete by an interrupted process.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <Checkbox
+                id="include-current-day-runs"
+                checked={includeCurrentDay}
+                onCheckedChange={(checked) => setIncludeCurrentDay(checked === true)}
+              />
+              <div className="space-y-1">
+                <Label htmlFor="include-current-day-runs">Include today&apos;s STARTED runs</Label>
+                <p className="text-sm text-muted-foreground">
+                  Leave this off for the safe default. Turn it on only when you intentionally want to fail current-day audit rows too.
+                </p>
+              </div>
+            </div>
+            <Button onClick={() => reconcileMutation.mutate()} disabled={reconcileMutation.isPending}>
+              {reconcileMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+              Reconcile Stale Runs
+            </Button>
+          </div>
+
+          {reconcileResult ? (
+            <div className="rounded-xl border bg-muted/20 p-4 text-sm">
+              <div className="flex flex-wrap gap-x-4 gap-y-2">
+                <span>Cutoff: {new Date(reconcileResult.cutoff).toLocaleString()}</span>
+                <span>Scanned: {reconcileResult.scanned_count}</span>
+                <span>Updated: {reconcileResult.updated_count}</span>
+                <span>Included today: {reconcileResult.include_current_day ? "Yes" : "No"}</span>
+              </div>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
 
       <div className="grid gap-4 xl:grid-cols-2">
         <Card className="rounded-[28px] border-border/70 shadow-sm">

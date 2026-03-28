@@ -17,6 +17,7 @@ function formatOperationName(kind: ProgressOperationKind) {
   if (kind === "plan") return "PLAN";
   if (kind === "apply") return "APPLY";
   if (kind === "canonical") return "CANONICAL";
+  if (kind === "integrity") return "INTEGRITY";
   if (kind === "tag") return "TAG";
   return null;
 }
@@ -36,6 +37,7 @@ function formatPhaseLabel(kind: ProgressOperationKind, status: ProgressOperation
   if (kind === "ingest") return status === "finalizing" ? "Finalizing Ingest" : "Ingest";
   if (kind === "apply") return status === "finalizing" ? "Finalizing Apply" : "Apply";
   if (kind === "canonical") return status === "finalizing" ? "Finalizing Canonical" : "Canonical";
+  if (kind === "integrity") return status === "finalizing" ? "Finalizing Integrity Scan" : "Integrity Scan";
   if (kind === "tag") return status === "finalizing" ? "Finalizing Tags" : "Tag";
   if (status === "completed") return "Complete";
   if (status === "error") return "Failed";
@@ -47,12 +49,12 @@ function formatMetricValue(value: number | null, suffix = "") {
 }
 
 function formatCountLabel(kind: ProgressOperationKind) {
-  return kind === "ingest" || kind === "plan" ? "Files" : "Processed";
+  return kind === "ingest" || kind === "plan" || kind === "integrity" ? "Files" : "Processed";
 }
 
 function formatThroughput(kind: ProgressOperationKind, throughputFps: number | null) {
   if (throughputFps === null) return "--";
-  const unit = kind === "ingest" || kind === "plan" ? "files/sec" : "items/sec";
+  const unit = kind === "ingest" || kind === "plan" || kind === "integrity" ? "files/sec" : "items/sec";
   return `${throughputFps.toFixed(1)} ${unit}`;
 }
 

@@ -36,6 +36,7 @@ export const queryKeys = {
     ["admin", "observability", "runs", params ?? {}] as const,
   adminObservabilityFailures: (limit = 25) => ["admin", "observability", "failures", { limit }] as const,
   adminObservabilitySeries: (hours = 24) => ["admin", "observability", "series", { hours }] as const,
+  adminOperationRunReconcile: ["admin", "operation-runs", "reconcile-stale"] as const,
   benchmarkRunsRoot: ["admin", "benchmarks"] as const,
   benchmarkRuns: (limit = 50) => ["admin", "benchmarks", { limit }] as const,
   benchmarkRun: (operationRunId: string) => ["admin", "benchmark", operationRunId] as const,

@@ -2,12 +2,17 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Loader2, ShieldCheck, ShieldOff } from "lucide-react";
 
+import { LiveProgressPanel } from "@/components/progress/LiveProgressPanel";
 import { ErrorAlert } from "@/components/ErrorAlert";
 import { TopSurfaceHeader } from "@/components/layout/TopSurfaceHeader";
+import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { WizardResultConsole } from "@/components/wizard/WizardResultConsole";
 import {
   getIntegrityDashboard,
   getIntegrityFile,
@@ -29,14 +34,19 @@ type IntegrityScanResult = {
   scan_mode: "FAST" | "DEEP";
   eligible_file_count?: number;
   scanned_count: number;
+  skipped_count?: number;
   issues_found: number;
+  full_rescan?: boolean;
 };
 type IntegrityScanFeedback = {
+  runId?: string;
   mode: "FAST" | "DEEP";
   phase: "running" | "completed" | "failed";
   eligible_file_count?: number;
   scanned_count?: number;
+  skipped_count?: number;
   issues_found?: number;
+  full_rescan?: boolean;
   message?: string;
 };
 
@@ -49,6 +59,15 @@ function statusTone(status: IntegrityIssue["status"]) {
   if (status === "BROKEN") return "text-red-700 bg-red-50 border-red-200";
   if (status === "SUSPECT") return "text-amber-700 bg-amber-50 border-amber-200";
   return "text-emerald-700 bg-emerald-50 border-emerald-200";
+}
+
+function formatScanMode(mode: "FAST" | "DEEP") {
+  return mode === "DEEP" ? "Deep" : "Quick";
+}
+
+function formatTimestamp(value: string | null | undefined) {
+  if (!value) return "Not available yet";
+  return new Date(value).toLocaleString();
 }
 
 function StatCard({
@@ -78,6 +97,7 @@ export default function IntegrityPage() {
   const [filter, setFilter] = useState<IssueFilter>("ALL");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [scanFeedback, setScanFeedback] = useState<IntegrityScanFeedback | null>(null);
+  const [fullRescan, setFullRescan] = useState(false);
 
   const dashboardQuery = useQuery({
     queryKey: queryKeys.integrityDashboard,
@@ -126,10 +146,11 @@ export default function IntegrityPage() {
   });
 
   const scanMutation = useMutation({
-    mutationFn: (mode: "FAST" | "DEEP") => startIntegrityScan({ mode }),
-    onMutate: (mode) => {
-      setScanFeedback({ mode, phase: "running" });
-      return { mode };
+    mutationFn: ({ mode, fullRescan }: { mode: "FAST" | "DEEP"; fullRescan: boolean }) =>
+      startIntegrityScan({ mode, full_rescan: fullRescan }),
+    onMutate: ({ mode, fullRescan }) => {
+      setScanFeedback({ mode, phase: "running", full_rescan: fullRescan });
+      return { mode, fullRescan };
     },
     onSuccess: (response) => {
       const payload = (response?.data ?? {}) as Partial<IntegrityScanResult>;
@@ -140,14 +161,19 @@ export default function IntegrityPage() {
         eligible_file_count:
           typeof payload.eligible_file_count === "number" ? Number(payload.eligible_file_count) : undefined,
         scanned_count: Number(payload.scanned_count ?? 0),
+        skipped_count: typeof payload.skipped_count === "number" ? Number(payload.skipped_count) : undefined,
         issues_found: Number(payload.issues_found ?? 0),
+        full_rescan: Boolean(payload.full_rescan),
       };
       setScanFeedback({
+        runId: scanResult.run_id,
         mode: scanResult.scan_mode,
         phase: "completed",
         eligible_file_count: scanResult.eligible_file_count,
         scanned_count: scanResult.scanned_count,
+        skipped_count: scanResult.skipped_count,
         issues_found: scanResult.issues_found,
+        full_rescan: scanResult.full_rescan,
       });
       void queryClient.invalidateQueries({ queryKey: queryKeys.integrityDashboard });
       void queryClient.invalidateQueries({ queryKey: ["integrity", "issues"] });
@@ -160,6 +186,7 @@ export default function IntegrityPage() {
       setScanFeedback({
         mode: activeMode,
         phase: "failed",
+        full_rescan: context?.fullRescan ?? false,
         message: error instanceof Error ? error.message : String(error),
       });
     },
@@ -207,13 +234,80 @@ export default function IntegrityPage() {
   const runningMode = scanMutation.isPending ? scanFeedback?.mode ?? null : null;
   const quickLabel = runningMode === "FAST" ? "Running Quick Scan..." : "Quick Scan";
   const deepLabel = runningMode === "DEEP" ? "Running Deep Scan..." : "Deep Scan";
-  const scanModeLabel = scanFeedback?.mode === "DEEP" ? "Deep scan" : "Quick scan";
+  const scanModeLabel = scanFeedback ? `${formatScanMode(scanFeedback.mode)} scan` : "Scan";
+  const scanStatusBadge =
+    scanFeedback?.phase === "running"
+      ? { label: "Scan Running", severity: "info" as const, dot: true }
+      : scanFeedback?.phase === "completed"
+        ? { label: "Scan Complete", severity: "success" as const, dot: true }
+        : scanFeedback?.phase === "failed"
+          ? { label: "Scan Failed", severity: "destructive" as const, dot: true }
+          : { label: "Ready", severity: "neutral" as const, dot: false };
+  const scanMetrics =
+    scanFeedback?.phase === "completed"
+      ? [
+          {
+            label: "Mode used",
+            value: formatScanMode(scanFeedback.mode),
+          },
+          ...(scanFeedback.eligible_file_count != null
+            ? [
+                {
+                  label: "Files considered",
+                  value: scanFeedback.eligible_file_count,
+                },
+              ]
+            : []),
+          ...(scanFeedback.scanned_count != null
+            ? [
+                {
+                  label: "Files checked now",
+                  value: scanFeedback.scanned_count,
+                },
+              ]
+            : []),
+          ...(scanFeedback.skipped_count != null
+            ? [
+                {
+                  label: "Files skipped because unchanged",
+                  value: scanFeedback.skipped_count,
+                },
+              ]
+            : []),
+          ...(scanFeedback.issues_found != null
+            ? [
+                {
+                  label: "Files with problems",
+                  value: scanFeedback.issues_found,
+                },
+              ]
+            : []),
+        ]
+      : [];
+  const scanSummaryLines =
+    scanFeedback?.phase === "completed"
+      ? [
+          scanFeedback.full_rescan
+            ? `${scanModeLabel} finished as a full rescan. All files were checked again.`
+            : `${scanModeLabel} finished. Unchanged files were skipped.`,
+          "The results below have been refreshed.",
+          ...(scanFeedback.eligible_file_count === 0 ? ["No library files were ready to be checked right now."] : []),
+          ...(scanFeedback.skipped_count && scanFeedback.skipped_count > 0
+            ? [`${scanFeedback.skipped_count} files kept their previous check results.`]
+            : []),
+        ]
+      : scanFeedback?.phase === "failed"
+        ? [
+            `${scanModeLabel} failed before the page could refresh with new results.`,
+            scanFeedback.message ?? "Unknown error",
+          ]
+        : [];
 
   return (
     <div className="space-y-6 p-6">
       <TopSurfaceHeader
         badge="Integrity"
-        title="Integrity Review"
+        title="Integrity Checks"
         description="Read-only scan results for playback and file-health issues."
       >
         <div className="flex flex-col items-end gap-2">
@@ -222,61 +316,123 @@ export default function IntegrityPage() {
               Saved default scan mode: {policy.integrity.default_scan_mode === "DEEP" ? "Deep" : "Quick"}
             </p>
           ) : null}
-          <p className="text-xs text-muted-foreground">
-            Quick Scan: readability and probe checks
-          </p>
-          <p className="text-xs text-muted-foreground">
-            Deep Scan: quick scan plus decode-level verification on eligible active files
-          </p>
+          <div className="space-y-1 text-xs text-muted-foreground">
+            <p>Quick Scan checks file readability and basic media structure.</p>
+            <p>Deep Scan adds a short playback-level check.</p>
+            <p>By default, unchanged files are skipped.</p>
+            <p>Full rescan checks everything again.</p>
+          </div>
           <div className="flex gap-2">
             <Button
               variant="outline"
-              onClick={() => scanMutation.mutate("FAST")}
+              onClick={() => scanMutation.mutate({ mode: "FAST", fullRescan })}
               disabled={scanMutation.isPending}
             >
               {runningMode === "FAST" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               {quickLabel}
             </Button>
-            <Button onClick={() => scanMutation.mutate("DEEP")} disabled={scanMutation.isPending}>
+            <Button onClick={() => scanMutation.mutate({ mode: "DEEP", fullRescan })} disabled={scanMutation.isPending}>
               {runningMode === "DEEP" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               {deepLabel}
             </Button>
           </div>
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="integrity-full-rescan"
+              checked={fullRescan}
+              onCheckedChange={(checked) => setFullRescan(checked === true)}
+              disabled={scanMutation.isPending}
+            />
+            <Label htmlFor="integrity-full-rescan" className="text-xs text-muted-foreground">
+              Full rescan
+            </Label>
+          </div>
         </div>
       </TopSurfaceHeader>
 
-      {scanFeedback ? (
-        <Card>
-          <CardContent className="flex flex-col gap-2 p-4 text-sm">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-              <span className="font-medium">Last scan summary</span>
-              <span>Mode used: {scanFeedback.mode === "DEEP" ? "Deep" : "Quick"}</span>
-              <span>Status: {scanFeedback.phase}</span>
-              {scanFeedback.eligible_file_count != null ? <span>Eligible files: {scanFeedback.eligible_file_count}</span> : null}
-              {scanFeedback.scanned_count != null ? <span>Files scanned: {scanFeedback.scanned_count}</span> : null}
-              {scanFeedback.issues_found != null ? <span>Issues found: {scanFeedback.issues_found}</span> : null}
+      <Card>
+        <CardHeader className="space-y-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="space-y-1">
+              <CardTitle>Integrity Scan Status</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                This is the one place to check what just started, what is running now, and how the scan finished.
+              </p>
             </div>
-            {scanFeedback.phase === "running" ? (
-              <p className="text-muted-foreground">{scanModeLabel} started</p>
-            ) : null}
-            {scanFeedback.phase === "completed" ? (
-              <>
-                <p className="text-muted-foreground">{scanModeLabel} completed</p>
-                {scanFeedback.scanned_count === 0 ? (
-                  <p className="text-muted-foreground">No eligible active files were scanned.</p>
-                ) : (
-                  <p className="text-muted-foreground">
-                    Scan completed and the dashboard, queue, and selected file detail were refreshed.
-                  </p>
-                )}
-              </>
-            ) : null}
-            {scanFeedback.phase === "failed" ? (
-              <ErrorAlert message={`${scanModeLabel} failed: ${scanFeedback.message ?? "Unknown error"}`} />
-            ) : null}
-          </CardContent>
-        </Card>
-      ) : null}
+            <StatusBadge
+              label={scanStatusBadge.label}
+              severity={scanStatusBadge.severity}
+              dot={scanStatusBadge.dot}
+            />
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {!scanFeedback ? (
+            <div className="rounded-xl border border-dashed bg-background/70 p-4 text-sm text-muted-foreground">
+              Start a Quick Scan or Deep Scan above. Live activity and the latest scan summary will appear here.
+            </div>
+          ) : null}
+
+          {scanFeedback?.phase === "running" ? (
+            <div className="space-y-4">
+              <div className="rounded-xl border bg-primary/[0.04] p-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary/80">
+                  What&apos;s Happening Now
+                </p>
+                <p className="mt-3 text-sm text-foreground">{scanModeLabel} started.</p>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  {scanFeedback.full_rescan
+                    ? "This run will rescan every eligible file in scope. Recent scan activity and any available log updates will appear below."
+                    : "Stay on this panel to follow the scan. Recent scan activity and any available log updates will appear below."}
+                </p>
+              </div>
+              <LiveProgressPanel operationKind="integrity" operationStatus="running" />
+            </div>
+          ) : null}
+
+          {scanFeedback?.phase === "completed" ? (
+            <WizardResultConsole
+              title="Integrity Scan Result"
+              status="success"
+              metrics={scanMetrics}
+              references={
+                scanFeedback.runId
+                  ? [
+                      {
+                        label: "Run ID",
+                        value: scanFeedback.runId,
+                        helperText: "This scan result is already reflected in the refreshed review queue below.",
+                        copyable: true,
+                      },
+                    ]
+                  : []
+              }
+              summaryLines={scanSummaryLines}
+              nextStepHint="Review the queue and selected file detail below to understand which files need attention."
+              payload={scanFeedback}
+              technicalDetailsMode="modal"
+            />
+          ) : null}
+
+          {scanFeedback?.phase === "failed" ? (
+            <WizardResultConsole
+              title="Integrity Scan Result"
+              status="failed"
+              metrics={[
+                {
+                  label: "Mode used",
+                  value: formatScanMode(scanFeedback.mode),
+                },
+              ]}
+              summaryLines={scanSummaryLines}
+              nextStepHint="You can retry the scan from the buttons above after addressing the reported issue."
+              nextStepTone="caution"
+              payload={scanFeedback}
+              technicalDetailsMode="modal"
+            />
+          ) : null}
+        </CardContent>
+      </Card>
 
       {(dashboardQuery.error || issuesQuery.error || detailQuery.error || quarantineQuery.error) && (
         <ErrorAlert
@@ -296,7 +452,11 @@ export default function IntegrityPage() {
         <StatCard
           title="Files Scanned"
           value={dashboardQuery.data?.total_files_scanned ?? 0}
-          helper={dashboardQuery.data?.last_scan_at ? `Last scan ${new Date(dashboardQuery.data.last_scan_at).toLocaleString()}` : "No scan yet"}
+          helper={
+            dashboardQuery.data?.last_scan_at
+              ? `Last library scan run ${formatTimestamp(dashboardQuery.data.last_scan_at)}`
+              : "No library scan run yet"
+          }
         />
         <StatCard title="Playback Issues" value={dashboardQuery.data?.playback_issues ?? 0} helper="Broken and suspect files needing review." />
         <StatCard title="Broken" value={dashboardQuery.data?.broken_count ?? 0} helper="Highest confidence integrity failures." />
@@ -418,6 +578,19 @@ export default function IntegrityPage() {
                   <div className="rounded-xl bg-muted/50 p-3">
                     <p className="text-xs uppercase tracking-wide text-muted-foreground">Probe / Decode</p>
                     <p className="mt-1 text-sm font-medium">{detail.probe_status ?? "N/A"} / {detail.decode_status ?? "N/A"}</p>
+                  </div>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-xl bg-muted/50 p-3">
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Last checked for this file</p>
+                    <p className="mt-1 text-sm font-medium">{formatTimestamp(detail.last_checked_at)}</p>
+                  </div>
+                  <div className="rounded-xl bg-muted/50 p-3">
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Review recorded</p>
+                    <p className="mt-1 text-sm font-medium">
+                      {detail.reviewed_at ? formatTimestamp(detail.reviewed_at) : "No review recorded"}
+                    </p>
                   </div>
                 </div>
 

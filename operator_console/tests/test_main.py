@@ -80,6 +80,7 @@ def test_canonical_api_route_inventory_and_v1_removal() -> None:
         "/api/media-file/validate",
         "/api/admin/hash-audit",
         "/api/admin/db-reset",
+        "/api/admin/operation-runs/reconcile-stale",
         "/api/admin/observability/summary",
         "/api/admin/observability/operation-runs",
         "/api/admin/observability/failures",
@@ -229,6 +230,71 @@ def test_logs_access_filter_keeps_logs_endpoint_visible_in_debug() -> None:
         assert filter_.filter(record) is True
         assert record.levelno == logging.DEBUG
         assert record.levelname == "DEBUG"
+    finally:
+        root_logger.setLevel(original_level)
+
+
+def test_logs_access_filter_suppresses_successful_status_polling_above_debug() -> None:
+    filter_ = main_module._LogsEndpointAccessFilter()
+    root_logger = logging.getLogger()
+    original_level = root_logger.level
+    root_logger.setLevel(logging.INFO)
+    try:
+        record = logging.LogRecord(
+            name="uvicorn.access",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=0,
+            msg='%s - "%s %s HTTP/%s" %d',
+            args=("127.0.0.1:60148", "GET", "/api/status", "1.1", 200),
+            exc_info=None,
+        )
+
+        assert filter_.filter(record) is False
+    finally:
+        root_logger.setLevel(original_level)
+
+
+def test_logs_access_filter_keeps_unhealthy_status_polling_visible() -> None:
+    filter_ = main_module._LogsEndpointAccessFilter()
+    root_logger = logging.getLogger()
+    original_level = root_logger.level
+    root_logger.setLevel(logging.INFO)
+    try:
+        record = logging.LogRecord(
+            name="uvicorn.access",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=0,
+            msg='%s - "%s %s HTTP/%s" %d',
+            args=("127.0.0.1:60148", "GET", "/api/status", "1.1", 503),
+            exc_info=None,
+        )
+
+        assert filter_.filter(record) is True
+        assert record.levelno == logging.INFO
+    finally:
+        root_logger.setLevel(original_level)
+
+
+def test_logs_access_filter_leaves_unrelated_access_logs_unchanged() -> None:
+    filter_ = main_module._LogsEndpointAccessFilter()
+    root_logger = logging.getLogger()
+    original_level = root_logger.level
+    root_logger.setLevel(logging.INFO)
+    try:
+        record = logging.LogRecord(
+            name="uvicorn.access",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=0,
+            msg='%s - "%s %s HTTP/%s" %d',
+            args=("127.0.0.1:60148", "GET", "/api/runs", "1.1", 200),
+            exc_info=None,
+        )
+
+        assert filter_.filter(record) is True
+        assert record.levelno == logging.INFO
     finally:
         root_logger.setLevel(original_level)
 
@@ -1033,6 +1099,7 @@ class _FakeReadServices:
             "absolute_path": "/dataset/problem.mp4",
             "status": "BROKEN",
             "confidence": 0.93,
+            "last_checked_at": "2026-03-25T09:00:00+00:00",
             "probe_status": "FAILED",
             "decode_status": "SKIPPED",
             "reviewed_decision": None,
@@ -1291,6 +1358,7 @@ class _FakeOperationServices:
         *,
         mode: str,
         file_instance_ids: list[str] | None = None,
+        full_rescan: bool = False,
         trigger: str = "manual",
     ) -> dict[str, object]:
         _ = file_instance_ids
@@ -1298,8 +1366,11 @@ class _FakeOperationServices:
             "run_id": "44444444-4444-4444-4444-444444444444",
             "status": "COMPLETED",
             "scan_mode": mode.upper(),
+            "eligible_file_count": 6,
             "scanned_count": 4,
+            "skipped_count": 2,
             "issues_found": 1,
+            "full_rescan": full_rescan,
             "trigger": trigger,
         }
 
@@ -1728,6 +1799,14 @@ class _FakeAdminServices:
             "dry_run": bool(dry_run),
             "affected_tables": ["media_file", "file_instances"],
             "message": "Dry-run only. No data deleted." if dry_run else "Database reset completed.",
+        }
+
+    def reconcile_stale_operation_runs(self, *, include_current_day: bool = False) -> dict[str, object]:
+        return {
+            "cutoff": "2026-03-14T00:00:00+00:00" if not include_current_day else "2026-03-14T10:30:00+00:00",
+            "scanned_count": 3 if not include_current_day else 5,
+            "updated_count": 2 if not include_current_day else 4,
+            "include_current_day": include_current_day,
         }
 
     def benchmark_metadata_queue(self, *, items: int, batch_size: int, challenge_word: str | None) -> dict[str, object]:
@@ -2629,6 +2708,8 @@ def test_integrity_scan_endpoint_returns_summary() -> None:
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert response.json()["data"]["result"]["scan_mode"] == "FAST"
+    assert response.json()["data"]["result"]["skipped_count"] == 2
+    assert response.json()["data"]["result"]["full_rescan"] is False
     assert response.json()["data"]["result"]["trigger"] == "manual"
 
 
@@ -2644,17 +2725,18 @@ def test_integrity_scan_endpoint_logs_manual_request() -> None:
     app.dependency_overrides[get_operation_services] = _FakeOperationServices
     client = TestClient(app)
     try:
-        response = client.post("/api/integrity/scan", json={"mode": "DEEP", "file_instance_ids": []})
+        response = client.post("/api/integrity/scan", json={"mode": "DEEP", "file_instance_ids": [], "full_rescan": True})
     finally:
         app.dependency_overrides.clear()
         main_module.LOGGER.info = original_info  # type: ignore[assignment]
 
     assert response.status_code == 200
     assert any(
-        "POST /api/integrity/scan received: mode=DEEP requested_file_count=0 scan_scope=DEFAULT_ACTIVE_LIBRARY"
+        "POST /api/integrity/scan received: mode=DEEP requested_file_count=0 scan_scope=DEFAULT_ACTIVE_LIBRARY full_rescan=True"
         in line
         for line in logged_messages
     )
+    assert response.json()["data"]["result"]["full_rescan"] is True
 
 
 def test_integrity_playback_failure_endpoint_returns_summary() -> None:
@@ -2684,6 +2766,19 @@ def test_integrity_quarantine_items_endpoint_returns_rows() -> None:
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert response.json()["data"]["result"]["items"][0]["quarantine_status"] == "QUARANTINED"
+
+
+def test_integrity_file_endpoint_includes_last_checked_at() -> None:
+    app.dependency_overrides[get_read_services] = _FakeReadServices
+    client = TestClient(app)
+    try:
+        response = client.get("/api/integrity/file/99999999-0000-0000-0000-000000000001")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["data"]["result"]["last_checked_at"] == "2026-03-25T09:00:00+00:00"
 
 
 def test_integrity_quarantine_endpoint_executes() -> None:
@@ -3373,6 +3468,19 @@ def test_post_db_reset_env_forbidden_returns_403() -> None:
     assert payload["errors"][0]["code"] == "FORBIDDEN_ENV"
 
 
+def test_post_admin_reconcile_stale_operation_runs_returns_envelope() -> None:
+    app.dependency_overrides[get_admin_services] = _FakeAdminServices
+    client = TestClient(app)
+    try:
+        response = client.post("/api/admin/operation-runs/reconcile-stale", json={"include_current_day": True})
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 200
+    payload = response.json()["data"]["result"]
+    assert payload["include_current_day"] is True
+    assert payload["updated_count"] == 4
+
+
 def test_admin_observability_summary_returns_envelope() -> None:
     app.dependency_overrides[get_read_services] = _FakeReadServices
     client = TestClient(app)
@@ -3434,6 +3542,54 @@ def test_admin_benchmark_queue_and_reads_use_envelope() -> None:
     assert detail.json()["data"]["result"]["summary_payload"]["throughput_files_per_s"] == 1000.0
     assert cancel.status_code == 200
     assert cancel.json()["data"]["result"]["status"] == "CANCEL_REQUESTED"
+
+
+def test_create_app_startup_reconciles_stale_operation_runs(monkeypatch, tmp_path: Path) -> None:
+    dist_dir = _create_console_build(tmp_path)
+    monkeypatch.setattr(main_module, "_resolve_console_static_dir", lambda _package_root: dist_dir)
+    captured: dict[str, object] = {}
+
+    class _Result:
+        cutoff = "2026-03-14T00:00:00+00:00"
+        scanned_count = 2
+        updated_count = 1
+
+    class _FakeOperationRunService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def reconcile_stale_started_runs(self, *, include_current_day: bool = False):  # type: ignore[no-untyped-def]
+            captured["include_current_day"] = include_current_day
+            return _Result()
+
+    monkeypatch.setattr(main_module, "OperationRunService", _FakeOperationRunService)
+    monkeypatch.setattr(main_module, "get_service_session_factory", lambda: object())
+
+    with TestClient(create_app()):
+        pass
+
+    assert captured == {"include_current_day": False}
+
+
+def test_create_app_startup_reconcile_failure_does_not_abort(monkeypatch, tmp_path: Path) -> None:
+    dist_dir = _create_console_build(tmp_path)
+    monkeypatch.setattr(main_module, "_resolve_console_static_dir", lambda _package_root: dist_dir)
+
+    class _FailingOperationRunService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def reconcile_stale_started_runs(self, *, include_current_day: bool = False):  # type: ignore[no-untyped-def]
+            _ = include_current_day
+            raise RuntimeError("startup cleanup exploded")
+
+    monkeypatch.setattr(main_module, "OperationRunService", _FailingOperationRunService)
+    monkeypatch.setattr(main_module, "get_service_session_factory", lambda: object())
+
+    with TestClient(create_app()) as client:
+        response = client.get("/")
+
+    assert response.status_code == 200
 
 
 def test_main_entrypoint_starts_uvicorn(monkeypatch) -> None:

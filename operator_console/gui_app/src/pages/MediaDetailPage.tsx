@@ -117,7 +117,7 @@ export default function MediaDetailPage() {
       {error ? <ErrorAlert message={error} /> : null}
       {playbackFailureMutation.isSuccess ? (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          Playback failure noted. A fast integrity scan was queued for this file so it appears in Integrity Review.
+          Playback failure noted. A fast integrity scan was queued for this file so it appears in Integrity Checks.
         </div>
       ) : null}
 
