@@ -55,6 +55,7 @@ nav:
   - Reference:
       - Overview: reference/index.md
       - Data Dictionary: reference/data-dictionary.md
+      - Duplicate Reclaim Canonical Backfill: reference/duplicate-reclaim-canonical-backfill.md
       - Environment Variables: reference/environment-variables.md
       - FAQ: reference/faq.md
       - Known Limitations: reference/known-limitations.md
