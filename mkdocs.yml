@@ -78,6 +78,7 @@ nav:
       - Invariants: architecture/invariants.md
       - Run Lifecycle: architecture/run-lifecycle.md
       - Duplicate Recycle Bin Lifecycle Simplification: architecture/duplicate-recycle-bin-lifecycle.md
+      - Duplicate Recycle Bin Migration Spec: architecture/duplicate-recycle-bin-migration-spec.md
       - API-Only Transition: architecture/api-only-transition.md
       - Integrity Review and Reclaim Rollout: architecture/integrity-reclaim-rollout.md
       - Organize Media UX Feedback: architecture/pipeline-wizard-ux-feedback-2026-03-15.md
