@@ -411,6 +411,43 @@ describe("DuplicatesPage", () => {
     expect(screen.queryByText("Quick")).not.toBeInTheDocument();
   });
 
+  it("opens a reviewed playback-issue group in review even when the default filter would hide it", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        review_status: "looks_right",
+      },
+      buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+    mocks.getIntegrityIssues.mockResolvedValue({
+      data: {
+        items: [
+          {
+            check_id: "check-alpha",
+            file_instance_id: "group-alpha-duplicate-0",
+            absolute_path: "/library/alpha-copy.jpg",
+            status: "BROKEN",
+            confidence: 1,
+            signal_types: ["decode"],
+          },
+        ],
+      },
+    });
+
+    renderPage("/duplicates?tab=playback-issues");
+
+    expect(await screen.findByRole("heading", { name: "Playback issues" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open in review" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Review duplicates" })).toBeInTheDocument();
+      expect(screen.getByText("All")).toBeInTheDocument();
+      expect(screen.getAllByText("alpha-main.jpg").length).toBeGreaterThan(0);
+    });
+  });
+
   it("renders video poster previews in the comparison cards and review queue", async () => {
     groupsData = [buildVideoGroup("group-video", "video-main.mp4", ["video-copy.mp4"])];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));

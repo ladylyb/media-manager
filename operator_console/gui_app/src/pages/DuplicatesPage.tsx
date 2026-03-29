@@ -1102,6 +1102,7 @@ export default function DuplicatesPage() {
                                 type="button"
                                 variant="outline"
                                 onClick={() => {
+                                  setReviewFilter("all");
                                   setSelectedId(group.group_id);
                                   setActiveTab("review");
                                 }}
