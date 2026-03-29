@@ -149,7 +149,7 @@ class PolicySettingsService:
             row = session.get(OperatorPolicySetting, _POLICY_ROW_ID)
             if row is None:
                 return self._default_snapshot()
-            return self._snapshot_from_row(row)
+            return self._apply_environment_overrides(self._snapshot_from_row(row))
 
     def update_settings(self, command: UpdatePolicySettingsCommand) -> PolicySettingsSnapshot:
         """Persist policy settings using optimistic version checks."""
@@ -306,6 +306,56 @@ class PolicySettingsService:
             version=0,
         )
 
+    def _apply_environment_overrides(self, snapshot: PolicySettingsSnapshot) -> PolicySettingsSnapshot:
+        """Overlay explicit env-backed storage settings onto persisted policy state."""
+        duplicate_reclaim_archive_root = self._env_override_path(
+            "MEDIA_MANAGER_RECLAIM_ROOT",
+            snapshot.duplicate_reclaim_archive_root,
+        )
+        integrity_quarantine_root = self._env_override_path(
+            "MEDIA_MANAGER_QUARANTINE_ROOT",
+            snapshot.integrity_quarantine_root,
+        )
+        integrity_quarantine_retention_days = self._env_override_days(
+            "MEDIA_MANAGER_QUARANTINE_RETENTION_DAYS",
+            snapshot.integrity_quarantine_retention_days,
+        )
+        recycle_bin_root = self._env_override_path(
+            "MEDIA_MANAGER_RECYCLE_BIN_ROOT",
+            snapshot.recycle_bin_root,
+        )
+        recycle_purge_days = self._env_override_days(
+            "MEDIA_MANAGER_RECYCLE_PURGE_DAYS",
+            snapshot.recycle_purge_days,
+        )
+        if (
+            duplicate_reclaim_archive_root == snapshot.duplicate_reclaim_archive_root
+            and integrity_quarantine_root == snapshot.integrity_quarantine_root
+            and integrity_quarantine_retention_days == snapshot.integrity_quarantine_retention_days
+            and recycle_bin_root == snapshot.recycle_bin_root
+            and recycle_purge_days == snapshot.recycle_purge_days
+        ):
+            return snapshot
+        return PolicySettingsSnapshot(
+            selected_policy=snapshot.selected_policy,
+            naming_strategy=snapshot.naming_strategy,
+            preferred_roots=snapshot.preferred_roots,
+            integrity_scan_default_mode=snapshot.integrity_scan_default_mode,
+            integrity_issue_min_confidence=snapshot.integrity_issue_min_confidence,
+            integrity_notify_on_high_confidence=snapshot.integrity_notify_on_high_confidence,
+            duplicate_reclaim_archive_root=duplicate_reclaim_archive_root,
+            duplicate_reclaim_default_retention_days=snapshot.duplicate_reclaim_default_retention_days,
+            duplicate_reclaim_notify_on_reviewed_safe=snapshot.duplicate_reclaim_notify_on_reviewed_safe,
+            integrity_quarantine_root=integrity_quarantine_root,
+            integrity_quarantine_retention_days=integrity_quarantine_retention_days,
+            recycle_bin_root=recycle_bin_root,
+            recycle_purge_days=recycle_purge_days,
+            automation_mode=snapshot.automation_mode,
+            recanonicalization_enabled=snapshot.recanonicalization_enabled,
+            updated_at=snapshot.updated_at,
+            version=snapshot.version,
+        )
+
     def _validate_naming_strategy(self, raw: str) -> str:
         try:
             return normalize_naming_strategy(raw)
@@ -386,3 +436,9 @@ class PolicySettingsService:
             return max(1, int(raw)) if raw else fallback
         except ValueError:
             return fallback
+
+    def _env_override_path(self, env_name: str, current: str) -> str:
+        return self._default_path(env_name, current)
+
+    def _env_override_days(self, env_name: str, current: int) -> int:
+        return self._default_days(env_name, current)

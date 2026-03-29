@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
@@ -289,3 +290,90 @@ def test_execute_duplicate_reclaim_moves_duplicate_and_persists_archived_state(
         assert record.archive_path == str(target_path)
         assert file_row is not None
         assert file_row.absolute_path == str(target_path)
+
+
+def test_execute_duplicate_reclaim_and_restore_succeed_with_cross_device_fallback(
+    session_factory,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    reclaim_root = tmp_path / "reclaim-root"
+    monkeypatch.setenv("MEDIA_MANAGER_RECLAIM_ROOT", str(reclaim_root))
+    service = Phase3ActionService(session_factory)
+    base = datetime(2026, 3, 29, 13, 0, tzinfo=UTC)
+    content_id = UUID("3235b1ed-4dc6-4a0d-88d5-81726006507c")
+    canonical_instance = UUID("3235b1ed-4dc6-4a0d-88d5-817260065071")
+    duplicate_instance = UUID("3235b1ed-4dc6-4a0d-88d5-817260065072")
+
+    canonical_path = tmp_path / "library" / "main.jpg"
+    duplicate_path = tmp_path / "library" / "copy.jpg"
+    canonical_path.parent.mkdir(parents=True, exist_ok=True)
+    canonical_path.write_bytes(b"main")
+    duplicate_path.write_bytes(b"copy")
+
+    with session_factory.begin() as session:
+        _add_content(session, content_id, "hash-cross-device", base)
+        session.flush()
+        _add_instance(
+            session,
+            file_instance_id=canonical_instance,
+            content_id=content_id,
+            absolute_path=str(canonical_path),
+            first_seen_at=base,
+        )
+        _add_instance(
+            session,
+            file_instance_id=duplicate_instance,
+            content_id=content_id,
+            absolute_path=str(duplicate_path),
+            first_seen_at=base + timedelta(seconds=1),
+        )
+        session.flush()
+        _set_content_canonical_instance(session, content_id=content_id, canonical_file_instance_id=canonical_instance)
+        session.add(
+            CanonicalAssignment(
+                assignment_id=UUID("3235b1ed-4dc6-4a0d-88d5-817260065073"),
+                content_id=content_id,
+                canonical_instance_id=canonical_instance,
+                policy_name="FIRST_SEEN",
+                policy_version="v1",
+                assigned_at=base + timedelta(seconds=2),
+            )
+        )
+        _add_reclaim_record(session, content_id=content_id, at=base + timedelta(seconds=2))
+
+    original_rename = Path.rename
+
+    def raise_cross_device(path_obj: Path, target):  # type: ignore[no-untyped-def]
+        target_path = Path(target)
+        if str(path_obj) in {str(duplicate_path), str(reclaim_root / str(content_id) / f"{duplicate_instance}-{duplicate_path.name}")}:
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+        return original_rename(path_obj, target_path)
+
+    monkeypatch.setattr(Path, "rename", raise_cross_device)
+
+    archive_result = service.execute_duplicate_reclaim(content_ids=[content_id], retention_days=7)
+    archive_target = reclaim_root / str(content_id) / f"{duplicate_instance}-{duplicate_path.name}"
+
+    assert archive_result["diagnostics"]["result_type"] == "applied"
+    assert archive_result["summary"]["applied_count"] == 1
+    assert not duplicate_path.exists()
+    assert archive_target.exists()
+
+    restore_result = service.restore_duplicate_reclaim(file_instance_ids=[duplicate_instance])
+
+    assert restore_result["summary"]["applied_count"] == 1
+    assert duplicate_path.exists()
+    assert not archive_target.exists()
+
+    with session_factory() as session:
+        item = session.get(DuplicateReclaimItem, duplicate_instance)
+        record = session.get(DuplicateReclaimRecord, content_id)
+        file_row = session.get(FileInstance, duplicate_instance)
+
+        assert item is not None
+        assert item.item_status == DuplicateReclaimItemStatus.RESTORED.value
+        assert record is not None
+        assert record.reclaim_status == DuplicateReclaimStatus.RESTORED.value
+        assert file_row is not None
+        assert file_row.absolute_path == str(duplicate_path)

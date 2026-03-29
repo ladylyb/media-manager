@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import errno
 import re
+import shutil
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -682,7 +684,39 @@ class ApplyService:
                 planned_action_id=action.id,
             )
 
-        source.rename(final_destination)
+        try:
+            source.rename(final_destination)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+            if action.action_type.startswith("RECLAIM_"):
+                logger.debug(
+                    "duplicate_reclaim_debug: apply cross-device fallback",
+                    extra={
+                        "stage": "duplicate_reclaim_apply_cross_device_fallback",
+                        "run_id": str(run_id),
+                        "planned_action_id": str(action.id),
+                        "file_instance_id": str(action.file_id),
+                        "action_type": action.action_type,
+                        "source_path": str(source_resolved),
+                        "target_path": str(final_destination_resolved),
+                    },
+                )
+            cross_device_error = self._move_with_cross_device_fallback(
+                source=source,
+                destination=final_destination,
+            )
+            if cross_device_error is not None:
+                return ActionOutcome(
+                    result="FAILED",
+                    source_path=str(source_resolved),
+                    target_path=str(final_destination_resolved),
+                    error_message=cross_device_error,
+                    collision_detected=collision_detected,
+                    collision_resolved=collision_resolved,
+                    file_instance_id=action.file_id,
+                    planned_action_id=action.id,
+                )
         if action.action_type.startswith("RECLAIM_"):
             logger.debug(
                 "duplicate_reclaim_debug: apply filesystem rename attempted",
@@ -730,6 +764,47 @@ class ApplyService:
         target = Path(outcome.target_path)
         source = Path(outcome.source_path)
         return target.exists() and target.is_file() and not source.exists()
+
+    def _move_with_cross_device_fallback(self, *, source: Path, destination: Path) -> str | None:
+        source_stat = source.stat()
+        temp_destination = destination.with_name(f".{destination.name}.partial-{uuid.uuid4().hex}")
+        try:
+            shutil.copy2(source, temp_destination)
+            temp_stat = temp_destination.stat()
+            if temp_stat.st_size != source_stat.st_size:
+                raise ApplyIntegrityException(
+                    "cross-device copy verification failed: source and temporary target sizes differ"
+                )
+            temp_destination.replace(destination)
+            try:
+                source.unlink()
+            except OSError as exc:
+                rollback_error: str | None = None
+                try:
+                    if destination.exists():
+                        destination.unlink()
+                except OSError as rollback_exc:
+                    rollback_error = str(rollback_exc)
+                if rollback_error is not None:
+                    return (
+                        "cross-device move copied the target but could not remove the source or roll back the copied "
+                        f"target: source_error={exc}; rollback_error={rollback_error}"
+                    )
+                return f"cross-device move copied the target but could not remove the source; copied target rolled back: {exc}"
+        except Exception as exc:
+            if temp_destination.exists():
+                try:
+                    temp_destination.unlink()
+                except OSError:
+                    pass
+            if destination.exists() and source.exists():
+                try:
+                    if destination.stat().st_size == source_stat.st_size:
+                        destination.unlink()
+                except OSError:
+                    pass
+            return str(exc)
+        return None
 
     def _ensure_target_parent(self, run_id: uuid.UUID, destination: Path) -> ApplyTargetParentInvalidError | None:
         try:
