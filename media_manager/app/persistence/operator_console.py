@@ -373,6 +373,9 @@ class DuplicateReclaimArchiveItem:
     restored_at: str | None
 
     def to_dict(self) -> dict[str, str | None]:
+        # Transitional compatibility note: archive_path may reference either the legacy
+        # reclaim-root location or the new recycle-bin-root location. Restore still uses
+        # this field as the source-of-truth path during the migration window.
         return {
             "file_instance_id": self.file_instance_id,
             "content_id": self.content_id,

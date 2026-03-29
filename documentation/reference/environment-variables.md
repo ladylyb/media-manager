@@ -137,17 +137,19 @@ Defaults below reflect runtime code defaults, not shell defaults.
 - Example: `false`
 
 ### `MEDIA_MANAGER_RECLAIM_ROOT`
-- Purpose: Default holding-area root for the duplicate move flow used by the Duplicates page.
+- Purpose: Current duplicate move root used by the Duplicates page today.
 - Format: Absolute directory path.
 - Default in code: `/tmp/media-manager/reclaim`
-- Stage note: this controls where eligible extra copies first move during duplicate reclaim; it is not the later recycle-bin destination.
+- Stage note: this is a transitional legacy implementation setting for the current duplicate holding area, not the long-term product/domain target.
+- Target note: the long-term duplicate-removal root is `MEDIA_MANAGER_RECYCLE_BIN_ROOT`, even though current code still moves Duplicates-page items here first.
 - Example: `/srv/media-manager/reclaim`
 
 ### `MEDIA_MANAGER_RECYCLE_BIN_ROOT`
-- Purpose: Default recycle-bin root for the later recycle/purge stage after holding-area retention expires.
+- Purpose: Target long-term root for the duplicate-removal Recycle Bin lifecycle.
 - Format: Absolute directory path.
 - Default in code: `/tmp/media-manager/recycle-bin`
-- Stage note: this setting is separate from the initial duplicate holding area and does not change the Duplicates page move target.
+- Current-state note: this does not yet change the initial duplicate move target used by the Duplicates page today.
+- Stage note: under the current implementation, this remains downstream of the initial duplicate holding stage.
 - Example: `/srv/media-manager/recycle-bin`
 
 ### `MEDIA_MANAGER_RECYCLE_PURGE_DAYS`
@@ -160,11 +162,12 @@ Defaults below reflect runtime code defaults, not shell defaults.
 ## Policy-Backed Duplicate Retention
 
 ### `duplicate_reclaim_default_retention_days`
-- Purpose: Holding-window length shown on the Duplicates page for duplicate extra copies in the configured holding area.
+- Purpose: Policy-backed holding-window length shown on the Duplicates page for duplicate extra copies after they move into the current transitional holding stage.
 - Backing: persisted policy field, not an environment variable.
 - Default in code: `14`
 - Source of default: `PolicySettingsService._default_snapshot()` in `media_manager/app/persistence/policy_settings.py`
 - Operator note: the Duplicates page reads this from policy (`duplicate_reclaim.default_retention_days`), and the execute flow falls back to the same policy value when no explicit retention is supplied.
+- Direction note: duplicate holding retention remains policy-backed in the current RFC direction.
 
 ## Admin Safety Controls
 

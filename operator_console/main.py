@@ -152,6 +152,13 @@ class PolicyUpdatePayload(BaseModel):
     version: int
 
 
+class DuplicateBinPolicyPayload(BaseModel):
+    current_move_root: str
+    current_retention_days: int
+    target_recycle_bin_root: str
+    implementation: str
+
+
 class RunTriggerPayload(BaseModel):
     """Structured payload for operator-initiated run execution."""
 
@@ -981,7 +988,7 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         return _execute_mutation(
             "duplicates-reclaim-execute",
-            lambda: services.duplicate_reclaim_execute(
+            lambda: services.duplicate_bin_execute(
                 content_ids=payload.content_ids,
                 retention_days=payload.retention_days,
             ),
@@ -996,7 +1003,7 @@ def create_app() -> FastAPI:
         parsed_page, parsed_limit = _parse_paging_args(page=page, limit=limit)
         return _execute_read(
             "duplicates-reclaim-items",
-            lambda: services.duplicate_reclaim_items(page=parsed_page, limit=parsed_limit),
+            lambda: services.duplicate_bin_items(page=parsed_page, limit=parsed_limit),
         )
 
     @app.post("/api/duplicates/reclaim/restore")
@@ -1006,7 +1013,7 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         return _execute_mutation(
             "duplicates-reclaim-restore",
-            lambda: services.duplicate_reclaim_restore(file_instance_ids=payload.file_instance_ids),
+            lambda: services.duplicate_bin_restore(file_instance_ids=payload.file_instance_ids),
         )
 
     @app.post("/api/retention/recycle")
@@ -1306,6 +1313,12 @@ def create_app() -> FastAPI:
         services: OperationServices = Depends(get_operation_services),
     ) -> JSONResponse:
         return _execute_read("policy-get", services.policy_get)
+
+    @app.get("/api/duplicates/bin-policy")
+    def get_duplicate_bin_policy_v2(
+        services: OperationServices = Depends(get_operation_services),
+    ) -> JSONResponse:
+        return _execute_read("duplicates-bin-policy-get", services.duplicate_bin_policy_get)
 
     @app.post("/api/policy")
     def post_policy_v2(

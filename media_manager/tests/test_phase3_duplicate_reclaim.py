@@ -82,7 +82,9 @@ def test_execute_duplicate_reclaim_reports_zero_planned_when_file_content_canoni
     tmp_path: Path,
 ) -> None:
     reclaim_root = tmp_path / "reclaim-root"
+    recycle_root = tmp_path / "recycle-bin-root"
     monkeypatch.setenv("MEDIA_MANAGER_RECLAIM_ROOT", str(reclaim_root))
+    monkeypatch.setenv("MEDIA_MANAGER_RECYCLE_BIN_ROOT", str(recycle_root))
     service = Phase3ActionService(session_factory)
     base = datetime(2026, 3, 29, 10, 0, tzinfo=UTC)
     content_id = UUID("0135b1ed-4dc6-4a0d-88d5-81726006507c")
@@ -131,6 +133,7 @@ def test_execute_duplicate_reclaim_reports_zero_planned_when_file_content_canoni
     assert result["diagnostics"]["planned_action_count"] == 0
     assert result["diagnostics"]["result_type"] == "zero_planned"
     assert result["diagnostics"]["reclaim_root"] == str(reclaim_root)
+    assert result["diagnostics"]["current_move_root"] == str(recycle_root)
     assert result["diagnostics"]["group_results"] == [
         {
             "content_id": str(content_id),
@@ -142,7 +145,7 @@ def test_execute_duplicate_reclaim_reports_zero_planned_when_file_content_canoni
         }
     ]
     assert duplicate_path.exists()
-    assert not reclaim_root.exists()
+    assert not recycle_root.exists()
 
 
 def test_execute_duplicate_reclaim_reports_planned_skipped_when_apply_cannot_move_source(
@@ -151,7 +154,9 @@ def test_execute_duplicate_reclaim_reports_planned_skipped_when_apply_cannot_mov
     tmp_path: Path,
 ) -> None:
     reclaim_root = tmp_path / "reclaim-root"
+    recycle_root = tmp_path / "recycle-bin-root"
     monkeypatch.setenv("MEDIA_MANAGER_RECLAIM_ROOT", str(reclaim_root))
+    monkeypatch.setenv("MEDIA_MANAGER_RECYCLE_BIN_ROOT", str(recycle_root))
     service = Phase3ActionService(session_factory)
     base = datetime(2026, 3, 29, 11, 0, tzinfo=UTC)
     content_id = UUID("1235b1ed-4dc6-4a0d-88d5-81726006507c")
@@ -213,7 +218,7 @@ def test_execute_duplicate_reclaim_reports_planned_skipped_when_apply_cannot_mov
         assert record.reclaim_status == DuplicateReclaimStatus.REVIEWED_SAFE_TO_RECLAIM.value
         assert file_row is not None
         assert file_row.absolute_path == str(duplicate_path)
-    assert not reclaim_root.exists()
+    assert not recycle_root.exists()
 
 
 def test_execute_duplicate_reclaim_moves_duplicate_and_persists_archived_state(
@@ -222,7 +227,9 @@ def test_execute_duplicate_reclaim_moves_duplicate_and_persists_archived_state(
     tmp_path: Path,
 ) -> None:
     reclaim_root = tmp_path / "reclaim-root"
+    recycle_root = tmp_path / "recycle-bin-root"
     monkeypatch.setenv("MEDIA_MANAGER_RECLAIM_ROOT", str(reclaim_root))
+    monkeypatch.setenv("MEDIA_MANAGER_RECYCLE_BIN_ROOT", str(recycle_root))
     service = Phase3ActionService(session_factory)
     base = datetime(2026, 3, 29, 12, 0, tzinfo=UTC)
     content_id = UUID("2235b1ed-4dc6-4a0d-88d5-81726006507c")
@@ -267,13 +274,13 @@ def test_execute_duplicate_reclaim_moves_duplicate_and_persists_archived_state(
         _add_reclaim_record(session, content_id=content_id, at=base + timedelta(seconds=2))
 
     result = service.execute_duplicate_reclaim(content_ids=[content_id], retention_days=7)
-    target_path = reclaim_root / str(content_id) / f"{duplicate_instance}-{duplicate_path.name}"
+    target_path = recycle_root / "duplicates" / str(content_id) / f"{duplicate_instance}-{duplicate_path.name}"
 
     assert result["diagnostics"]["planned_action_count"] == 1
     assert result["diagnostics"]["applied_count"] == 1
     assert result["diagnostics"]["skipped_count"] == 0
     assert result["diagnostics"]["result_type"] == "applied"
-    assert result["diagnostics"]["reclaim_root"] == str(reclaim_root)
+    assert result["diagnostics"]["current_move_root"] == str(recycle_root)
     assert not duplicate_path.exists()
     assert target_path.exists()
 
@@ -298,7 +305,9 @@ def test_execute_duplicate_reclaim_and_restore_succeed_with_cross_device_fallbac
     tmp_path: Path,
 ) -> None:
     reclaim_root = tmp_path / "reclaim-root"
+    recycle_root = tmp_path / "recycle-bin-root"
     monkeypatch.setenv("MEDIA_MANAGER_RECLAIM_ROOT", str(reclaim_root))
+    monkeypatch.setenv("MEDIA_MANAGER_RECYCLE_BIN_ROOT", str(recycle_root))
     service = Phase3ActionService(session_factory)
     base = datetime(2026, 3, 29, 13, 0, tzinfo=UTC)
     content_id = UUID("3235b1ed-4dc6-4a0d-88d5-81726006507c")
@@ -346,14 +355,14 @@ def test_execute_duplicate_reclaim_and_restore_succeed_with_cross_device_fallbac
 
     def raise_cross_device(path_obj: Path, target):  # type: ignore[no-untyped-def]
         target_path = Path(target)
-        if str(path_obj) in {str(duplicate_path), str(reclaim_root / str(content_id) / f"{duplicate_instance}-{duplicate_path.name}")}:
+        if str(path_obj) in {str(duplicate_path), str(recycle_root / "duplicates" / str(content_id) / f"{duplicate_instance}-{duplicate_path.name}")}:
             raise OSError(errno.EXDEV, "Invalid cross-device link")
         return original_rename(path_obj, target_path)
 
     monkeypatch.setattr(Path, "rename", raise_cross_device)
 
     archive_result = service.execute_duplicate_reclaim(content_ids=[content_id], retention_days=7)
-    archive_target = reclaim_root / str(content_id) / f"{duplicate_instance}-{duplicate_path.name}"
+    archive_target = recycle_root / "duplicates" / str(content_id) / f"{duplicate_instance}-{duplicate_path.name}"
 
     assert archive_result["diagnostics"]["result_type"] == "applied"
     assert archive_result["summary"]["applied_count"] == 1
@@ -377,3 +386,101 @@ def test_execute_duplicate_reclaim_and_restore_succeed_with_cross_device_fallbac
         assert record.reclaim_status == DuplicateReclaimStatus.RESTORED.value
         assert file_row is not None
         assert file_row.absolute_path == str(duplicate_path)
+
+
+def test_recycle_duplicate_reclaim_transitions_bin_root_items_without_second_move(
+    session_factory,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    reclaim_root = tmp_path / "reclaim-root"
+    recycle_root = tmp_path / "recycle-bin-root"
+    monkeypatch.setenv("MEDIA_MANAGER_RECLAIM_ROOT", str(reclaim_root))
+    monkeypatch.setenv("MEDIA_MANAGER_RECYCLE_BIN_ROOT", str(recycle_root))
+    service = Phase3ActionService(session_factory)
+    base = datetime(2026, 3, 29, 14, 0, tzinfo=UTC)
+    content_id = UUID("4235b1ed-4dc6-4a0d-88d5-81726006507c")
+    canonical_instance = UUID("4235b1ed-4dc6-4a0d-88d5-817260065071")
+    duplicate_instance = UUID("4235b1ed-4dc6-4a0d-88d5-817260065072")
+
+    original_path = tmp_path / "library" / "copy.jpg"
+    archive_path = recycle_root / "duplicates" / str(content_id) / f"{duplicate_instance}-copy.jpg"
+    original_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_path.write_bytes(b"copy")
+
+    with session_factory.begin() as session:
+        _add_content(session, content_id, "hash-recycle", base)
+        session.flush()
+        _add_instance(
+            session,
+            file_instance_id=canonical_instance,
+            content_id=content_id,
+            absolute_path=str(tmp_path / "library" / "main.jpg"),
+            first_seen_at=base,
+        )
+        _add_instance(
+            session,
+            file_instance_id=duplicate_instance,
+            content_id=content_id,
+            absolute_path=str(archive_path),
+            first_seen_at=base + timedelta(seconds=1),
+        )
+        _set_content_canonical_instance(
+            session,
+            content_id=content_id,
+            canonical_file_instance_id=canonical_instance,
+        )
+        session.add(
+            DuplicateReclaimRecord(
+                content_id=content_id,
+                reclaim_status=DuplicateReclaimStatus.ARCHIVED.value,
+                reviewed_at=base,
+                reviewed_by="tester",
+                archive_path=str(archive_path),
+                reclaimed_at=base,
+                expires_at=base - timedelta(days=1),
+                restored_at=None,
+                created_at=base,
+                updated_at=base,
+            )
+        )
+        session.add(
+            DuplicateReclaimItem(
+                file_instance_id=duplicate_instance,
+                content_id=content_id,
+                original_path=str(original_path),
+                archive_path=str(archive_path),
+                item_status=DuplicateReclaimItemStatus.ARCHIVED.value,
+                reclaimed_at=base,
+                expires_at=base - timedelta(days=1),
+                recycle_path=None,
+                recycled_at=None,
+                purge_after_at=None,
+                purged_at=None,
+                restored_at=None,
+                created_at=base,
+                updated_at=base,
+            )
+        )
+
+    result = service.recycle_duplicate_reclaim(file_instance_ids=[duplicate_instance])
+
+    assert result["summary"]["applied_count"] == 1
+    assert archive_path.exists()
+
+    with session_factory() as session:
+        item = session.get(DuplicateReclaimItem, duplicate_instance)
+        record = session.get(DuplicateReclaimRecord, content_id)
+        file_row = session.get(FileInstance, duplicate_instance)
+
+        assert item is not None
+        assert item.item_status == DuplicateReclaimItemStatus.RECYCLED.value
+        assert item.recycle_path == str(archive_path)
+        assert item.recycled_at is not None
+        assert item.purge_after_at is not None
+        assert record is not None
+        assert record.reclaim_status == DuplicateReclaimStatus.SCHEDULED_FOR_DELETE.value
+        assert record.archive_path == str(archive_path)
+        assert file_row is not None
+        assert file_row.absolute_path == str(archive_path)

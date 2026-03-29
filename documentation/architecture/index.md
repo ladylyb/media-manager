@@ -6,6 +6,7 @@ This section documents the operating model and runtime invariants for media-mana
 - [Run Lifecycle](run-lifecycle.md)
 - [API-Only Transition](api-only-transition.md)
 - [Duplicate Recycle Bin Lifecycle Simplification](duplicate-recycle-bin-lifecycle.md)
+- [Duplicate Recycle Bin Migration Spec](duplicate-recycle-bin-migration-spec.md)
 - [Organize Media UX Feedback](pipeline-wizard-ux-feedback-2026-03-15.md)
 - [Architecture Decision Records](adr/index.md)
 - [State Machine](../STATE_MACHINE.md)

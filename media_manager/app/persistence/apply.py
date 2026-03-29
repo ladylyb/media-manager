@@ -556,6 +556,17 @@ class ApplyService:
                     file_instance_id=action.file_id,
                     planned_action_id=action.id,
                 )
+            if action.action_type == "RECLAIM_RECYCLE":
+                return ActionOutcome(
+                    result="APPLIED",
+                    source_path=str(source_resolved),
+                    target_path=str(destination_resolved),
+                    error_message=None,
+                    collision_detected=False,
+                    collision_resolved=False,
+                    file_instance_id=action.file_id,
+                    planned_action_id=action.id,
+                )
             return ActionOutcome(
                 result="SKIPPED",
                 source_path=str(source_resolved),
@@ -658,6 +669,17 @@ class ApplyService:
 
         final_destination_resolved = final_destination.resolve(strict=False)
         if source_resolved == final_destination_resolved:
+            if action.action_type == "RECLAIM_RECYCLE":
+                return ActionOutcome(
+                    result="APPLIED",
+                    source_path=str(source_resolved),
+                    target_path=str(final_destination_resolved),
+                    error_message=None,
+                    collision_detected=collision_detected,
+                    collision_resolved=collision_resolved,
+                    file_instance_id=action.file_id,
+                    planned_action_id=action.id,
+                )
             return ActionOutcome(
                 result="SKIPPED",
                 source_path=str(source_resolved),
@@ -763,6 +785,11 @@ class ApplyService:
             return not source.exists()
         target = Path(outcome.target_path)
         source = Path(outcome.source_path)
+        if target.resolve(strict=False) == source.resolve(strict=False):
+            # Transitional duplicate-bin compatibility: a recycle action can be
+            # "applied" without a second physical move when the durable row
+            # already points at the target recycle-bin-root path.
+            return target.exists() and target.is_file()
         return target.exists() and target.is_file() and not source.exists()
 
     def _move_with_cross_device_fallback(self, *, source: Path, destination: Path) -> str | None:
