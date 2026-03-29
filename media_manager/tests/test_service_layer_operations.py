@@ -57,6 +57,8 @@ def _install_fake_policy_settings_service(
     *,
     integrity_scan_default_mode: str = "",
     duplicate_reclaim_default_retention_days: int = 14,
+    duplicate_reclaim_archive_root: str = "/tmp/media-manager/reclaim",
+    recycle_bin_root: str = "/tmp/media-manager/recycle-bin",
 ) -> None:
     class _FakePolicySettingsService:
         def __init__(self, _session_factory) -> None:
@@ -65,7 +67,11 @@ def _install_fake_policy_settings_service(
         def get_settings(self):  # type: ignore[no-untyped-def]
             return SimpleNamespace(
                 integrity_scan_default_mode=integrity_scan_default_mode,
+                duplicate_reclaim_archive_root=duplicate_reclaim_archive_root,
                 duplicate_reclaim_default_retention_days=duplicate_reclaim_default_retention_days,
+                recycle_bin_root=recycle_bin_root,
+                recycle_purge_days=30,
+                version=1,
             )
 
     monkeypatch.setattr(operations_module, "PolicySettingsService", _FakePolicySettingsService)
@@ -570,6 +576,130 @@ def test_operations_catalog_contains_expected_items() -> None:
         "operator_run",
     ]
     assert catalog["items"][-1]["label"] == "Composite Run (Compatibility)"
+
+
+def test_duplicate_bin_policy_get_is_narrow_and_bin_facing(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_fake_policy_settings_service(
+        monkeypatch,
+        duplicate_reclaim_archive_root="/archive/reclaim",
+        duplicate_reclaim_default_retention_days=21,
+        recycle_bin_root="/archive/recycle-bin",
+    )
+
+    services = OperationServices(session_factory=object(), cache=_FakeCache(invalidations=[]))  # type: ignore[arg-type]
+
+    payload = services.duplicate_bin_policy_get()
+
+    assert payload == {
+        "current_move_root": "/archive/reclaim",
+        "current_retention_days": 21,
+        "target_recycle_bin_root": "/archive/recycle-bin",
+        "implementation": "reclaim_compatibility",
+    }
+
+
+def test_duplicate_bin_execute_preserves_behavior_and_links_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    linked_ids: list[UUID] = []
+
+    class _TrackingOperationRunService(_FakeOperationRunService):
+        def link_run(self, operation_run_id, *, linked_run_id):  # type: ignore[no-untyped-def]
+            _ = operation_run_id
+            linked_ids.append(linked_run_id)
+
+    class _FakePhase3ActionService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def execute_duplicate_reclaim(self, *, content_ids=None, retention_days=14):  # type: ignore[no-untyped-def]
+            assert [str(item) for item in content_ids] == ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"]
+            assert retention_days == 21
+            return {
+                "run_id": "77777777-7777-7777-7777-777777777777",
+                "summary": {"applied_count": 1, "moves_count": 1, "errors_count": 0},
+                "diagnostics": {"planned_action_count": 1},
+            }
+
+    monkeypatch.setattr(operations_module, "OperationRunService", _TrackingOperationRunService)
+    monkeypatch.setattr(operations_module, "Phase3ActionService", _FakePhase3ActionService)
+    _install_fake_policy_settings_service(monkeypatch, duplicate_reclaim_default_retention_days=14)
+
+    cache = _FakeCache(invalidations=[])
+    services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
+
+    payload = services.duplicate_bin_execute(
+        content_ids=["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"],
+        retention_days=21,
+    )
+
+    assert payload["retention_days"] == 21
+    assert payload["run_id"] == "77777777-7777-7777-7777-777777777777"
+    assert linked_ids == [UUID("77777777-7777-7777-7777-777777777777")]
+    assert any({"duplicates", "duplicate_reclaim_items", "analytics"}.issubset(set(invalidated)) for invalidated in cache.invalidations)
+
+
+def test_duplicate_reclaim_execute_delegates_to_duplicate_bin_execute(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorded: dict[str, object] = {}
+
+    def _fake_duplicate_bin_execute(self, *, content_ids=None, retention_days=None):  # type: ignore[no-untyped-def]
+        recorded["content_ids"] = content_ids
+        recorded["retention_days"] = retention_days
+        return {"ok": True}
+
+    monkeypatch.setattr(OperationServices, "duplicate_bin_execute", _fake_duplicate_bin_execute)
+
+    services = OperationServices(session_factory=object(), cache=_FakeCache(invalidations=[]))  # type: ignore[arg-type]
+    payload = services.duplicate_reclaim_execute(content_ids=["x"], retention_days=9)
+
+    assert payload == {"ok": True}
+    assert recorded == {"content_ids": ["x"], "retention_days": 9}
+
+
+def test_duplicate_bin_restore_preserves_behavior_and_links_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    linked_ids: list[UUID] = []
+
+    class _TrackingOperationRunService(_FakeOperationRunService):
+        def link_run(self, operation_run_id, *, linked_run_id):  # type: ignore[no-untyped-def]
+            _ = operation_run_id
+            linked_ids.append(linked_run_id)
+
+    class _FakePhase3ActionService:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        def restore_duplicate_reclaim(self, *, file_instance_ids=None):  # type: ignore[no-untyped-def]
+            assert [str(item) for item in file_instance_ids] == ["aaaaaaaa-0000-0000-0000-000000000002"]
+            return {
+                "run_id": "88888888-8888-8888-8888-888888888888",
+                "summary": {"applied_count": 1, "moves_count": 1, "errors_count": 0},
+            }
+
+    monkeypatch.setattr(operations_module, "OperationRunService", _TrackingOperationRunService)
+    monkeypatch.setattr(operations_module, "Phase3ActionService", _FakePhase3ActionService)
+
+    cache = _FakeCache(invalidations=[])
+    services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
+
+    payload = services.duplicate_bin_restore(file_instance_ids=["aaaaaaaa-0000-0000-0000-000000000002"])
+
+    assert payload["run_id"] == "88888888-8888-8888-8888-888888888888"
+    assert linked_ids == [UUID("88888888-8888-8888-8888-888888888888")]
+    assert any({"duplicates", "duplicate_reclaim_items", "analytics"}.issubset(set(invalidated)) for invalidated in cache.invalidations)
+
+
+def test_duplicate_reclaim_restore_delegates_to_duplicate_bin_restore(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorded: dict[str, object] = {}
+
+    def _fake_duplicate_bin_restore(self, *, file_instance_ids=None):  # type: ignore[no-untyped-def]
+        recorded["file_instance_ids"] = file_instance_ids
+        return {"ok": True}
+
+    monkeypatch.setattr(OperationServices, "duplicate_bin_restore", _fake_duplicate_bin_restore)
+
+    services = OperationServices(session_factory=object(), cache=_FakeCache(invalidations=[]))  # type: ignore[arg-type]
+    payload = services.duplicate_reclaim_restore(file_instance_ids=["y"])
+
+    assert payload == {"ok": True}
+    assert recorded == {"file_instance_ids": ["y"]}
 
 
 def test_run_dry_run_is_validation_only_and_skips_mutators(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

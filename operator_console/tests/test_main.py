@@ -1135,6 +1135,9 @@ class _FakeReadServices:
         }
 
     def duplicate_reclaim_items(self, *, page: int, limit: int) -> dict[str, object]:
+        return self.duplicate_bin_items(page=page, limit=limit)
+
+    def duplicate_bin_items(self, *, page: int, limit: int) -> dict[str, object]:
         _ = page, limit
         return {
             "total_count": 1,
@@ -1419,6 +1422,14 @@ class _FakeOperationServices:
         content_ids: list[str] | None = None,
         retention_days: int = 14,
     ) -> dict[str, object]:
+        return self.duplicate_bin_execute(content_ids=content_ids, retention_days=retention_days)
+
+    def duplicate_bin_execute(
+        self,
+        *,
+        content_ids: list[str] | None = None,
+        retention_days: int = 14,
+    ) -> dict[str, object]:
         for content_id in content_ids or []:
             UUID(content_id)
         return {
@@ -1428,6 +1439,9 @@ class _FakeOperationServices:
         }
 
     def duplicate_reclaim_restore(self, *, file_instance_ids: list[str] | None = None) -> dict[str, object]:
+        return self.duplicate_bin_restore(file_instance_ids=file_instance_ids)
+
+    def duplicate_bin_restore(self, *, file_instance_ids: list[str] | None = None) -> dict[str, object]:
         for file_instance_id in file_instance_ids or []:
             UUID(file_instance_id)
         return {
@@ -2826,6 +2840,31 @@ def test_duplicate_reclaim_items_endpoint_returns_rows() -> None:
     assert response.json()["data"]["result"]["items"][0]["item_status"] == "ARCHIVED"
 
 
+def test_duplicate_reclaim_items_endpoint_uses_bin_read_service_internally() -> None:
+    class _BinReadServices(_FakeReadServices):
+        def __init__(self) -> None:
+            super().__init__()
+            self.used_bin = False
+
+        def duplicate_reclaim_items(self, *, page: int, limit: int) -> dict[str, object]:
+            raise AssertionError("route should use duplicate_bin_items internally")
+
+        def duplicate_bin_items(self, *, page: int, limit: int) -> dict[str, object]:
+            self.used_bin = True
+            return super().duplicate_bin_items(page=page, limit=limit)
+
+    fake = _BinReadServices()
+    app.dependency_overrides[get_read_services] = lambda: fake
+    client = TestClient(app)
+    try:
+        response = client.get("/api/duplicates/reclaim/items")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert fake.used_bin is True
+
+
 def test_duplicate_reclaim_execute_endpoint_executes() -> None:
     app.dependency_overrides[get_operation_services] = _FakeOperationServices
     client = TestClient(app)
@@ -2845,6 +2884,41 @@ def test_duplicate_reclaim_execute_endpoint_executes() -> None:
     assert response.json()["data"]["result"]["retention_days"] == 21
 
 
+def test_duplicate_reclaim_execute_endpoint_uses_bin_service_internally() -> None:
+    class _BinOperationServices(_FakeOperationServices):
+        def __init__(self) -> None:
+            self.used_bin_execute = False
+
+        def duplicate_reclaim_execute(self, *, content_ids: list[str] | None = None, retention_days: int = 14) -> dict[str, object]:
+            raise AssertionError("route should use duplicate_bin_execute internally")
+
+        def duplicate_bin_execute(
+            self,
+            *,
+            content_ids: list[str] | None = None,
+            retention_days: int = 14,
+        ) -> dict[str, object]:
+            self.used_bin_execute = True
+            return super().duplicate_bin_execute(content_ids=content_ids, retention_days=retention_days)
+
+    fake = _BinOperationServices()
+    app.dependency_overrides[get_operation_services] = lambda: fake
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/duplicates/reclaim/execute",
+            json={
+                "content_ids": ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"],
+                "retention_days": 21,
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert fake.used_bin_execute is True
+
+
 def test_duplicate_reclaim_restore_endpoint_executes() -> None:
     app.dependency_overrides[get_operation_services] = _FakeOperationServices
     client = TestClient(app)
@@ -2859,6 +2933,33 @@ def test_duplicate_reclaim_restore_endpoint_executes() -> None:
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert response.json()["data"]["result"]["run_id"] == "88888888-8888-8888-8888-888888888888"
+
+
+def test_duplicate_reclaim_restore_endpoint_uses_bin_service_internally() -> None:
+    class _BinOperationServices(_FakeOperationServices):
+        def __init__(self) -> None:
+            self.used_bin_restore = False
+
+        def duplicate_reclaim_restore(self, *, file_instance_ids: list[str] | None = None) -> dict[str, object]:
+            raise AssertionError("route should use duplicate_bin_restore internally")
+
+        def duplicate_bin_restore(self, *, file_instance_ids: list[str] | None = None) -> dict[str, object]:
+            self.used_bin_restore = True
+            return super().duplicate_bin_restore(file_instance_ids=file_instance_ids)
+
+    fake = _BinOperationServices()
+    app.dependency_overrides[get_operation_services] = lambda: fake
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/duplicates/reclaim/restore",
+            json={"file_instance_ids": ["aaaaaaaa-0000-0000-0000-000000000002"]},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert fake.used_bin_restore is True
 
 
 def test_retention_recycle_items_endpoint_returns_rows() -> None:

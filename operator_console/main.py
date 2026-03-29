@@ -981,7 +981,7 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         return _execute_mutation(
             "duplicates-reclaim-execute",
-            lambda: services.duplicate_reclaim_execute(
+            lambda: services.duplicate_bin_execute(
                 content_ids=payload.content_ids,
                 retention_days=payload.retention_days,
             ),
@@ -996,7 +996,7 @@ def create_app() -> FastAPI:
         parsed_page, parsed_limit = _parse_paging_args(page=page, limit=limit)
         return _execute_read(
             "duplicates-reclaim-items",
-            lambda: services.duplicate_reclaim_items(page=parsed_page, limit=parsed_limit),
+            lambda: services.duplicate_bin_items(page=parsed_page, limit=parsed_limit),
         )
 
     @app.post("/api/duplicates/reclaim/restore")
@@ -1006,7 +1006,7 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         return _execute_mutation(
             "duplicates-reclaim-restore",
-            lambda: services.duplicate_reclaim_restore(file_instance_ids=payload.file_instance_ids),
+            lambda: services.duplicate_bin_restore(file_instance_ids=payload.file_instance_ids),
         )
 
     @app.post("/api/retention/recycle")

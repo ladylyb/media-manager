@@ -251,8 +251,13 @@ class ReadServices:
     def integrity_quarantine_items(self, *, page: int, limit: int) -> dict[str, object]:
         return self._read_service.get_integrity_quarantine_page(page=page, limit=limit).to_dict()
 
-    def duplicate_reclaim_items(self, *, page: int, limit: int) -> dict[str, object]:
+    def duplicate_bin_items(self, *, page: int, limit: int) -> dict[str, object]:
+        """Bin-centered read entrypoint over the reclaim-backed archive page compatibility model."""
         return self._read_service.get_duplicate_reclaim_archive_page(page=page, limit=limit).to_dict()
+
+    def duplicate_reclaim_items(self, *, page: int, limit: int) -> dict[str, object]:
+        """Compatibility wrapper: service naming is bin-centered, but read payloads remain reclaim-based for now."""
+        return self.duplicate_bin_items(page=page, limit=limit)
 
     def retention_recycle_items(self, *, page: int, limit: int) -> dict[str, object]:
         return self._read_service.get_retention_recycle_page(page=page, limit=limit).to_dict()
