@@ -11,6 +11,7 @@ interface DuplicateMediaPreviewProps {
   mediaType: string;
   className?: string;
   fit?: "cover" | "contain";
+  "data-testid"?: string;
 }
 
 export function DuplicateMediaPreview({
@@ -20,6 +21,7 @@ export function DuplicateMediaPreview({
   mediaType,
   className,
   fit = "cover",
+  "data-testid": dataTestId,
 }: DuplicateMediaPreviewProps) {
   const [imageSrc, setImageSrc] = useState(src ?? null);
   const isVideo = !isImage && ["vid", "video"].includes(mediaType.toLowerCase());
@@ -30,6 +32,7 @@ export function DuplicateMediaPreview({
 
   return (
     <div
+      data-testid={dataTestId}
       className={cn(
         "relative overflow-hidden rounded-[24px] border border-border/70 bg-[linear-gradient(135deg,hsl(var(--muted))_0%,hsl(var(--secondary)/0.4)_100%)]",
         className,

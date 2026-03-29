@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   executeDuplicateReclaim: vi.fn(),
   getDuplicates: vi.fn(),
   getDuplicateReclaimItems: vi.fn(),
+  getIntegrityIssues: vi.fn(),
   getPolicy: vi.fn(),
   restoreDuplicateReclaim: vi.fn(),
   setDuplicateReclaim: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock("@/lib/api/endpoints", () => ({
   executeDuplicateReclaim: mocks.executeDuplicateReclaim,
   getDuplicates: mocks.getDuplicates,
   getDuplicateReclaimItems: mocks.getDuplicateReclaimItems,
+  getIntegrityIssues: mocks.getIntegrityIssues,
   getPolicy: mocks.getPolicy,
   restoreDuplicateReclaim: mocks.restoreDuplicateReclaim,
   setDuplicateReclaim: mocks.setDuplicateReclaim,
@@ -33,6 +35,8 @@ function buildGroup(id: string, canonicalName: string, duplicateNames: string[])
     integrity_issue_count: 0,
     integrity_broken_count: 0,
     integrity_suspect_count: 0,
+    reclaimable_file_count: duplicateNames.length,
+    estimated_reclaim_bytes: 4 * 1024 * 1024,
     duplicates: [
       {
         file_instance_id: `${id}-canonical`,
@@ -63,6 +67,8 @@ function buildVideoGroup(id: string, canonicalName: string, duplicateNames: stri
     group_id: id,
     hash: `${id}-hash`,
     canonical_path: `/library/${canonicalName}`,
+    reclaimable_file_count: duplicateNames.length,
+    estimated_reclaim_bytes: 4 * 1024 * 1024,
     duplicates: [
       {
         file_instance_id: `${id}-canonical`,
@@ -88,7 +94,7 @@ function buildVideoGroup(id: string, canonicalName: string, duplicateNames: stri
   };
 }
 
-function renderPage() {
+function renderPage(initialEntry = "/duplicates") {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: {
@@ -98,7 +104,7 @@ function renderPage() {
   });
 
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <QueryClientProvider client={queryClient}>
         <DuplicatesPage />
       </QueryClientProvider>
@@ -124,57 +130,101 @@ describe("DuplicatesPage", () => {
       },
     });
     mocks.getDuplicateReclaimItems.mockResolvedValue({ data: { items: [] } });
+    mocks.getIntegrityIssues.mockResolvedValue({ data: { items: [] } });
     mocks.executeDuplicateReclaim.mockResolvedValue({ data: {} });
     mocks.restoreDuplicateReclaim.mockResolvedValue({ data: {} });
     mocks.setDuplicateReclaim.mockResolvedValue({ data: {} });
-    mocks.setDuplicateReview.mockImplementation(async (payload: { content_id: string; review_status: string; reviewed_canonical_instance_id: string }) => {
-      groupsData = groupsData.map((group) =>
-        group.group_id === payload.content_id
-          ? {
-              ...group,
-              review_status: payload.review_status,
-              reviewed_at: "2026-03-21T10:00:00+00:00",
-              reviewed_canonical_instance_id: payload.reviewed_canonical_instance_id,
-              is_stale: false,
-              stale_reason: null,
-            }
-          : group,
-      );
-      return { data: {} };
-    });
+    mocks.setDuplicateReview.mockImplementation(
+      async (payload: { content_id: string; review_status: string; reviewed_canonical_instance_id: string }) => {
+        groupsData = groupsData.map((group) =>
+          group.group_id === payload.content_id
+            ? {
+                ...group,
+                review_status: payload.review_status,
+                reviewed_at: "2026-03-21T10:00:00+00:00",
+                reviewed_canonical_instance_id: payload.reviewed_canonical_instance_id,
+                is_stale: false,
+                stale_reason: null,
+              }
+            : group,
+        );
+        return { data: {} };
+      },
+    );
   });
 
   afterEach(() => {
     vi.clearAllMocks();
   });
 
-  it("keeps technical details collapsed by default and omits unsupported destructive actions", async () => {
+  it("defaults to the review tab with comparison content dominant and no Recycle Bin actions", async () => {
     renderPage();
 
-    expect(await screen.findByText("1 of 3")).toBeInTheDocument();
-    expect(screen.getByText("Files reclaimable")).toBeInTheDocument();
-    expect(screen.queryByText("Group members")).not.toBeInTheDocument();
-    expect(screen.queryByText("Queue")).not.toBeInTheDocument();
-    expect(screen.queryByText("Shortcuts")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /promote/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /remove/i })).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Review duplicates" })).toBeInTheDocument();
+    expect(screen.getByTestId("review-group-navigation-hidden")).toBeInTheDocument();
+    expect(screen.getAllByText("alpha-main.jpg").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mark as looks right" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Move ready duplicates to bin" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Mark safe to remove" })).not.toBeInTheDocument();
   });
 
-  it("marks a group and auto-advances to the next one", async () => {
+  it("toggles the side navigation open and closed without breaking the comparison area", async () => {
+    renderPage();
+
+    expect(await screen.findByTestId("primary-comparison-preview")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-group-navigation")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show group navigation" }));
+
+    expect(await screen.findByTestId("review-group-navigation")).toBeInTheDocument();
+    expect(screen.getByText("Group navigation")).toBeInTheDocument();
+    expect(screen.getByTestId("primary-comparison-preview")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide group navigation" }));
+
+    await waitFor(() => expect(screen.queryByTestId("review-group-navigation")).not.toBeInTheDocument());
+    expect(screen.getByTestId("primary-comparison-preview")).toBeInTheDocument();
+  });
+
+  it("keeps group jumping working through the secondary navigation panel", async () => {
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Show group navigation" }));
+    fireEvent.click(screen.getByRole("button", { name: /beta-main\.jpg/i }));
+
+    await waitFor(() => expect(screen.getByTestId("review-group-title")).toHaveTextContent("beta-main.jpg"));
+  });
+
+  it("uses Back and Next as first-class review navigation controls", async () => {
+    renderPage();
+
+    expect(await screen.findByTestId("review-group-title")).toHaveTextContent("alpha-main.jpg");
+    expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(screen.getByTestId("review-group-title")).toHaveTextContent("beta-main.jpg"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    await waitFor(() => expect(screen.getByTestId("review-group-title")).toHaveTextContent("alpha-main.jpg"));
+  });
+
+  it("marks a group and auto-advances to the next one on the review tab", async () => {
     renderPage();
 
     expect((await screen.findAllByText("alpha-main.jpg")).length).toBeGreaterThan(0);
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Mark as looks right" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Mark as looks right" }));
 
     await waitFor(() => expect(screen.getByText("2 of 3")).toBeInTheDocument());
   });
 
-  it("filters the queue by review mark after a group has been reviewed", async () => {
+  it("filters the review queue by review mark after a group has been reviewed", async () => {
     renderPage();
 
     expect((await screen.findAllByText("alpha-main.jpg")).length).toBeGreaterThan(0);
-    fireEvent.click(screen.getAllByRole("button", { name: "Mark as looks right" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Mark as looks right" }));
 
     await waitFor(() => expect(screen.getByText("2 of 3")).toBeInTheDocument());
 
@@ -204,50 +254,37 @@ describe("DuplicatesPage", () => {
     document.body.removeChild(input);
   });
 
-  it("renders review controls both above and below the comparison stage", async () => {
+  it("updates the active comparison pane when a duplicate thumbnail is selected", async () => {
     renderPage();
 
-    expect(await screen.findByText("1 of 3")).toBeInTheDocument();
+    expect(await screen.findByTestId("secondary-comparison-title")).toHaveTextContent("Extra copy: alpha-copy.jpg");
 
-    expect(screen.getAllByRole("button", { name: "Mark as looks right" })).toHaveLength(2);
-    expect(screen.getAllByRole("button", { name: "Mark as needs review" })).toHaveLength(2);
-    expect(screen.getAllByRole("button", { name: "Mark as not sure" })).toHaveLength(2);
-  });
+    fireEvent.click(screen.getByRole("button", { name: "Compare duplicate 2: alpha-copy-2.jpg" }));
 
-  it("marks a group as safe to reclaim", async () => {
-    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("secondary-comparison-title")).toHaveTextContent("Extra copy: alpha-copy-2.jpg");
+      expect(screen.getByTestId("active-duplicate-caption")).toHaveTextContent("Comparing: alpha-copy-2.jpg");
+      expect(screen.getByRole("button", { name: "Compare duplicate 2: alpha-copy-2.jpg" })).toHaveAttribute("aria-pressed", "true");
+    });
 
-    expect(await screen.findByText("1 of 3")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Mark safe to reclaim" }));
-
-    await waitFor(() =>
-      expect(mocks.setDuplicateReclaim).toHaveBeenCalledWith({
-        content_id: "group-alpha",
-        reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
-      }),
+    const preview = screen.getByTestId("secondary-comparison-preview");
+    expect(within(preview).getByRole("img", { name: "alpha-copy-2.jpg" })).toHaveAttribute(
+      "src",
+      "/api/thumbnail/group-alpha-duplicate-1",
     );
   });
 
-  it("surfaces integrity risk counts for the selected duplicate group", async () => {
-    groupsData = [
-      {
-        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
-        integrity_issue_count: 2,
-        integrity_broken_count: 1,
-        integrity_suspect_count: 1,
-      },
-    ];
-    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
-
+  it("renders the secondary navigation as a text-only list without thumbnails", async () => {
     renderPage();
 
-    expect(await screen.findByText("2 integrity issues")).toBeInTheDocument();
-    expect(screen.getByText("1 broken")).toBeInTheDocument();
-    expect(screen.getByText("1 suspect")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Show group navigation" }));
+
+    const navigation = await screen.findByTestId("review-group-navigation");
+    expect(within(navigation).getAllByTestId("review-queue-no-thumbnails").length).toBeGreaterThan(0);
+    expect(within(navigation).queryByRole("img")).toBeNull();
   });
 
-  it("uses the policy default reclaim retention when archiving reclaimable groups", async () => {
+  it("keeps deep-link tab navigation on the Recycle Bin tab", async () => {
     groupsData = [
       {
         ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
@@ -256,9 +293,54 @@ describe("DuplicatesPage", () => {
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
 
-    renderPage();
+    renderPage("/duplicates?tab=removal");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Archive reclaimable" }));
+    expect(await screen.findByRole("heading", { name: "Recycle Bin" })).toBeInTheDocument();
+    expect(screen.getAllByText("Ready to move to bin").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Move ready duplicates to bin" })).toBeInTheDocument();
+    expect(screen.getByText("Move safe extra copies out of the main library, restore them if needed, and keep track of the retention window.")).toBeInTheDocument();
+  });
+
+  it("keeps recycle-bin actions in distinct operator-facing sections", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
+      },
+      buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+    mocks.getDuplicateReclaimItems.mockResolvedValue({
+      data: {
+        items: [
+          {
+            file_instance_id: "archived-1",
+            content_id: "group-archived",
+            original_path: "/library/archived-copy.jpg",
+            archive_path: "/archive/archived-copy.jpg",
+            item_status: "ARCHIVED",
+            expires_at: "2026-04-10T10:00:00+00:00",
+          },
+        ],
+      },
+    });
+
+    renderPage("/duplicates?tab=removal");
+
+    expect(await screen.findByText("Needs review before moving to bin")).toBeInTheDocument();
+    expect(screen.getAllByText("In the bin").length).toBeGreaterThan(0);
+    expect(screen.getByText("Items in the bin can be restored before they are permanently deleted.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark safe to remove" }));
+
+    await waitFor(() =>
+      expect(mocks.setDuplicateReclaim).toHaveBeenCalledWith({
+        content_id: "group-beta",
+        reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Move ready duplicates to bin" }));
 
     await waitFor(() =>
       expect(mocks.executeDuplicateReclaim).toHaveBeenCalledWith({
@@ -266,9 +348,107 @@ describe("DuplicatesPage", () => {
         retention_days: 21,
       }),
     );
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore from bin" }));
+
+    await waitFor(() =>
+      expect(mocks.restoreDuplicateReclaim).toHaveBeenCalledWith({
+        file_instance_ids: ["archived-1"],
+      }),
+    );
   });
 
-  it("renders video poster previews in the comparison cards and queue", async () => {
+  it("surfaces duplicate-related playback issues without becoming a generic integrity dashboard", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        integrity_issue_count: 2,
+        integrity_broken_count: 1,
+        integrity_suspect_count: 1,
+      },
+      buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+    mocks.getIntegrityIssues.mockResolvedValue({
+      data: {
+        items: [
+          {
+            check_id: "check-1",
+            file_instance_id: "group-alpha-duplicate-0",
+            absolute_path: "/library/alpha-copy.jpg",
+            status: "BROKEN",
+            confidence: 1,
+            signal_types: ["decode"],
+          },
+          {
+            check_id: "check-2",
+            file_instance_id: "group-alpha-canonical",
+            absolute_path: "/library/alpha-main.jpg",
+            status: "SUSPECT",
+            confidence: 0.8,
+            signal_types: ["probe"],
+          },
+          {
+            check_id: "check-3",
+            file_instance_id: "unrelated-file",
+            absolute_path: "/library/unrelated.jpg",
+            status: "BROKEN",
+            confidence: 1,
+            signal_types: ["decode"],
+          },
+        ],
+      },
+    });
+
+    renderPage("/duplicates?tab=playback-issues");
+
+    expect(await screen.findByRole("heading", { name: "Playback issues" })).toBeInTheDocument();
+    expect(screen.getByText("Playback issues in duplicate groups")).toBeInTheDocument();
+    expect(screen.getAllByText("alpha-main.jpg").length).toBeGreaterThan(0);
+    expect(screen.getByText("Playback issue")).toBeInTheDocument();
+    expect(screen.getByText("Needs checking")).toBeInTheDocument();
+    expect(screen.queryByText("unrelated.jpg")).not.toBeInTheDocument();
+    expect(screen.queryByText("Quick")).not.toBeInTheDocument();
+  });
+
+  it("opens a reviewed playback-issue group in review even when the default filter would hide it", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        review_status: "looks_right",
+      },
+      buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+    mocks.getIntegrityIssues.mockResolvedValue({
+      data: {
+        items: [
+          {
+            check_id: "check-alpha",
+            file_instance_id: "group-alpha-duplicate-0",
+            absolute_path: "/library/alpha-copy.jpg",
+            status: "BROKEN",
+            confidence: 1,
+            signal_types: ["decode"],
+          },
+        ],
+      },
+    });
+
+    renderPage("/duplicates?tab=playback-issues");
+
+    expect(await screen.findByRole("heading", { name: "Playback issues" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open in review" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Review duplicates" })).toBeInTheDocument();
+      expect(screen.getByText("All")).toBeInTheDocument();
+      expect(screen.getAllByText("alpha-main.jpg").length).toBeGreaterThan(0);
+    });
+  });
+
+  it("renders video poster previews in the comparison cards and review queue", async () => {
     groupsData = [buildVideoGroup("group-video", "video-main.mp4", ["video-copy.mp4"])];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
 
@@ -289,6 +469,8 @@ describe("DuplicatesPage", () => {
         group_id: "group-video-missing",
         hash: "group-video-missing-hash",
         canonical_path: "/library/video-main.mp4",
+        reclaimable_file_count: 1,
+        estimated_reclaim_bytes: 4 * 1024 * 1024,
         duplicates: [
           {
             file_instance_id: "group-video-missing-canonical",
@@ -321,5 +503,40 @@ describe("DuplicatesPage", () => {
     expect(screen.queryByRole("img", { name: "video-main.mp4" })).toBeNull();
     expect(screen.queryByRole("img", { name: "video-copy.mp4" })).toBeNull();
     expect(screen.getAllByText("Video").length).toBeGreaterThan(0);
+  });
+
+  it("constrains long filenames with truncation-friendly containers and title attributes", async () => {
+    const longName =
+      "very-long-filename-that-should-not-overflow-the-review-header-or-destabilize-the-comparison-layout-copy-two-final-version.jpg";
+    groupsData = [buildGroup("group-long", longName, [`copy-${longName}`])];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+
+    renderPage();
+
+    const reviewTitle = await screen.findByTestId("review-group-title");
+    const primaryTitle = screen.getByTestId("primary-comparison-title");
+    const secondaryTitle = screen.getByTestId("secondary-comparison-title");
+
+    expect(reviewTitle).toHaveClass("truncate");
+    expect(primaryTitle).toHaveClass("truncate");
+    expect(secondaryTitle).toHaveClass("truncate");
+    expect(reviewTitle).toHaveAttribute("title", longName);
+    expect(primaryTitle).toHaveAttribute("title", longName);
+    expect(secondaryTitle).toHaveAttribute("title", `Extra copy: copy-${longName}`);
+  });
+
+  it("constrains long filenames safely inside the side navigation", async () => {
+    const longName =
+      "extremely-long-navigation-filename-that-should-stay-contained-inside-the-secondary-panel-without-bleeding.jpg";
+    groupsData = [buildGroup("group-long-nav", longName, ["copy-a.jpg"])];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Show group navigation" }));
+
+    const queueTitle = await screen.findByTestId("review-queue-item-title");
+    expect(queueTitle).toHaveClass("truncate");
+    expect(queueTitle).toHaveAttribute("title", longName);
   });
 });

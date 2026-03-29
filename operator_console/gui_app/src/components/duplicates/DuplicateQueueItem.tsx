@@ -1,6 +1,3 @@
-import { Copy } from "lucide-react";
-
-import { StatusBadge } from "@/components/StatusBadge";
 import { cn } from "@/lib/utils";
 import type { DuplicateGroup } from "@/types";
 
@@ -20,7 +17,6 @@ interface DuplicateQueueItemProps {
   active: boolean;
   group: DuplicateGroup;
   markLabel: string;
-  markSeverity: "success" | "destructive" | "caution";
   onSelect: () => void;
 }
 
@@ -29,60 +25,43 @@ export function DuplicateQueueItem({
   active,
   group,
   markLabel,
-  markSeverity,
   onSelect,
 }: DuplicateQueueItemProps) {
-  const previewFiles = group.duplicates.filter((file) => file.preview_url).slice(0, 3);
   const duplicateCount = group.duplicates.filter((file) => !file.is_canonical).length;
+  const label = basename(group.canonical_path);
 
   return (
     <button
       type="button"
       onClick={onSelect}
       className={cn(
-        "w-full rounded-[22px] border px-3 py-2.5 text-left transition-all",
+        "w-full rounded-[18px] border px-3 py-2 text-left transition-all",
         active
           ? "border-primary/35 bg-primary/8 shadow-sm ring-1 ring-primary/10"
           : "border-border/70 bg-background/80 hover:border-primary/20 hover:bg-muted/40",
       )}
     >
-      <div className="flex items-start gap-3">
-        <div className="flex min-h-11 min-w-[4.5rem] items-center">
-          {previewFiles.length ? (
-            previewFiles.map((file, index) => (
-              <div
-                key={file.file_instance_id || `${file.path}-${index}`}
-                className={cn(
-                  "h-11 w-11 overflow-hidden rounded-2xl border border-background bg-muted shadow-sm",
-                  index > 0 && "-ml-3",
-                )}
-              >
-                <img src={file.preview_url ?? ""} alt={basename(file.path)} className="h-full w-full object-cover" />
-              </div>
-            ))
-          ) : (
-            <div className="flex h-12 w-20 items-center justify-center rounded-2xl border border-dashed border-border/80 bg-muted/30">
-              <Copy className="h-4 w-4 text-muted-foreground" />
-            </div>
-          )}
+      <div className="min-w-0 space-y-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+            {String(index + 1).padStart(2, "0")}
+          </span>
+          {active ? <span className="text-[11px] text-primary">Current</span> : null}
         </div>
-        <div className="min-w-0 flex-1 space-y-1.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-              {String(index + 1).padStart(2, "0")}
-            </span>
-            {active ? <StatusBadge label="Now" severity="info" /> : null}
-            <StatusBadge label={markLabel} severity={markSeverity} />
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="truncate text-sm font-semibold text-foreground">{basename(group.canonical_path)}</p>
-            <StatusBadge label={`${group.duplicates.length} files`} severity="neutral" />
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {duplicateCount === 1 ? "1 matching copy" : `${duplicateCount} matching copies`}
-          </p>
-          <p className="truncate text-[11px] text-muted-foreground/80">{truncateMiddle(group.canonical_path, 32)}</p>
-        </div>
+        <p
+          className="truncate text-sm font-semibold text-foreground"
+          title={label}
+          data-testid="review-queue-item-title"
+        >
+          {label}
+        </p>
+        <p className="truncate text-xs text-muted-foreground" title={group.canonical_path}>
+          {truncateMiddle(group.canonical_path, 40)}
+        </p>
+        <p className="text-[11px] text-muted-foreground">
+          {markLabel} • {duplicateCount === 1 ? "1 extra copy" : `${duplicateCount} extra copies`}
+        </p>
+        <div data-testid="review-queue-no-thumbnails" className="hidden" />
       </div>
     </button>
   );

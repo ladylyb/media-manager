@@ -18,6 +18,8 @@ interface DuplicateFocusCardProps {
   className?: string;
   previewClassName?: string;
   previewFit?: "cover" | "contain";
+  previewTestId?: string;
+  titleTestId?: string;
 }
 
 export function DuplicateFocusCard({
@@ -29,8 +31,11 @@ export function DuplicateFocusCard({
   className,
   previewClassName,
   previewFit,
+  previewTestId,
+  titleTestId,
 }: DuplicateFocusCardProps) {
   const previewSrc = file.preview_url ?? (file.is_image ? file.media_url ?? file.thumbnail_url : null);
+  const resolvedTitle = title ?? basename(file.path);
 
   return (
     <Card
@@ -44,7 +49,7 @@ export function DuplicateFocusCard({
         } ${className ?? ""}`
       }
     >
-      <CardContent className="space-y-4 p-4">
+      <CardContent className="space-y-2.5 p-2.5">
         <DuplicateMediaPreview
           src={previewSrc}
           alt={basename(file.path)}
@@ -52,14 +57,21 @@ export function DuplicateFocusCard({
           mediaType={file.media_type}
           className={previewClassName ?? "aspect-[4/3]"}
           fit={previewFit}
+          data-testid={previewTestId}
         />
-        <div className="space-y-2">
+        <div className="min-w-0 space-y-1.5">
           <StatusBadge
             label={badge}
             severity={emphasis === "success" ? "success" : emphasis === "info" ? "info" : "neutral"}
           />
-          <div>
-            <p className="truncate text-base font-semibold text-foreground">{title ?? basename(file.path)}</p>
+          <div className="min-w-0">
+            <p
+              className="truncate text-base font-semibold text-foreground"
+              title={resolvedTitle}
+              data-testid={titleTestId}
+            >
+              {resolvedTitle}
+            </p>
             <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{description}</p>
           </div>
         </div>
