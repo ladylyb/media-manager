@@ -621,6 +621,29 @@ describe("DuplicatesPage", () => {
     });
   });
 
+  it("re-adds a restored group to move eligibility after it is reviewed as looks right again", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        reclaim_status: "RESTORED",
+      },
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+
+    renderPage();
+
+    expect(await screen.findByTestId("review-group-title")).toHaveTextContent("alpha-main.jpg");
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark as looks right" }));
+
+    await waitFor(() =>
+      expect(mocks.setDuplicateReclaim).toHaveBeenCalledWith({
+        content_id: "group-alpha",
+        reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
+      }),
+    );
+  });
+
   it("shows explicit no-op feedback when no new files are moved", async () => {
     groupsData = [
       {

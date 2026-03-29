@@ -549,7 +549,8 @@ export default function DuplicatesPage() {
         reclaim_status,
       });
       markBridgeBlocked(group.group_id, false);
-      setReclaimBridgeWarning((current) => (current && current.includes(group.group_id) ? null : current));
+      setReclaimBridgeWarning(null);
+      setRecycleBinFeedback(null);
       return true;
     } catch {
       markBridgeBlocked(group.group_id, true);
@@ -606,6 +607,8 @@ export default function DuplicatesPage() {
 
   async function handleMoveEligibleDuplicates(groupsToMove: DuplicateGroup[] = readyGroups, scope: "selected" | "all" | "single" = "all") {
     setRecycleBinFeedback(null);
+    setReclaimBridgeWarning(null);
+    reclaimMutation.reset();
     if (recycleConfigWarning) {
       setRecycleBinFeedback({ tone: "warning", message: recycleConfigWarning });
       return;
@@ -713,7 +716,13 @@ export default function DuplicatesPage() {
     });
     setRecycleBinFeedback(null);
 
-    if (isPendingRemovalStatus(selected.reclaim_status)) {
+    if (mark === "looks_right" && selected.reclaim_status === "RESTORED") {
+      void syncReclaimBridge(
+        selected,
+        "REVIEWED_SAFE_TO_RECLAIM",
+        `Saved “Looks right” for ${basename(selected.canonical_path)}, but the app could not add it back to Ready to move. Try again from the Recycle Bin tab.`,
+      );
+    } else if (isPendingRemovalStatus(selected.reclaim_status)) {
       markBridgeBlocked(selected.group_id, false);
     } else if (mark === "looks_right") {
       void syncReclaimBridge(
