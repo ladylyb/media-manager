@@ -178,6 +178,8 @@ Migration should be staged, not big-bang.
 - keep restore compatible during transition
 - treat `MEDIA_MANAGER_RECLAIM_ROOT` as legacy/transitional while compatibility remains in place
 
+Concrete state and path migration details for future implementation slices are specified in [Duplicate Recycle Bin Migration Spec](duplicate-recycle-bin-migration-spec.md).
+
 ### Phase 4: Data / Status Migration
 
 - backfill or rename persisted paths and status mappings as needed
