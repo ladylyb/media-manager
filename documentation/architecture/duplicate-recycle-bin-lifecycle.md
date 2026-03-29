@@ -30,6 +30,7 @@ Current implementation behavior must be acknowledged explicitly:
 
 - The Duplicates-page move flow currently uses the duplicate reclaim / holding-stage implementation.
 - The planner/apply path performs real file movement into the current duplicate reclaim holding root.
+- That reclaim-root-backed move target is transitional implementation debt, not the long-term product/domain target.
 - Restore currently restores from that same holding stage.
 - Later recycle and purge operations exist separately as downstream retention workflows.
 - `SAFE_TO_RECLAIM` / `REVIEWED_SAFE_TO_RECLAIM` and reclaim statuses still exist internally.
@@ -103,6 +104,12 @@ Long-term target:
 - one duplicate-removal root: `MEDIA_MANAGER_RECYCLE_BIN_ROOT`
 - current `MEDIA_MANAGER_RECLAIM_ROOT` is legacy/transitional
 - duplicate restore window remains policy-backed
+
+Current implementation note:
+
+- today’s Duplicates-page move flow still lands in `MEDIA_MANAGER_RECLAIM_ROOT`
+- that path should be documented as the current transitional implementation, not the target Recycle Bin concept
+- `MEDIA_MANAGER_RECYCLE_BIN_ROOT` is the intended long-term duplicate-removal root once the lifecycle converges
 
 Storage guidance:
 
