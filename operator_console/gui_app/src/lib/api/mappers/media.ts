@@ -84,6 +84,11 @@ export function mapDuplicateGroups(payload: Record<string, unknown>): DuplicateG
       estimated_reclaim_bytes: Number(row.estimated_reclaim_bytes ?? 0),
       reclaim_status: row.reclaim_status ? String(row.reclaim_status) as DuplicateGroup["reclaim_status"] : null,
       reclaimable_file_count: Number(row.reclaimable_file_count ?? 0),
+      duplicate_reclaim_actionable:
+        typeof row.duplicate_reclaim_actionable === "boolean" ? row.duplicate_reclaim_actionable : undefined,
+      duplicate_reclaim_unavailable_reason: row.duplicate_reclaim_unavailable_reason
+        ? String(row.duplicate_reclaim_unavailable_reason) as DuplicateGroup["duplicate_reclaim_unavailable_reason"]
+        : null,
       retention_expires_at: row.retention_expires_at ? String(row.retention_expires_at) : null,
       integrity_issue_count: Number(row.integrity_issue_count ?? 0),
       integrity_broken_count: Number(row.integrity_broken_count ?? 0),

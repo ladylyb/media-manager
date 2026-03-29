@@ -36,6 +36,12 @@ export interface DuplicateGroup {
   estimated_reclaim_bytes?: number;
   reclaim_status?: "UNREVIEWED" | "REVIEWED_SAFE_TO_RECLAIM" | "ARCHIVED" | "SCHEDULED_FOR_DELETE" | "RESTORED" | null;
   reclaimable_file_count?: number;
+  duplicate_reclaim_actionable?: boolean;
+  duplicate_reclaim_unavailable_reason?:
+    | "missing_canonical_file_content_mapping"
+    | "no_active_duplicate_instances"
+    | "reclaim_status_not_actionable"
+    | null;
   retention_expires_at?: string | null;
   integrity_issue_count?: number;
   integrity_broken_count?: number;

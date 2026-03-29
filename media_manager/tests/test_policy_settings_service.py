@@ -33,6 +33,11 @@ def _command(**overrides) -> UpdatePolicySettingsCommand:
 def test_get_settings_defaults_to_environment_when_row_missing(session_factory, monkeypatch) -> None:
     monkeypatch.setenv("MEDIA_CANONICAL_POLICY", "PREFER_ROOT")
     monkeypatch.setenv("MEDIA_PREFERRED_ROOTS", " /z , /a , /z ")
+    monkeypatch.delenv("MEDIA_MANAGER_RECLAIM_ROOT", raising=False)
+    monkeypatch.delenv("MEDIA_MANAGER_QUARANTINE_ROOT", raising=False)
+    monkeypatch.delenv("MEDIA_MANAGER_QUARANTINE_RETENTION_DAYS", raising=False)
+    monkeypatch.delenv("MEDIA_MANAGER_RECYCLE_BIN_ROOT", raising=False)
+    monkeypatch.delenv("MEDIA_MANAGER_RECYCLE_PURGE_DAYS", raising=False)
     service = PolicySettingsService(session_factory)
 
     snapshot = service.get_settings()
@@ -155,3 +160,30 @@ def test_update_settings_rejects_non_absolute_policy_paths(session_factory) -> N
         assert "recycle_bin_root" in str(exc)
     else:
         raise AssertionError("Expected PolicySettingsValidationError")
+
+
+def test_get_settings_prefers_explicit_env_for_env_backed_storage_fields(session_factory, monkeypatch) -> None:
+    service = PolicySettingsService(session_factory)
+    service.update_settings(
+        _command(
+            duplicate_reclaim_archive_root="/tmp/media-manager/reclaim",
+            integrity_quarantine_root="/tmp/media-manager/quarantine",
+            recycle_bin_root="/tmp/media-manager/recycle-bin",
+            recycle_purge_days=30,
+        )
+    )
+
+    monkeypatch.setenv("MEDIA_MANAGER_RECLAIM_ROOT", "/home/tester/gallery/reclaim")
+    monkeypatch.setenv("MEDIA_MANAGER_QUARANTINE_ROOT", "/home/tester/gallery/quarantine")
+    monkeypatch.setenv("MEDIA_MANAGER_QUARANTINE_RETENTION_DAYS", "21")
+    monkeypatch.setenv("MEDIA_MANAGER_RECYCLE_BIN_ROOT", "/home/tester/gallery/recycle-bin")
+    monkeypatch.setenv("MEDIA_MANAGER_RECYCLE_PURGE_DAYS", "45")
+
+    snapshot = service.get_settings()
+
+    assert snapshot.duplicate_reclaim_archive_root == "/home/tester/gallery/reclaim"
+    assert snapshot.integrity_quarantine_root == "/home/tester/gallery/quarantine"
+    assert snapshot.integrity_quarantine_retention_days == 21
+    assert snapshot.recycle_bin_root == "/home/tester/gallery/recycle-bin"
+    assert snapshot.recycle_purge_days == 45
+    assert snapshot.duplicate_reclaim_default_retention_days == 14

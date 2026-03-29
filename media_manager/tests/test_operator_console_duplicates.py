@@ -6,7 +6,7 @@ from uuid import UUID
 
 import pytest
 
-from media_manager.app.persistence.models import CanonicalAssignment, FileContent, FileInstance, FileInstanceStatus
+from media_manager.app.persistence.models import CanonicalAssignment, DuplicateReclaimRecord, DuplicateReclaimStatus, FileContent, FileInstance, FileInstanceStatus
 from media_manager.app.persistence.operator_console import OperatorConsoleReadService
 
 
@@ -261,6 +261,63 @@ def test_get_duplicate_groups_limit_applies(session_factory) -> None:
     groups = service.get_duplicate_groups(limit=2)
 
     assert len(groups) == 2
+
+
+def test_get_duplicate_groups_exposes_duplicate_reclaim_actionable_false_when_file_content_canonical_missing(session_factory) -> None:
+    service = OperatorConsoleReadService(session_factory)
+    base = datetime(2026, 3, 2, 9, 0, tzinfo=UTC)
+    content_id = UUID("55555555-5555-5555-5555-555555555555")
+    canonical_instance = UUID("55555555-5555-5555-5555-555555555556")
+    duplicate_instance = UUID("55555555-5555-5555-5555-555555555557")
+
+    with session_factory.begin() as session:
+        _add_content(session, content_id, "hash-reclaim", base)
+        session.flush()
+        _add_instance(
+            session,
+            file_instance_id=canonical_instance,
+            content_id=content_id,
+            absolute_path="/dupes/reclaim/canonical.jpg",
+            first_seen_at=base,
+        )
+        _add_instance(
+            session,
+            file_instance_id=duplicate_instance,
+            content_id=content_id,
+            absolute_path="/dupes/reclaim/duplicate.jpg",
+            first_seen_at=base + timedelta(seconds=1),
+        )
+        session.add(
+            CanonicalAssignment(
+                assignment_id=UUID("55555555-5555-5555-5555-555555555558"),
+                content_id=content_id,
+                canonical_instance_id=canonical_instance,
+                policy_name="FIRST_SEEN",
+                policy_version="v1",
+                assigned_at=base + timedelta(seconds=2),
+            )
+        )
+        session.add(
+            DuplicateReclaimRecord(
+                content_id=content_id,
+                reclaim_status=DuplicateReclaimStatus.REVIEWED_SAFE_TO_RECLAIM.value,
+                reviewed_at=base + timedelta(seconds=3),
+                reviewed_by="tester",
+                archive_path=None,
+                reclaimed_at=None,
+                expires_at=None,
+                restored_at=None,
+                created_at=base + timedelta(seconds=3),
+                updated_at=base + timedelta(seconds=3),
+            )
+        )
+
+    groups = service.get_duplicate_groups()
+
+    assert len(groups) == 1
+    assert groups[0].canonical_file is not None
+    assert groups[0].duplicate_reclaim_actionable is False
+    assert groups[0].duplicate_reclaim_unavailable_reason == "missing_canonical_file_content_mapping"
 
 
 def test_resolve_thumbnail_source_returns_image_for_active_file(session_factory, tmp_path: Path) -> None:

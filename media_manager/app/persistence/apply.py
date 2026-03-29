@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import errno
 import re
+import shutil
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -462,6 +464,19 @@ class ApplyService:
         destination = Path(action.target_path) if action.target_path else source
         source_resolved = source.resolve(strict=False)
         destination_resolved = destination.resolve(strict=False)
+        if action.action_type.startswith("RECLAIM_"):
+            logger.debug(
+                "duplicate_reclaim_debug: apply action start",
+                extra={
+                    "stage": "duplicate_reclaim_apply_start",
+                    "run_id": str(run_id),
+                    "planned_action_id": str(action.id),
+                    "file_instance_id": str(action.file_id),
+                    "action_type": action.action_type,
+                    "source_path": str(source_resolved),
+                    "target_path": str(destination_resolved),
+                },
+            )
 
         if not source.exists() or not source.is_file():
             if purge_action or (destination.exists() and destination.is_file()):
@@ -669,7 +684,52 @@ class ApplyService:
                 planned_action_id=action.id,
             )
 
-        source.rename(final_destination)
+        try:
+            source.rename(final_destination)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+            if action.action_type.startswith("RECLAIM_"):
+                logger.debug(
+                    "duplicate_reclaim_debug: apply cross-device fallback",
+                    extra={
+                        "stage": "duplicate_reclaim_apply_cross_device_fallback",
+                        "run_id": str(run_id),
+                        "planned_action_id": str(action.id),
+                        "file_instance_id": str(action.file_id),
+                        "action_type": action.action_type,
+                        "source_path": str(source_resolved),
+                        "target_path": str(final_destination_resolved),
+                    },
+                )
+            cross_device_error = self._move_with_cross_device_fallback(
+                source=source,
+                destination=final_destination,
+            )
+            if cross_device_error is not None:
+                return ActionOutcome(
+                    result="FAILED",
+                    source_path=str(source_resolved),
+                    target_path=str(final_destination_resolved),
+                    error_message=cross_device_error,
+                    collision_detected=collision_detected,
+                    collision_resolved=collision_resolved,
+                    file_instance_id=action.file_id,
+                    planned_action_id=action.id,
+                )
+        if action.action_type.startswith("RECLAIM_"):
+            logger.debug(
+                "duplicate_reclaim_debug: apply filesystem rename attempted",
+                extra={
+                    "stage": "duplicate_reclaim_apply_rename",
+                    "run_id": str(run_id),
+                    "planned_action_id": str(action.id),
+                    "file_instance_id": str(action.file_id),
+                    "action_type": action.action_type,
+                    "source_path": str(source_resolved),
+                    "target_path": str(final_destination_resolved),
+                },
+            )
         logger.info(
             "File renamed",
             extra={
@@ -704,6 +764,47 @@ class ApplyService:
         target = Path(outcome.target_path)
         source = Path(outcome.source_path)
         return target.exists() and target.is_file() and not source.exists()
+
+    def _move_with_cross_device_fallback(self, *, source: Path, destination: Path) -> str | None:
+        source_stat = source.stat()
+        temp_destination = destination.with_name(f".{destination.name}.partial-{uuid.uuid4().hex}")
+        try:
+            shutil.copy2(source, temp_destination)
+            temp_stat = temp_destination.stat()
+            if temp_stat.st_size != source_stat.st_size:
+                raise ApplyIntegrityException(
+                    "cross-device copy verification failed: source and temporary target sizes differ"
+                )
+            temp_destination.replace(destination)
+            try:
+                source.unlink()
+            except OSError as exc:
+                rollback_error: str | None = None
+                try:
+                    if destination.exists():
+                        destination.unlink()
+                except OSError as rollback_exc:
+                    rollback_error = str(rollback_exc)
+                if rollback_error is not None:
+                    return (
+                        "cross-device move copied the target but could not remove the source or roll back the copied "
+                        f"target: source_error={exc}; rollback_error={rollback_error}"
+                    )
+                return f"cross-device move copied the target but could not remove the source; copied target rolled back: {exc}"
+        except Exception as exc:
+            if temp_destination.exists():
+                try:
+                    temp_destination.unlink()
+                except OSError:
+                    pass
+            if destination.exists() and source.exists():
+                try:
+                    if destination.stat().st_size == source_stat.st_size:
+                        destination.unlink()
+                except OSError:
+                    pass
+            return str(exc)
+        return None
 
     def _ensure_target_parent(self, run_id: uuid.UUID, destination: Path) -> ApplyTargetParentInvalidError | None:
         try:
@@ -771,6 +872,19 @@ class ApplyService:
                     record.reclaimed_at = now
                     record.expires_at = item.expires_at
                     record.updated_at = now
+                logger.debug(
+                    "duplicate_reclaim_debug: persisted archive outcome",
+                    extra={
+                        "stage": "duplicate_reclaim_apply_persisted",
+                        "planned_action_id": str(action.id),
+                        "file_instance_id": str(action.file_id),
+                        "action_type": action.action_type,
+                        "item_status": item.item_status,
+                        "content_id": str(item.content_id),
+                        "record_reclaim_status": record.reclaim_status if record is not None else "",
+                        "archive_path": item.archive_path,
+                    },
+                )
         elif action.action_type == "RECLAIM_RESTORE":
             item = session.get(DuplicateReclaimItem, action.file_id)
             if item is not None:
@@ -782,6 +896,18 @@ class ApplyService:
                     record.reclaim_status = DuplicateReclaimStatus.RESTORED.value
                     record.restored_at = now
                     record.updated_at = now
+                logger.debug(
+                    "duplicate_reclaim_debug: persisted restore outcome",
+                    extra={
+                        "stage": "duplicate_reclaim_apply_persisted",
+                        "planned_action_id": str(action.id),
+                        "file_instance_id": str(action.file_id),
+                        "action_type": action.action_type,
+                        "item_status": item.item_status,
+                        "content_id": str(item.content_id),
+                        "record_reclaim_status": record.reclaim_status if record is not None else "",
+                    },
+                )
         elif action.action_type == "RECLAIM_RECYCLE":
             item = session.get(DuplicateReclaimItem, action.file_id)
             if item is not None:
@@ -795,6 +921,19 @@ class ApplyService:
                     record.reclaimed_at = now
                     record.expires_at = item.purge_after_at
                     record.updated_at = now
+                logger.debug(
+                    "duplicate_reclaim_debug: persisted recycle outcome",
+                    extra={
+                        "stage": "duplicate_reclaim_apply_persisted",
+                        "planned_action_id": str(action.id),
+                        "file_instance_id": str(action.file_id),
+                        "action_type": action.action_type,
+                        "item_status": item.item_status,
+                        "content_id": str(item.content_id),
+                        "record_reclaim_status": record.reclaim_status if record is not None else "",
+                        "recycle_path": item.recycle_path or "",
+                    },
+                )
         elif action.action_type == "RECLAIM_PURGE":
             item = session.get(DuplicateReclaimItem, action.file_id)
             if item is not None:
@@ -828,6 +967,19 @@ class ApplyService:
                 record.updated_at = now
 
     def _persist_action_item(self, audit_run_id: uuid.UUID, outcome: ActionOutcome, error_message: str | None) -> None:
+        if error_message:
+            logger.debug(
+                "duplicate_reclaim_debug: apply non-applied outcome",
+                extra={
+                    "stage": "duplicate_reclaim_apply_outcome",
+                    "planned_action_id": str(outcome.planned_action_id),
+                    "file_instance_id": str(outcome.file_instance_id),
+                    "result": outcome.result,
+                    "source_path": outcome.source_path,
+                    "target_path": outcome.target_path or "",
+                    "error_message": error_message,
+                },
+            )
         with transactional_session(self._session_factory) as session:
             session.add(
                 ApplyAuditItem(
