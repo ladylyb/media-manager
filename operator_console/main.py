@@ -152,6 +152,13 @@ class PolicyUpdatePayload(BaseModel):
     version: int
 
 
+class DuplicateBinPolicyPayload(BaseModel):
+    current_move_root: str
+    current_retention_days: int
+    target_recycle_bin_root: str
+    implementation: str
+
+
 class RunTriggerPayload(BaseModel):
     """Structured payload for operator-initiated run execution."""
 
@@ -1306,6 +1313,12 @@ def create_app() -> FastAPI:
         services: OperationServices = Depends(get_operation_services),
     ) -> JSONResponse:
         return _execute_read("policy-get", services.policy_get)
+
+    @app.get("/api/duplicates/bin-policy")
+    def get_duplicate_bin_policy_v2(
+        services: OperationServices = Depends(get_operation_services),
+    ) -> JSONResponse:
+        return _execute_read("duplicates-bin-policy-get", services.duplicate_bin_policy_get)
 
     @app.post("/api/policy")
     def post_policy_v2(

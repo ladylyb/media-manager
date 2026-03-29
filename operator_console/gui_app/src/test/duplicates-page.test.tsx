@@ -7,10 +7,10 @@ import DuplicatesPage from "@/pages/DuplicatesPage";
 
 const mocks = vi.hoisted(() => ({
   executeDuplicateReclaim: vi.fn(),
+  getDuplicateBinPolicy: vi.fn(),
   getDuplicates: vi.fn(),
   getDuplicateReclaimItems: vi.fn(),
   getIntegrityIssues: vi.fn(),
-  getPolicy: vi.fn(),
   restoreDuplicateReclaim: vi.fn(),
   setDuplicateReclaim: vi.fn(),
   setDuplicateReview: vi.fn(),
@@ -18,10 +18,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/api/endpoints", () => ({
   executeDuplicateReclaim: mocks.executeDuplicateReclaim,
+  getDuplicateBinPolicy: mocks.getDuplicateBinPolicy,
   getDuplicates: mocks.getDuplicates,
   getDuplicateReclaimItems: mocks.getDuplicateReclaimItems,
   getIntegrityIssues: mocks.getIntegrityIssues,
-  getPolicy: mocks.getPolicy,
   restoreDuplicateReclaim: mocks.restoreDuplicateReclaim,
   setDuplicateReclaim: mocks.setDuplicateReclaim,
   setDuplicateReview: mocks.setDuplicateReview,
@@ -124,12 +124,12 @@ describe("DuplicatesPage", () => {
     ];
     reclaimItemsData = [];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
-    mocks.getPolicy.mockResolvedValue({
+    mocks.getDuplicateBinPolicy.mockResolvedValue({
       data: {
-        duplicate_reclaim: {
-          archive_root: "/tmp/media-manager/reclaim",
-          default_retention_days: 21,
-        },
+        current_move_root: "/tmp/media-manager/recycle-bin",
+        current_retention_days: 21,
+        target_recycle_bin_root: "/tmp/media-manager/recycle-bin",
+        implementation: "reclaim_compatibility",
       },
     });
     mocks.getDuplicateReclaimItems.mockImplementation(async () => ({ data: { items: reclaimItemsData } }));
@@ -724,7 +724,7 @@ describe("DuplicatesPage", () => {
   });
 
   it("shows a config warning instead of vague retention claims when policy details are unavailable", async () => {
-    mocks.getPolicy.mockRejectedValue(new Error("policy unavailable"));
+    mocks.getDuplicateBinPolicy.mockRejectedValue(new Error("policy unavailable"));
 
     renderPage("/duplicates?tab=removal");
 

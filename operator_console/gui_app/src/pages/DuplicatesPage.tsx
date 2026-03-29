@@ -21,10 +21,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   executeDuplicateReclaim,
+  getDuplicateBinPolicy,
   getDuplicateReclaimItems,
   getDuplicates,
   getIntegrityIssues,
-  getPolicy,
   restoreDuplicateReclaim,
   setDuplicateReclaim,
   setDuplicateReview,
@@ -32,7 +32,7 @@ import {
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
 import { cn } from "@/lib/utils";
-import type { DuplicateFile, DuplicateGroup, DuplicateReclaimItem, IntegrityIssue, Policy } from "@/types";
+import type { DuplicateFile, DuplicateGroup, DuplicateReclaimItem, IntegrityIssue } from "@/types";
 
 type ReviewMark = "looks_right" | "needs_review" | "not_sure";
 type ReviewFilter = "all" | "unreviewed" | ReviewMark;
@@ -63,6 +63,13 @@ interface DuplicateReclaimDiagnostics {
 interface RecycleBinFeedback {
   tone: FeedbackTone;
   message: string;
+}
+
+interface DuplicateBinPolicy {
+  current_move_root: string;
+  current_retention_days: number;
+  target_recycle_bin_root: string;
+  implementation: string;
 }
 
 interface ReadyGroupOptions {
@@ -313,9 +320,9 @@ export default function DuplicatesPage() {
     queryFn: async () => (await getDuplicates()).data,
     staleTime: queryOptions.duplicates.staleTime,
   });
-  const policyQuery = useQuery({
-    queryKey: queryKeys.policy,
-    queryFn: async () => (await getPolicy()).data,
+  const duplicateBinPolicyQuery = useQuery({
+    queryKey: queryKeys.duplicateBinPolicy,
+    queryFn: async () => (await getDuplicateBinPolicy()).data,
     staleTime: queryOptions.policy.staleTime,
   });
 
@@ -410,7 +417,7 @@ export default function DuplicatesPage() {
   });
 
   const groups = (duplicatesQuery.data as DuplicateGroup[] | undefined) ?? [];
-  const policy = (policyQuery.data as Policy | undefined) ?? null;
+  const duplicateBinPolicy = (duplicateBinPolicyQuery.data as DuplicateBinPolicy | undefined) ?? null;
   const sortedGroups = useMemo(
     () =>
       [...groups].sort((left, right) => {
@@ -498,10 +505,10 @@ export default function DuplicatesPage() {
       !((archivedReclaimCounts[group.group_id] ?? 0) >= (group.reclaimable_file_count ?? 0)) &&
       !isPendingRemovalStatus(group.reclaim_status),
   );
-  const archiveRoot = policy?.duplicate_reclaim.archive_root?.trim() ?? "";
-  const archiveRetentionDays = policy?.duplicate_reclaim.default_retention_days ?? null;
+  const archiveRoot = duplicateBinPolicy?.current_move_root?.trim() ?? "";
+  const archiveRetentionDays = duplicateBinPolicy?.current_retention_days ?? null;
   const recycleConfigWarning =
-    policyQuery.error || !archiveRoot || !archiveRetentionDays
+    duplicateBinPolicyQuery.error || !archiveRoot || !archiveRetentionDays
       ? "Recycle Bin details are unavailable right now. The app cannot confirm the configured holding area or retention window for this page."
       : null;
 

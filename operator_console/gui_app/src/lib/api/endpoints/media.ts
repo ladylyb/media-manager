@@ -86,6 +86,17 @@ export const getDuplicateReclaimItems = async (params?: { page?: number; limit?:
   return withData(envelope, mapDuplicateReclaimItems(envelope.data));
 };
 
+export const getDuplicateBinPolicy = async () => {
+  const envelope = await apiGet<Record<string, unknown>>("/duplicates/bin-policy");
+  const payload = (envelope.data ?? {}) as Record<string, unknown>;
+  return withData(envelope, {
+    current_move_root: String(payload.current_move_root ?? ""),
+    current_retention_days: Number(payload.current_retention_days ?? 14),
+    target_recycle_bin_root: String(payload.target_recycle_bin_root ?? ""),
+    implementation: String(payload.implementation ?? "reclaim_compatibility"),
+  });
+};
+
 export const restoreDuplicateReclaim = async (payload?: { file_instance_ids?: string[] }) => {
   const envelope = await apiPost<Record<string, unknown>>("/duplicates/reclaim/restore", {
     file_instance_ids: payload?.file_instance_ids ?? [],

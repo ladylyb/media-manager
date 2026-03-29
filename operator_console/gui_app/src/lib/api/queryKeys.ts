@@ -26,6 +26,7 @@ export const queryKeys = {
   integrityFile: (checkId: string) => ["integrity", "file", checkId] as const,
   integrityQuarantine: (page = 1, limit = 30) => ["integrity", "quarantine", { page, limit }] as const,
   duplicateReclaimItems: (page = 1, limit = 30) => ["duplicates", "reclaim-items", { page, limit }] as const,
+  duplicateBinPolicy: ["duplicates", "bin-policy"] as const,
   retentionRecycleItems: (page = 1, limit = 30) => ["retention", "recycle", { page, limit }] as const,
   policy: ["policy"] as const,
   analytics: ["analytics"] as const,

@@ -8,6 +8,7 @@ vi.mock("@/lib/api/client", () => ({
 import { apiGet, apiPost } from "@/lib/api/client";
 import {
   adminDbReset,
+  getDuplicateBinPolicy,
   getDirectoryPickerCapability,
   getDirectoryPickerListing,
   getIntegrityDashboard,
@@ -218,6 +219,26 @@ describe("api endpoints", () => {
     await getDirectoryPickerCapability();
 
     expect(apiGet).toHaveBeenCalledWith("/directory-picker/capability");
+  });
+
+  it("loads duplicate bin policy through the API client only", async () => {
+    vi.mocked(apiGet).mockResolvedValue({
+      ok: true,
+      workflow_version: "v2-service-layer",
+      schema_version: "schema-1",
+      generated_at: "2026-03-29T00:00:00+00:00",
+      data: {
+        current_move_root: "/tmp/media-manager/recycle-bin",
+        current_retention_days: 14,
+        target_recycle_bin_root: "/tmp/media-manager/recycle-bin",
+        implementation: "reclaim_compatibility",
+      },
+      errors: [],
+    });
+
+    await getDuplicateBinPolicy();
+
+    expect(apiGet).toHaveBeenCalledWith("/duplicates/bin-policy");
   });
 
   it("loads directory picker listings through the API client only", async () => {

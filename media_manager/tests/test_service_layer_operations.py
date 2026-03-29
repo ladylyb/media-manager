@@ -591,7 +591,7 @@ def test_duplicate_bin_policy_get_is_narrow_and_bin_facing(monkeypatch: pytest.M
     payload = services.duplicate_bin_policy_get()
 
     assert payload == {
-        "current_move_root": "/archive/reclaim",
+        "current_move_root": "/archive/recycle-bin",
         "current_retention_days": 21,
         "target_recycle_bin_root": "/archive/recycle-bin",
         "implementation": "reclaim_compatibility",

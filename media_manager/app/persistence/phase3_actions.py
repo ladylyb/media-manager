@@ -39,6 +39,22 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+def _duplicate_bin_archive_path(*, recycle_root: Path, content_id: UUID, file_instance_id: UUID, source_path: str) -> str:
+    return str(recycle_root / "duplicates" / str(content_id) / f"{file_instance_id}-{Path(source_path).name}")
+
+
+def _path_is_within_root(path_value: str | None, root: Path) -> bool:
+    if not path_value:
+        return False
+    candidate = Path(path_value).resolve(strict=False)
+    resolved_root = root.resolve(strict=False)
+    try:
+        candidate.relative_to(resolved_root)
+        return True
+    except ValueError:
+        return False
+
+
 class Phase3ActionService:
     """Plan and execute reversible reclaim/quarantine actions through planned/apply state."""
 
@@ -116,7 +132,7 @@ class Phase3ActionService:
     def _plan_duplicate_reclaim(self, *, content_ids: list[UUID] | None, retention_days: int) -> dict[str, object]:
         run = RunService(self._session_factory).create_run(owner="SYSTEM", context="DuplicateReclaim")
         policy = self._policy()
-        reclaim_root = Path(policy.duplicate_reclaim_archive_root)
+        recycle_root = Path(policy.recycle_bin_root)
         effective_retention_days = max(1, retention_days)
         expires_at = _utcnow() + timedelta(days=effective_retention_days)
         planned_action_count = 0
@@ -186,7 +202,7 @@ class Phase3ActionService:
                             "canonical_file_instance_id": str(canonical_instance_id) if canonical_instance_id is not None else "",
                             "candidate_duplicate_file_instance_ids": [str(file_id) for file_id in candidate_duplicate_ids],
                             "reason": reason or "candidate_pending",
-                            "reclaim_root": str(reclaim_root),
+                            "recycle_bin_root": str(recycle_root),
                         },
                     )
 
@@ -207,7 +223,12 @@ class Phase3ActionService:
 
             rows = session.execute(stmt).all()
             for file_instance, reclaim_record, _canonical_instance_id in rows:
-                archive_path = str(reclaim_root / str(file_instance.content_id) / f"{file_instance.file_instance_id}-{Path(file_instance.absolute_path).name}")
+                archive_path = _duplicate_bin_archive_path(
+                    recycle_root=recycle_root,
+                    content_id=file_instance.content_id,
+                    file_instance_id=file_instance.file_instance_id,
+                    source_path=file_instance.absolute_path,
+                )
                 existing = session.get(DuplicateReclaimItem, file_instance.file_instance_id)
                 now = _utcnow()
                 if existing is None:
@@ -226,10 +247,17 @@ class Phase3ActionService:
                         )
                     )
                 else:
+                    # Transitional compatibility note: archive_path may point to either the legacy
+                    # reclaim-root location or the new recycle-bin-root location. Restore continues
+                    # to use this field as the source of truth during the migration window.
                     existing.original_path = file_instance.absolute_path
                     existing.archive_path = archive_path
                     existing.item_status = DuplicateReclaimItemStatus.PENDING.value
                     existing.expires_at = expires_at
+                    existing.recycle_path = None
+                    existing.recycled_at = None
+                    existing.purge_after_at = None
+                    existing.restored_at = None
                     existing.updated_at = now
 
                 session.add(
@@ -261,7 +289,7 @@ class Phase3ActionService:
                         "canonical_file_instance_id": str(_canonical_instance_id) if _canonical_instance_id is not None else "",
                         "reclaim_status": reclaim_record.reclaim_status,
                         "archive_path": archive_path,
-                        "reclaim_root": str(reclaim_root),
+                        "recycle_bin_root": str(recycle_root),
                     },
                 )
             session.flush()
@@ -269,8 +297,9 @@ class Phase3ActionService:
             "requested_group_count": len(content_ids or []),
             "planned_action_count": planned_action_count,
             "group_results": list(group_results.values()),
-            "reclaim_root": str(reclaim_root),
+            "reclaim_root": str(Path(policy.duplicate_reclaim_archive_root)),
             "recycle_bin_root": str(policy.recycle_bin_root),
+            "current_move_root": str(recycle_root),
             "recycle_purge_days": int(policy.recycle_purge_days),
             "policy_duplicate_reclaim_default_retention_days": int(policy.duplicate_reclaim_default_retention_days),
             "retention_days": effective_retention_days,
@@ -295,6 +324,9 @@ class Phase3ActionService:
                 stmt = stmt.where(DuplicateReclaimItem.file_instance_id.in_(file_instance_ids))
             items = session.scalars(stmt.order_by(DuplicateReclaimItem.file_instance_id.asc())).all()
             for item in items:
+                # Transitional compatibility note: archive_path may reference either the legacy
+                # reclaim-root path or the new recycle-bin-root path. Restore still uses this field
+                # as the source-of-truth move source in this migration phase.
                 item.item_status = DuplicateReclaimItemStatus.PENDING.value
                 item.updated_at = _utcnow()
                 session.add(
@@ -427,8 +459,13 @@ class Phase3ActionService:
 
             items = session.scalars(stmt.order_by(DuplicateReclaimItem.file_instance_id.asc())).all()
             for item in items:
-                recycle_path = str(
-                    recycle_root / "duplicates" / str(item.content_id) / f"{item.file_instance_id}-{Path(item.archive_path).name}"
+                already_under_target_root = _path_is_within_root(item.archive_path, recycle_root)
+                recycle_path = (
+                    item.archive_path
+                    if already_under_target_root
+                    else str(
+                        recycle_root / "duplicates" / str(item.content_id) / f"{item.file_instance_id}-{Path(item.archive_path).name}"
+                    )
                 )
                 item.recycle_path = recycle_path
                 item.purge_after_at = purge_after_at
@@ -441,7 +478,7 @@ class Phase3ActionService:
                         role=PlannedActionRole.DUPLICATE.value,
                         duplicate_index=None,
                         source_path=item.archive_path,
-                        target_path=recycle_path,
+                        target_path=item.archive_path if already_under_target_root else recycle_path,
                     )
                 )
             session.flush()

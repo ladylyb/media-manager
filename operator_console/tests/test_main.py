@@ -1137,6 +1137,14 @@ class _FakeReadServices:
     def duplicate_reclaim_items(self, *, page: int, limit: int) -> dict[str, object]:
         return self.duplicate_bin_items(page=page, limit=limit)
 
+    def duplicate_bin_policy_get(self) -> dict[str, object]:
+        return {
+            "current_move_root": "/tmp/media-manager/recycle-bin",
+            "current_retention_days": 14,
+            "target_recycle_bin_root": "/tmp/media-manager/recycle-bin",
+            "implementation": "reclaim_compatibility",
+        }
+
     def duplicate_bin_items(self, *, page: int, limit: int) -> dict[str, object]:
         _ = page, limit
         return {
@@ -1319,6 +1327,14 @@ class _FakeReadServices:
 
 
 class _FakeOperationServices:
+    def duplicate_bin_policy_get(self) -> dict[str, object]:
+        return {
+            "current_move_root": "/tmp/media-manager/recycle-bin",
+            "current_retention_days": 14,
+            "target_recycle_bin_root": "/tmp/media-manager/recycle-bin",
+            "implementation": "reclaim_compatibility",
+        }
+
     def duplicate_review_set(
         self,
         *,
@@ -2838,6 +2854,24 @@ def test_duplicate_reclaim_items_endpoint_returns_rows() -> None:
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert response.json()["data"]["result"]["items"][0]["item_status"] == "ARCHIVED"
+
+
+def test_duplicate_bin_policy_endpoint_returns_narrow_payload() -> None:
+    app.dependency_overrides[get_operation_services] = _FakeOperationServices
+    client = TestClient(app)
+    try:
+        response = client.get("/api/duplicates/bin-policy")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()["data"]["result"]
+    assert payload == {
+        "current_move_root": "/tmp/media-manager/recycle-bin",
+        "current_retention_days": 14,
+        "target_recycle_bin_root": "/tmp/media-manager/recycle-bin",
+        "implementation": "reclaim_compatibility",
+    }
 
 
 def test_duplicate_reclaim_items_endpoint_uses_bin_read_service_internally() -> None:

@@ -633,7 +633,7 @@ class OperationServices:
         """Return only the duplicate-bin-facing policy facts needed by workflow callers."""
         policy = self._policy()
         return {
-            "current_move_root": policy.duplicate_reclaim_archive_root,
+            "current_move_root": policy.recycle_bin_root,
             "current_retention_days": policy.duplicate_reclaim_default_retention_days,
             "target_recycle_bin_root": policy.recycle_bin_root,
             "implementation": "reclaim_compatibility",
