@@ -7,8 +7,11 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from media_manager.app.core.logging_config import get_logger
 from media_manager.app.persistence.base import transactional_session
 from media_manager.app.persistence.models import DuplicateReclaimRecord, DuplicateReclaimStatus
+
+LOGGER = get_logger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -32,6 +35,7 @@ class DuplicateReclaimService:
         with transactional_session(self._session_factory) as session:
             row = session.get(DuplicateReclaimRecord, content_id)
             now = _utcnow()
+            prior_status = row.reclaim_status if row is not None else None
             if row is None:
                 row = DuplicateReclaimRecord(
                     content_id=content_id,
@@ -51,6 +55,17 @@ class DuplicateReclaimService:
                 row.reviewed_at = now
                 row.reviewed_by = (reviewed_by or "").strip() or None
                 row.updated_at = now
+
+            LOGGER.debug(
+                "duplicate_reclaim_debug: persisted reclaim review state",
+                extra={
+                    "stage": "duplicate_reclaim_review_persisted",
+                    "content_id": str(content_id),
+                    "prior_reclaim_status": prior_status or "",
+                    "next_reclaim_status": row.reclaim_status,
+                    "reviewed_by": row.reviewed_by or "",
+                },
+            )
 
             return {
                 "content_id": str(content_id),

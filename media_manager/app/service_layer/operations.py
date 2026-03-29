@@ -649,11 +649,28 @@ class OperationServices:
                 "reviewed_by": reviewed_by,
             },
         )
+        LOGGER.debug(
+            "duplicate_reclaim_debug: review sync request",
+            extra={
+                "stage": "duplicate_reclaim_review_request",
+                "content_id": str(parsed_content_id),
+                "reclaim_status": reclaim_status,
+                "reviewed_by": reviewed_by or "",
+            },
+        )
         try:
             result = DuplicateReclaimService(self.session_factory).set_reclaim_status(
                 content_id=parsed_content_id,
                 reclaim_status=reclaim_status,
                 reviewed_by=reviewed_by,
+            )
+            LOGGER.debug(
+                "duplicate_reclaim_debug: review sync result",
+                extra={
+                    "stage": "duplicate_reclaim_review_result",
+                    "content_id": str(parsed_content_id),
+                    "result": result,
+                },
             )
             self._op_runs().complete(UUID(run_log.operation_run_id))
             self.cache.invalidate("duplicates")
@@ -873,7 +890,8 @@ class OperationServices:
             raise
 
     def duplicate_reclaim_execute(self, *, content_ids: list[str] | None = None, retention_days: int | None = None) -> dict[str, object]:
-        effective_retention_days = retention_days or self._policy().duplicate_reclaim_default_retention_days
+        policy = self._policy()
+        effective_retention_days = retention_days or policy.duplicate_reclaim_default_retention_days
         parsed_content_ids: list[UUID] | None = None
         if content_ids:
             parsed_content_ids = []
@@ -882,6 +900,20 @@ class OperationServices:
                     parsed_content_ids.append(UUID(content_id))
                 except ValueError as exc:
                     raise ValueError(f"content_id must be a valid UUID: {content_id}") from exc
+        LOGGER.debug(
+            "duplicate_reclaim_debug: execute request",
+            extra={
+                "stage": "duplicate_reclaim_execute_request",
+                "requested_content_ids": [str(item) for item in parsed_content_ids or []],
+                "retention_days": effective_retention_days,
+                "duplicate_reclaim_archive_root": policy.duplicate_reclaim_archive_root,
+                "duplicate_reclaim_default_retention_days": policy.duplicate_reclaim_default_retention_days,
+                "recycle_bin_root": policy.recycle_bin_root,
+                "recycle_purge_days": policy.recycle_purge_days,
+                "policy_source": "persisted_policy_row" if policy.version > 0 else "default_snapshot",
+                "policy_version": policy.version,
+            },
+        )
         run_log = self._op_runs().start(
             operation_type=OperationRunType.DUPLICATE_RECLAIM_EXECUTE,
             context={
@@ -893,6 +925,15 @@ class OperationServices:
             result = Phase3ActionService(self.session_factory).execute_duplicate_reclaim(
                 content_ids=parsed_content_ids,
                 retention_days=effective_retention_days,
+            )
+            LOGGER.debug(
+                "duplicate_reclaim_debug: execute result",
+                extra={
+                    "stage": "duplicate_reclaim_execute_result",
+                    "requested_content_ids": [str(item) for item in parsed_content_ids or []],
+                    "summary": result.get("summary", {}),
+                    "diagnostics": result.get("diagnostics", {}),
+                },
             )
             linked_run_id = result.get("run_id")
             if isinstance(linked_run_id, str):
@@ -913,12 +954,27 @@ class OperationServices:
                     parsed_file_ids.append(UUID(file_id))
                 except ValueError as exc:
                     raise ValueError(f"file_instance_id must be a valid UUID: {file_id}") from exc
+        LOGGER.debug(
+            "duplicate_reclaim_debug: restore request",
+            extra={
+                "stage": "duplicate_reclaim_restore_request",
+                "requested_file_instance_ids": [str(item) for item in parsed_file_ids or []],
+            },
+        )
         run_log = self._op_runs().start(
             operation_type=OperationRunType.DUPLICATE_RECLAIM_RESTORE,
             context={"file_instance_ids": [str(item) for item in parsed_file_ids or []]},
         )
         try:
             result = Phase3ActionService(self.session_factory).restore_duplicate_reclaim(file_instance_ids=parsed_file_ids)
+            LOGGER.debug(
+                "duplicate_reclaim_debug: restore result",
+                extra={
+                    "stage": "duplicate_reclaim_restore_result",
+                    "requested_file_instance_ids": [str(item) for item in parsed_file_ids or []],
+                    "summary": result.get("summary", {}),
+                },
+            )
             linked_run_id = result.get("run_id")
             if isinstance(linked_run_id, str):
                 self._op_runs().link_run(UUID(run_log.operation_run_id), linked_run_id=UUID(linked_run_id))

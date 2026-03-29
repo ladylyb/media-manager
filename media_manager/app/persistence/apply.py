@@ -462,6 +462,19 @@ class ApplyService:
         destination = Path(action.target_path) if action.target_path else source
         source_resolved = source.resolve(strict=False)
         destination_resolved = destination.resolve(strict=False)
+        if action.action_type.startswith("RECLAIM_"):
+            logger.debug(
+                "duplicate_reclaim_debug: apply action start",
+                extra={
+                    "stage": "duplicate_reclaim_apply_start",
+                    "run_id": str(run_id),
+                    "planned_action_id": str(action.id),
+                    "file_instance_id": str(action.file_id),
+                    "action_type": action.action_type,
+                    "source_path": str(source_resolved),
+                    "target_path": str(destination_resolved),
+                },
+            )
 
         if not source.exists() or not source.is_file():
             if purge_action or (destination.exists() and destination.is_file()):
@@ -670,6 +683,19 @@ class ApplyService:
             )
 
         source.rename(final_destination)
+        if action.action_type.startswith("RECLAIM_"):
+            logger.debug(
+                "duplicate_reclaim_debug: apply filesystem rename attempted",
+                extra={
+                    "stage": "duplicate_reclaim_apply_rename",
+                    "run_id": str(run_id),
+                    "planned_action_id": str(action.id),
+                    "file_instance_id": str(action.file_id),
+                    "action_type": action.action_type,
+                    "source_path": str(source_resolved),
+                    "target_path": str(final_destination_resolved),
+                },
+            )
         logger.info(
             "File renamed",
             extra={
@@ -771,6 +797,19 @@ class ApplyService:
                     record.reclaimed_at = now
                     record.expires_at = item.expires_at
                     record.updated_at = now
+                logger.debug(
+                    "duplicate_reclaim_debug: persisted archive outcome",
+                    extra={
+                        "stage": "duplicate_reclaim_apply_persisted",
+                        "planned_action_id": str(action.id),
+                        "file_instance_id": str(action.file_id),
+                        "action_type": action.action_type,
+                        "item_status": item.item_status,
+                        "content_id": str(item.content_id),
+                        "record_reclaim_status": record.reclaim_status if record is not None else "",
+                        "archive_path": item.archive_path,
+                    },
+                )
         elif action.action_type == "RECLAIM_RESTORE":
             item = session.get(DuplicateReclaimItem, action.file_id)
             if item is not None:
@@ -782,6 +821,18 @@ class ApplyService:
                     record.reclaim_status = DuplicateReclaimStatus.RESTORED.value
                     record.restored_at = now
                     record.updated_at = now
+                logger.debug(
+                    "duplicate_reclaim_debug: persisted restore outcome",
+                    extra={
+                        "stage": "duplicate_reclaim_apply_persisted",
+                        "planned_action_id": str(action.id),
+                        "file_instance_id": str(action.file_id),
+                        "action_type": action.action_type,
+                        "item_status": item.item_status,
+                        "content_id": str(item.content_id),
+                        "record_reclaim_status": record.reclaim_status if record is not None else "",
+                    },
+                )
         elif action.action_type == "RECLAIM_RECYCLE":
             item = session.get(DuplicateReclaimItem, action.file_id)
             if item is not None:
@@ -795,6 +846,19 @@ class ApplyService:
                     record.reclaimed_at = now
                     record.expires_at = item.purge_after_at
                     record.updated_at = now
+                logger.debug(
+                    "duplicate_reclaim_debug: persisted recycle outcome",
+                    extra={
+                        "stage": "duplicate_reclaim_apply_persisted",
+                        "planned_action_id": str(action.id),
+                        "file_instance_id": str(action.file_id),
+                        "action_type": action.action_type,
+                        "item_status": item.item_status,
+                        "content_id": str(item.content_id),
+                        "record_reclaim_status": record.reclaim_status if record is not None else "",
+                        "recycle_path": item.recycle_path or "",
+                    },
+                )
         elif action.action_type == "RECLAIM_PURGE":
             item = session.get(DuplicateReclaimItem, action.file_id)
             if item is not None:
@@ -828,6 +892,19 @@ class ApplyService:
                 record.updated_at = now
 
     def _persist_action_item(self, audit_run_id: uuid.UUID, outcome: ActionOutcome, error_message: str | None) -> None:
+        if error_message:
+            logger.debug(
+                "duplicate_reclaim_debug: apply non-applied outcome",
+                extra={
+                    "stage": "duplicate_reclaim_apply_outcome",
+                    "planned_action_id": str(outcome.planned_action_id),
+                    "file_instance_id": str(outcome.file_instance_id),
+                    "result": outcome.result,
+                    "source_path": outcome.source_path,
+                    "target_path": outcome.target_path or "",
+                    "error_message": error_message,
+                },
+            )
         with transactional_session(self._session_factory) as session:
             session.add(
                 ApplyAuditItem(

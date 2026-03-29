@@ -9,6 +9,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from media_manager.app.core.logging_config import get_logger
 from media_manager.app.core.state_machine import RunState, validate_transition
 from media_manager.app.persistence.apply import ApplyService
 from media_manager.app.persistence.base import transactional_session
@@ -31,6 +32,8 @@ from media_manager.app.persistence.models import (
 from media_manager.app.persistence.runs import RunService
 from media_manager.app.persistence.policy_settings import PolicySettingsService
 
+LOGGER = get_logger(__name__)
+
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
@@ -46,9 +49,34 @@ class Phase3ActionService:
         return PolicySettingsService(self._session_factory).get_settings()
 
     def execute_duplicate_reclaim(self, *, content_ids: list[UUID] | None = None, retention_days: int = 14) -> dict[str, object]:
-        run_id = self._plan_duplicate_reclaim(content_ids=content_ids, retention_days=retention_days)
+        planned = self._plan_duplicate_reclaim(content_ids=content_ids, retention_days=retention_days)
+        run_id = planned["run_id"]
         summary = ApplyService(self._session_factory).apply_run(run_id)
-        return {"run_id": str(run_id), "summary": summary.to_dict()}
+        diagnostics = {
+            **planned["diagnostics"],
+            "applied_count": summary.applied_count,
+            "skipped_count": summary.skipped_count,
+            "result_type": (
+                "applied"
+                if summary.applied_count > 0
+                else "planned_skipped"
+                if planned["diagnostics"]["planned_action_count"] > 0 and summary.skipped_count > 0
+                else "zero_planned"
+            ),
+        }
+        LOGGER.debug(
+            "duplicate_reclaim_debug: execute summary",
+            extra={
+                "stage": "duplicate_reclaim_execute_summary",
+                "run_id": str(run_id),
+                "requested_content_ids": [str(item) for item in content_ids or []],
+                "planned_action_count": diagnostics["planned_action_count"],
+                "applied_count": diagnostics["applied_count"],
+                "skipped_count": diagnostics["skipped_count"],
+                "result_type": diagnostics["result_type"],
+            },
+        )
+        return {"run_id": str(run_id), "summary": summary.to_dict(), "diagnostics": diagnostics}
 
     def restore_duplicate_reclaim(self, *, file_instance_ids: list[UUID] | None = None) -> dict[str, object]:
         run_id = self._plan_duplicate_restore(file_instance_ids=file_instance_ids)
@@ -85,10 +113,14 @@ class Phase3ActionService:
         summary = ApplyService(self._session_factory).apply_run(run_id)
         return {"run_id": str(run_id), "summary": summary.to_dict()}
 
-    def _plan_duplicate_reclaim(self, *, content_ids: list[UUID] | None, retention_days: int) -> UUID:
+    def _plan_duplicate_reclaim(self, *, content_ids: list[UUID] | None, retention_days: int) -> dict[str, object]:
         run = RunService(self._session_factory).create_run(owner="SYSTEM", context="DuplicateReclaim")
-        reclaim_root = Path(self._policy().duplicate_reclaim_archive_root)
-        expires_at = _utcnow() + timedelta(days=max(1, retention_days))
+        policy = self._policy()
+        reclaim_root = Path(policy.duplicate_reclaim_archive_root)
+        effective_retention_days = max(1, retention_days)
+        expires_at = _utcnow() + timedelta(days=effective_retention_days)
+        planned_action_count = 0
+        group_results: dict[UUID, dict[str, object]] = {}
         with transactional_session(self._session_factory) as session:
             run_row = session.get(Run, run.id)
             assert run_row is not None
@@ -96,6 +128,67 @@ class Phase3ActionService:
             run_row.state = RunStateDB.PLANNED
             run_row.updated_at = func.now()
             run_row.version += 1
+
+            if content_ids:
+                requested_records = {
+                    row.content_id: row
+                    for row in session.scalars(
+                        select(DuplicateReclaimRecord).where(DuplicateReclaimRecord.content_id.in_(content_ids))
+                    ).all()
+                }
+                requested_canonical_ids = {
+                    content_id: canonical_file_instance_id
+                    for content_id, canonical_file_instance_id in session.execute(
+                        select(FileContent.content_id, FileContent.canonical_file_instance_id).where(
+                            FileContent.content_id.in_(content_ids)
+                        )
+                    ).all()
+                }
+                active_instances = {}
+                for content_id, file_instance_id in session.execute(
+                    select(FileInstance.content_id, FileInstance.file_instance_id).where(
+                        FileInstance.content_id.in_(content_ids),
+                        FileInstance.status == FileInstanceStatus.ACTIVE.value,
+                    )
+                ).all():
+                    active_instances.setdefault(content_id, []).append(file_instance_id)
+                for content_id in content_ids:
+                    reclaim_record = requested_records.get(content_id)
+                    canonical_instance_id = requested_canonical_ids.get(content_id)
+                    candidate_duplicate_ids = [
+                        file_instance_id
+                        for file_instance_id in active_instances.get(content_id, [])
+                        if file_instance_id != canonical_instance_id
+                    ]
+                    if reclaim_record is None or reclaim_record.reclaim_status != DuplicateReclaimStatus.REVIEWED_SAFE_TO_RECLAIM.value:
+                        reason = "reclaim_status_not_reviewed_safe"
+                    elif canonical_instance_id is None:
+                        reason = "missing_canonical_file_content_mapping"
+                    elif not candidate_duplicate_ids:
+                        reason = "no_active_duplicate_instances"
+                    else:
+                        reason = None
+                    group_results[content_id] = {
+                        "content_id": str(content_id),
+                        "reclaim_status": reclaim_record.reclaim_status if reclaim_record is not None else None,
+                        "canonical_file_instance_id": str(canonical_instance_id) if canonical_instance_id is not None else None,
+                        "candidate_duplicate_file_instance_ids": [str(file_id) for file_id in candidate_duplicate_ids],
+                        "planned": False,
+                        "reason": reason,
+                    }
+                    LOGGER.debug(
+                        "duplicate_reclaim_debug: planner requested group",
+                        extra={
+                            "stage": "duplicate_reclaim_plan_group",
+                            "run_id": str(run.id),
+                            "content_id": str(content_id),
+                            "reclaim_status": reclaim_record.reclaim_status if reclaim_record is not None else "",
+                            "canonical_file_instance_id": str(canonical_instance_id) if canonical_instance_id is not None else "",
+                            "candidate_duplicate_file_instance_ids": [str(file_id) for file_id in candidate_duplicate_ids],
+                            "reason": reason or "candidate_pending",
+                            "reclaim_root": str(reclaim_root),
+                        },
+                    )
 
             stmt = (
                 select(FileInstance, DuplicateReclaimRecord, FileContent.canonical_file_instance_id)
@@ -151,8 +244,39 @@ class Phase3ActionService:
                     )
                 )
                 reclaim_record.updated_at = now
+                planned_action_count += 1
+                if file_instance.content_id in group_results:
+                    group_results[file_instance.content_id]["planned"] = True
+                    group_results[file_instance.content_id]["reason"] = None
+                    planned_ids = group_results[file_instance.content_id].setdefault("planned_action_file_instance_ids", [])
+                    if isinstance(planned_ids, list):
+                        planned_ids.append(str(file_instance.file_instance_id))
+                LOGGER.debug(
+                    "duplicate_reclaim_debug: planner planned action",
+                    extra={
+                        "stage": "duplicate_reclaim_plan_action",
+                        "run_id": str(run.id),
+                        "content_id": str(file_instance.content_id),
+                        "file_instance_id": str(file_instance.file_instance_id),
+                        "canonical_file_instance_id": str(_canonical_instance_id) if _canonical_instance_id is not None else "",
+                        "reclaim_status": reclaim_record.reclaim_status,
+                        "archive_path": archive_path,
+                        "reclaim_root": str(reclaim_root),
+                    },
+                )
             session.flush()
-        return run.id
+        diagnostics = {
+            "requested_group_count": len(content_ids or []),
+            "planned_action_count": planned_action_count,
+            "group_results": list(group_results.values()),
+            "reclaim_root": str(reclaim_root),
+            "recycle_bin_root": str(policy.recycle_bin_root),
+            "recycle_purge_days": int(policy.recycle_purge_days),
+            "policy_duplicate_reclaim_default_retention_days": int(policy.duplicate_reclaim_default_retention_days),
+            "retention_days": effective_retention_days,
+            "policy_source": "persisted_or_default_policy_snapshot",
+        }
+        return {"run_id": run.id, "diagnostics": diagnostics}
 
     def _plan_duplicate_restore(self, *, file_instance_ids: list[UUID] | None) -> UUID:
         run = RunService(self._session_factory).create_run(owner="SYSTEM", context="DuplicateRestore")

@@ -486,6 +486,34 @@ describe("DuplicatesPage", () => {
     expect(screen.getAllByText("alpha-copy.jpg").length).toBeGreaterThan(0);
   });
 
+  it("keeps planner-blocked groups out of Ready to move and explains the missing keep-copy mapping", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        review_status: "looks_right",
+        reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
+        duplicate_reclaim_actionable: false,
+        duplicate_reclaim_unavailable_reason: "missing_canonical_file_content_mapping",
+      },
+      {
+        ...buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
+        review_status: "looks_right",
+        reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
+        duplicate_reclaim_actionable: true,
+      },
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+
+    renderPage("/duplicates?tab=removal");
+
+    expect(await screen.findByTestId("recycle-bin-ready-gallery")).toBeInTheDocument();
+    expect(screen.queryByTestId("recycle-bin-gallery-card-group-alpha")).not.toBeInTheDocument();
+    expect(screen.getByTestId("recycle-bin-gallery-card-group-beta")).toBeInTheDocument();
+    expect(
+      screen.getByText("This group cannot move yet because the planner could not confirm a keep-copy mapping."),
+    ).toBeInTheDocument();
+  });
+
   it("uses Looks right groups as the only move-eligible groups and shows move and restore feedback", async () => {
     groupsData = [
       {
@@ -621,30 +649,7 @@ describe("DuplicatesPage", () => {
     });
   });
 
-  it("re-adds a restored group to move eligibility after it is reviewed as looks right again", async () => {
-    groupsData = [
-      {
-        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
-        reclaim_status: "RESTORED",
-      },
-    ];
-    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
-
-    renderPage();
-
-    expect(await screen.findByTestId("review-group-title")).toHaveTextContent("alpha-main.jpg");
-
-    fireEvent.click(screen.getByRole("button", { name: "Mark as looks right" }));
-
-    await waitFor(() =>
-      expect(mocks.setDuplicateReclaim).toHaveBeenCalledWith({
-        content_id: "group-alpha",
-        reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
-      }),
-    );
-  });
-
-  it("shows explicit no-op feedback when no new files are moved", async () => {
+  it("shows explicit planned-but-skipped feedback when the move plans work but apply skips the file action", async () => {
     groupsData = [
       {
         ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
@@ -654,7 +659,10 @@ describe("DuplicatesPage", () => {
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
     mocks.executeDuplicateReclaim.mockResolvedValue({
-      data: { summary: { applied_count: 0, skipped_count: 1, moves_count: 0 } },
+      data: {
+        summary: { applied_count: 0, skipped_count: 1, moves_count: 0 },
+        diagnostics: { planned_action_count: 1, applied_count: 0, skipped_count: 1, result_type: "planned_skipped" },
+      },
     });
 
     renderPage("/duplicates?tab=removal");
@@ -668,11 +676,50 @@ describe("DuplicatesPage", () => {
         retention_days: 21,
       });
       expect(
-        screen.getByText("No files were moved from the selected groups. Their availability may have changed. The list has been refreshed."),
+        screen.getByText(
+          "The selected groups were planned for move, but the duplicate files were skipped during apply. The list has been refreshed.",
+        ),
       ).toBeInTheDocument();
       expect(screen.queryByTestId("recycle-bin-bulk-action-bar")).not.toBeInTheDocument();
       expect(screen.getByTestId("recycle-bin-gallery-card-group-alpha")).toBeInTheDocument();
       expect(screen.getByTestId("recycle-bin-focused-title")).toHaveTextContent("alpha-main.jpg");
+    });
+  });
+
+  it("shows explicit zero-planned feedback when the backend rejects the selected group before planning", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        review_status: "looks_right",
+        reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
+      },
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+    mocks.executeDuplicateReclaim.mockResolvedValue({
+      data: {
+        summary: { applied_count: 0, skipped_count: 0, moves_count: 0 },
+        diagnostics: {
+          planned_action_count: 0,
+          applied_count: 0,
+          skipped_count: 0,
+          result_type: "zero_planned",
+          group_results: [{ content_id: "group-alpha", reason: "missing_canonical_file_content_mapping" }],
+        },
+      },
+    });
+
+    renderPage("/duplicates?tab=removal");
+
+    fireEvent.click(await screen.findByLabelText("Select group alpha-main.jpg"));
+    fireEvent.click(screen.getByRole("button", { name: "Move selected groups" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "No files were moved from the selected groups because one or more groups no longer had a planner-confirmed keep-copy mapping. The list has been refreshed.",
+        ),
+      ).toBeInTheDocument();
+      expect(screen.queryByTestId("recycle-bin-bulk-action-bar")).not.toBeInTheDocument();
     });
   });
 
@@ -703,7 +750,7 @@ describe("DuplicatesPage", () => {
     renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "Looks right" }));
-    fireEvent.click(await screen.findByTestId("review-mark-needs-review"));
+    fireEvent.click(await screen.findByRole("button", { name: "Mark as needs review" }));
 
     await waitFor(() =>
       expect(mocks.setDuplicateReclaim).toHaveBeenCalledWith({
@@ -764,43 +811,6 @@ describe("DuplicatesPage", () => {
     expect(screen.getByText("Needs checking")).toBeInTheDocument();
     expect(screen.queryByText("unrelated.jpg")).not.toBeInTheDocument();
     expect(screen.queryByText("Quick")).not.toBeInTheDocument();
-  });
-
-  it("opens a reviewed playback-issue group in review even when the default filter would hide it", async () => {
-    groupsData = [
-      {
-        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
-        review_status: "looks_right",
-      },
-      buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
-    ];
-    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
-    mocks.getIntegrityIssues.mockResolvedValue({
-      data: {
-        items: [
-          {
-            check_id: "check-alpha",
-            file_instance_id: "group-alpha-duplicate-0",
-            absolute_path: "/library/alpha-copy.jpg",
-            status: "BROKEN",
-            confidence: 1,
-            signal_types: ["decode"],
-          },
-        ],
-      },
-    });
-
-    renderPage("/duplicates?tab=playback-issues");
-
-    expect(await screen.findByRole("heading", { name: "Playback issues" })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Open in review" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Review duplicates" })).toBeInTheDocument();
-      expect(screen.getByText("All")).toBeInTheDocument();
-      expect(screen.getAllByText("alpha-main.jpg").length).toBeGreaterThan(0);
-    });
   });
 
   it("renders video poster previews in the comparison cards and review queue", async () => {

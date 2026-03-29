@@ -47,6 +47,19 @@ interface MutationSummary {
   moves_count?: number;
 }
 
+interface DuplicateReclaimDiagnostics {
+  requested_group_count?: number;
+  planned_action_count?: number;
+  applied_count?: number;
+  skipped_count?: number;
+  result_type?: "zero_planned" | "planned_skipped" | "applied";
+  group_results?: Array<{
+    content_id: string;
+    reason?: string | null;
+  }>;
+  reclaim_root?: string;
+}
+
 interface RecycleBinFeedback {
   tone: FeedbackTone;
   message: string;
@@ -190,6 +203,12 @@ function getMutationSummary(payload: unknown): MutationSummary {
   return summary && typeof summary === "object" ? summary : {};
 }
 
+function getDuplicateReclaimDiagnostics(payload: unknown): DuplicateReclaimDiagnostics {
+  if (!payload || typeof payload !== "object") return {};
+  const diagnostics = (payload as { diagnostics?: DuplicateReclaimDiagnostics }).diagnostics;
+  return diagnostics && typeof diagnostics === "object" ? diagnostics : {};
+}
+
 function isPendingRemovalStatus(status: DuplicateGroup["reclaim_status"] | undefined | null) {
   return status === "ARCHIVED" || status === "RESTORED" || status === "SCHEDULED_FOR_DELETE";
 }
@@ -215,6 +234,7 @@ function deriveActionableReadyGroups(
     const archivedCount = archivedCounts[group.group_id] ?? 0;
     return (
       currentReviewMark(group) === "looks_right" &&
+      group.duplicate_reclaim_actionable !== false &&
       reclaimableCount > 0 &&
       archivedCount < reclaimableCount &&
       !isPendingRemovalStatus(group.reclaim_status) &&
@@ -237,14 +257,40 @@ function getGalleryActionSummary(groupCount: number, appliedCount: number) {
   return `${fileLabel} moved from ${groupLabel} into the configured holding area. The keep copy stayed in place.`;
 }
 
-function getGalleryNoOpSummary(scope: "selected" | "all" | "single") {
+function getGalleryNoOpSummary(
+  scope: "selected" | "all" | "single",
+  diagnostics: DuplicateReclaimDiagnostics = {},
+) {
+  if (diagnostics.result_type === "planned_skipped") {
+    if (scope === "selected") {
+      return "The selected groups were planned for move, but the duplicate files were skipped during apply. The list has been refreshed.";
+    }
+    if (scope === "single") {
+      return "This group was planned for move, but its duplicate files were skipped during apply. The list has been refreshed.";
+    }
+    return "Eligible groups were planned for move, but their duplicate files were skipped during apply. The list has been refreshed.";
+  }
+
+  const missingCanonical = diagnostics.group_results?.some(
+    (groupResult) => groupResult.reason === "missing_canonical_file_content_mapping",
+  );
+  if (missingCanonical) {
+    if (scope === "single") {
+      return "No files were moved from this group because the planner could not confirm a keep-copy mapping. The list has been refreshed.";
+    }
+    if (scope === "selected") {
+      return "No files were moved from the selected groups because one or more groups no longer had a planner-confirmed keep-copy mapping. The list has been refreshed.";
+    }
+    return "No files were moved because one or more eligible groups no longer had a planner-confirmed keep-copy mapping. The list has been refreshed.";
+  }
+
   if (scope === "selected") {
-    return "No files were moved from the selected groups. Their availability may have changed. The list has been refreshed.";
+    return "No files were moved from the selected groups because no duplicate files were eligible to plan for this move. The list has been refreshed.";
   }
   if (scope === "single") {
-    return "No files were moved from this group. Its availability may have changed. The list has been refreshed.";
+    return "No files were moved from this group because no duplicate files were eligible to plan for this move. The list has been refreshed.";
   }
-  return "No files were moved from the eligible groups. Their availability may have changed. The list has been refreshed.";
+  return "No files were moved because no duplicate files were eligible to plan for this move. The list has been refreshed.";
 }
 
 export default function DuplicatesPage() {
@@ -549,8 +595,7 @@ export default function DuplicatesPage() {
         reclaim_status,
       });
       markBridgeBlocked(group.group_id, false);
-      setReclaimBridgeWarning(null);
-      setRecycleBinFeedback(null);
+      setReclaimBridgeWarning((current) => (current && current.includes(group.group_id) ? null : current));
       return true;
     } catch {
       markBridgeBlocked(group.group_id, true);
@@ -607,8 +652,11 @@ export default function DuplicatesPage() {
 
   async function handleMoveEligibleDuplicates(groupsToMove: DuplicateGroup[] = readyGroups, scope: "selected" | "all" | "single" = "all") {
     setRecycleBinFeedback(null);
-    setReclaimBridgeWarning(null);
-    reclaimMutation.reset();
+    console.debug("duplicate_reclaim_debug: ui move request", {
+      stage: "duplicate_reclaim_ui_request",
+      scope,
+      groupIds: groupsToMove.map((group) => group.group_id),
+    });
     if (recycleConfigWarning) {
       setRecycleBinFeedback({ tone: "warning", message: recycleConfigWarning });
       return;
@@ -648,6 +696,14 @@ export default function DuplicatesPage() {
         retention_days: archiveRetentionDays ?? 14,
       });
       const summary = getMutationSummary(result.data);
+      const diagnostics = getDuplicateReclaimDiagnostics(result.data);
+      console.debug("duplicate_reclaim_debug: ui move result", {
+        stage: "duplicate_reclaim_ui_result",
+        scope,
+        requestedGroupIds: actionableGroups.map((group) => group.group_id),
+        summary,
+        diagnostics,
+      });
       const applied = Number(summary.applied_count ?? 0);
       if (applied > 0) {
         setSelectedReadyGroupIds((current) => current.filter((groupId) => !actionableGroupIds.has(groupId)));
@@ -660,7 +716,7 @@ export default function DuplicatesPage() {
         setSelectedReadyGroupIds((current) => current.filter((groupId) => !actionableGroupIds.has(groupId)));
         setRecycleBinFeedback({
           tone: "warning",
-          message: getGalleryNoOpSummary(scope),
+          message: getGalleryNoOpSummary(scope, diagnostics),
         });
       }
     } catch {
@@ -716,13 +772,7 @@ export default function DuplicatesPage() {
     });
     setRecycleBinFeedback(null);
 
-    if (mark === "looks_right" && selected.reclaim_status === "RESTORED") {
-      void syncReclaimBridge(
-        selected,
-        "REVIEWED_SAFE_TO_RECLAIM",
-        `Saved “Looks right” for ${basename(selected.canonical_path)}, but the app could not add it back to Ready to move. Try again from the Recycle Bin tab.`,
-      );
-    } else if (isPendingRemovalStatus(selected.reclaim_status)) {
+    if (isPendingRemovalStatus(selected.reclaim_status)) {
       markBridgeBlocked(selected.group_id, false);
     } else if (mark === "looks_right") {
       void syncReclaimBridge(
@@ -861,8 +911,17 @@ export default function DuplicatesPage() {
               <p className="truncate text-base font-semibold text-foreground">{basename(group.canonical_path)}</p>
               <p className="text-sm text-muted-foreground">
                 {reviewLabel}
-                {reclaimBridgeBlockedIds.includes(group.group_id) ? " • Eligibility sync needs attention" : ""}
+                {reclaimBridgeBlockedIds.includes(group.group_id)
+                  ? " • Eligibility sync needs attention"
+                  : group.duplicate_reclaim_unavailable_reason === "missing_canonical_file_content_mapping"
+                    ? " • Planner-confirmed keep copy is missing"
+                    : ""}
               </p>
+              {group.duplicate_reclaim_unavailable_reason === "missing_canonical_file_content_mapping" ? (
+                <p className="text-xs text-muted-foreground">
+                  This group cannot move yet because the planner could not confirm a keep-copy mapping.
+                </p>
+              ) : null}
               <p className="text-xs text-muted-foreground">
                 {extraCopies.length === 1 ? "1 extra copy" : `${extraCopies.length} extra copies`} • {formatBytes(group.estimated_reclaim_bytes ?? 0)}
               </p>
@@ -1725,6 +1784,8 @@ export default function DuplicatesPage() {
                               Review state: {getReviewPresentation(currentReviewMark(group), Boolean(group.is_stale)).label}
                               {reclaimBridgeBlockedIds.includes(group.group_id)
                                 ? " • Eligibility sync needs attention before this group can move."
+                                : group.duplicate_reclaim_unavailable_reason === "missing_canonical_file_content_mapping"
+                                  ? " • This group cannot move yet because the planner could not confirm a keep-copy mapping."
                                 : ""}
                             </p>
                           </div>
@@ -1866,7 +1927,6 @@ export default function DuplicatesPage() {
                                 type="button"
                                 variant="outline"
                                 onClick={() => {
-                                  setReviewFilter("all");
                                   setSelectedId(group.group_id);
                                   setActiveTab("review");
                                 }}

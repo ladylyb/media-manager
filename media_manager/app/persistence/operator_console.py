@@ -44,6 +44,7 @@ from media_manager.app.persistence.models import (
     DuplicateReclaimRecord,
     FileInstance,
     FileInstanceStatus,
+    FileContent,
     IntegrityCheck,
     IntegrityCheckRun,
     IntegrityQuarantineRecord,
@@ -222,6 +223,8 @@ class DuplicateGroupItem:
     estimated_reclaim_bytes: int = 0
     reclaim_status: str | None = None
     reclaimable_file_count: int = 0
+    duplicate_reclaim_actionable: bool = False
+    duplicate_reclaim_unavailable_reason: str | None = None
     retention_expires_at: str | None = None
     integrity_issue_count: int = 0
     integrity_broken_count: int = 0
@@ -247,6 +250,8 @@ class DuplicateGroupItem:
             "estimated_reclaim_bytes": self.estimated_reclaim_bytes,
             "reclaim_status": self.reclaim_status,
             "reclaimable_file_count": self.reclaimable_file_count,
+            "duplicate_reclaim_actionable": self.duplicate_reclaim_actionable,
+            "duplicate_reclaim_unavailable_reason": self.duplicate_reclaim_unavailable_reason,
             "retention_expires_at": self.retention_expires_at,
             "integrity_issue_count": self.integrity_issue_count,
             "integrity_broken_count": self.integrity_broken_count,
@@ -860,6 +865,14 @@ class OperatorConsoleReadService:
             latest_canonical_by_content = self._latest_canonical_instance_by_content_id(
                 session, duplicate_content_ids
             )
+            file_content_canonical_by_content = {
+                content_id: canonical_file_instance_id
+                for content_id, canonical_file_instance_id in session.execute(
+                    select(FileContent.content_id, FileContent.canonical_file_instance_id).where(
+                        FileContent.content_id.in_(duplicate_content_ids)
+                    )
+                ).all()
+            }
             persisted_reviews = {
                 row.content_id: row
                 for row in session.scalars(
@@ -989,6 +1002,18 @@ class OperatorConsoleReadService:
                 reclaim_row.expires_at.isoformat() if reclaim_row is not None and reclaim_row.expires_at is not None else None
             )
             reclaimable_file_count = sum(1 for item in files if item.role == "DUPLICATE")
+            planner_canonical_instance_id = file_content_canonical_by_content.get(content_id)
+            duplicate_reclaim_actionable = True
+            duplicate_reclaim_unavailable_reason: str | None = None
+            if reclaimable_file_count <= 0:
+                duplicate_reclaim_actionable = False
+                duplicate_reclaim_unavailable_reason = "no_active_duplicate_instances"
+            elif planner_canonical_instance_id is None:
+                duplicate_reclaim_actionable = False
+                duplicate_reclaim_unavailable_reason = "missing_canonical_file_content_mapping"
+            elif reclaim_status in {"ARCHIVED", "RESTORED", "SCHEDULED_FOR_DELETE"}:
+                duplicate_reclaim_actionable = False
+                duplicate_reclaim_unavailable_reason = "reclaim_status_not_actionable"
             integrity_counts = integrity_counts_by_group.get(content_id, {})
             output.append(
                 DuplicateGroupItem(
@@ -1003,6 +1028,8 @@ class OperatorConsoleReadService:
                     estimated_reclaim_bytes=reclaim_bytes_by_group.get(content_id, 0),
                     reclaim_status=reclaim_status,
                     reclaimable_file_count=reclaimable_file_count,
+                    duplicate_reclaim_actionable=duplicate_reclaim_actionable,
+                    duplicate_reclaim_unavailable_reason=duplicate_reclaim_unavailable_reason,
                     retention_expires_at=retention_expires_at,
                     integrity_issue_count=int(integrity_counts.get("BROKEN", 0) + integrity_counts.get("SUSPECT", 0)),
                     integrity_broken_count=int(integrity_counts.get("BROKEN", 0)),
