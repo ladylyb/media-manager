@@ -73,3 +73,4 @@ artifacts/
 # Local manual-QA media fixture output
 testdata/manual-qa/
 media_manager/tests/test_manual_qa_fixture_layout.py
+.codex
