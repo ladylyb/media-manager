@@ -75,10 +75,18 @@ class ApplyTargetOccupiedError(MediaManagerError):
 class ApplyTargetParentInvalidError(MediaManagerError):
     """Raised when apply cannot create the target parent path deterministically."""
 
-    def __init__(self, target_parent_path: str, *, conflicting_path: str | None = None) -> None:
+    def __init__(
+        self,
+        target_parent_path: str,
+        *,
+        conflicting_path: str | None = None,
+        os_error: str | None = None,
+    ) -> None:
         detail = (
             f" existing non-directory path: {conflicting_path}"
             if conflicting_path is not None
+            else f" target parent path could not be created ({os_error})"
+            if os_error
             else " target parent path could not be created"
         )
         super().__init__(f"Apply target parent path invalid: {target_parent_path};{detail}")

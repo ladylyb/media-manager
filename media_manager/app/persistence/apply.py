@@ -837,7 +837,7 @@ class ApplyService:
         try:
             destination.parent.mkdir(parents=True, exist_ok=True)
             return None
-        except OSError:
+        except OSError as exc:
             conflicting_path = self._first_existing_non_directory(destination.parent)
             target_parent_path = str(destination.parent)
             conflicting_path_str = str(conflicting_path) if conflicting_path is not None else None
@@ -849,6 +849,7 @@ class ApplyService:
             return ApplyTargetParentInvalidError(
                 target_parent_path,
                 conflicting_path=conflicting_path_str,
+                os_error=str(exc),
             )
 
     def _first_existing_non_directory(self, path: Path) -> Path | None:

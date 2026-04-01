@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import re
 import time
@@ -90,6 +91,44 @@ def normalize_and_resolve_directory(raw: str) -> Path:
         f"{normalized_input}. Accepted examples: /mnt/c/path/to/folder, C:\\path\\to\\folder "
         "(auto-mapped on WSL), and unquoted absolute paths."
     )
+
+
+def _nearest_existing_ancestor(path: Path) -> Path:
+    current = path
+    while not current.exists():
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return current
+
+
+def _validate_duplicate_bin_root_for_execution(root_value: str) -> None:
+    root = Path(root_value)
+    if root.exists():
+        if not root.is_dir():
+            raise ValueError(
+                "duplicate bin recycle_bin_root must point to a directory path: "
+                f"{root_value}"
+            )
+        if not os.access(root, os.W_OK | os.X_OK):
+            raise ValueError(
+                "duplicate bin recycle_bin_root is not writable by the current process: "
+                f"{root_value}"
+            )
+        return
+
+    nearest_existing = _nearest_existing_ancestor(root)
+    if not nearest_existing.is_dir():
+        raise ValueError(
+            "duplicate bin recycle_bin_root cannot be created because an ancestor is not a directory: "
+            f"{nearest_existing}"
+        )
+    if not os.access(nearest_existing, os.W_OK | os.X_OK):
+        raise ValueError(
+            "duplicate bin recycle_bin_root cannot be created because the nearest existing ancestor is not writable: "
+            f"{nearest_existing}"
+        )
 
 
 @dataclass
@@ -907,6 +946,7 @@ class OperationServices:
     ) -> dict[str, object]:
         """Bin-centered duplicate move entrypoint backed by reclaim compatibility internals."""
         policy = self._policy()
+        _validate_duplicate_bin_root_for_execution(policy.recycle_bin_root)
         effective_retention_days = retention_days or policy.duplicate_reclaim_default_retention_days
         parsed_content_ids: list[UUID] | None = None
         if content_ids:

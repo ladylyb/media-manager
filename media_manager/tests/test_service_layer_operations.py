@@ -637,6 +637,20 @@ def test_duplicate_bin_execute_preserves_behavior_and_links_run(monkeypatch: pyt
     assert any({"duplicates", "duplicate_reclaim_items", "analytics"}.issubset(set(invalidated)) for invalidated in cache.invalidations)
 
 
+def test_duplicate_bin_execute_rejects_unusable_recycle_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    blocked_path = tmp_path / "recycle-root-blocker"
+    blocked_path.write_text("not-a-directory", encoding="utf-8")
+
+    _install_fake_operation_run_service(monkeypatch)
+    _install_fake_policy_settings_service(monkeypatch, recycle_bin_root=str(blocked_path))
+
+    cache = _FakeCache(invalidations=[])
+    services = OperationServices(session_factory=object(), cache=cache)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="must point to a directory path"):
+        services.duplicate_bin_execute(content_ids=["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"], retention_days=21)
+
+
 def test_duplicate_reclaim_execute_delegates_to_duplicate_bin_execute(monkeypatch: pytest.MonkeyPatch) -> None:
     recorded: dict[str, object] = {}
 
