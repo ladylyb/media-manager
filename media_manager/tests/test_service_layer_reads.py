@@ -38,20 +38,3 @@ def test_duplicate_bin_items_reuses_reclaim_archive_page(monkeypatch: pytest.Mon
     assert payload["page"] == 2
     assert payload["limit"] == 5
     assert payload["items"][0]["item_status"] == "ARCHIVED"
-
-
-def test_duplicate_reclaim_items_delegates_to_duplicate_bin_items(monkeypatch: pytest.MonkeyPatch) -> None:
-    recorded: dict[str, object] = {}
-
-    def _fake_duplicate_bin_items(self, *, page: int, limit: int):  # type: ignore[no-untyped-def]
-        recorded["page"] = page
-        recorded["limit"] = limit
-        return {"ok": True}
-
-    monkeypatch.setattr(ReadServices, "duplicate_bin_items", _fake_duplicate_bin_items)
-
-    services = ReadServices(session_factory=object(), cache=_FakeCache(invalidations=[]))  # type: ignore[arg-type]
-    payload = services.duplicate_reclaim_items(page=3, limit=7)
-
-    assert payload == {"ok": True}
-    assert recorded == {"page": 3, "limit": 7}

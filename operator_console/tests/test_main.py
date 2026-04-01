@@ -1134,9 +1134,6 @@ class _FakeReadServices:
             ],
         }
 
-    def duplicate_reclaim_items(self, *, page: int, limit: int) -> dict[str, object]:
-        return self.duplicate_bin_items(page=page, limit=limit)
-
     def duplicate_bin_policy_get(self) -> dict[str, object]:
         return {
             "current_move_root": "/tmp/media-manager/recycle-bin",
@@ -1432,14 +1429,6 @@ class _FakeOperationServices:
             "summary": {"applied_count": 1, "moves_count": 1, "errors_count": 0},
         }
 
-    def duplicate_reclaim_execute(
-        self,
-        *,
-        content_ids: list[str] | None = None,
-        retention_days: int = 14,
-    ) -> dict[str, object]:
-        return self.duplicate_bin_execute(content_ids=content_ids, retention_days=retention_days)
-
     def duplicate_bin_execute(
         self,
         *,
@@ -1453,9 +1442,6 @@ class _FakeOperationServices:
             "retention_days": retention_days,
             "summary": {"applied_count": 1, "moves_count": 1, "errors_count": 0},
         }
-
-    def duplicate_reclaim_restore(self, *, file_instance_ids: list[str] | None = None) -> dict[str, object]:
-        return self.duplicate_bin_restore(file_instance_ids=file_instance_ids)
 
     def duplicate_bin_restore(self, *, file_instance_ids: list[str] | None = None) -> dict[str, object]:
         for file_instance_id in file_instance_ids or []:
