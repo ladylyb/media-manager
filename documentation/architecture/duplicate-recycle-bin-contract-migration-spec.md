@@ -144,6 +144,82 @@ When bin-centered payload fields are introduced:
 - derive both from the internal canonical model
 - do not define precedence where one external field is “more true” than the other
 
+Structural rule for Phase 4 dual-support:
+
+- the expected default is temporary top-level additive aliases
+- new bin-centered fields are added beside existing reclaim-shaped fields in the same response shape during the transition period
+- this avoids forcing an immediate serializer-shape rewrite on clients
+- a future nested preferred structure may still be designed later, but that decision is explicitly deferred and must be settled before implementation if chosen
+- Phase 4 implementation must not remain structurally ambiguous: it either uses top-level additive aliases as specified here or a separately approved serializer-shape amendment
+
+### Semantic guardrails for future payload aliases
+
+#### `bin_status`
+
+- Exact meaning:
+  - bin/lifecycle projection for a duplicate group during contract migration
+- Represents:
+  - state
+- Persisted or computed:
+  - computed/projected from the internal canonical model
+- Scope:
+  - group-level
+- Expected value form:
+  - enum-like string
+  - nullable only if the canonical model cannot yet truthfully project a value for a current response shape during transition
+
+#### `ready_for_bin`
+
+- Exact meaning:
+  - whether the duplicate group is currently eligible to be moved into the Recycle Bin
+- Represents:
+  - eligibility
+- Persisted or computed:
+  - computed/projected from the internal canonical model
+- Scope:
+  - group-level
+- Expected value form:
+  - boolean
+  - non-null once introduced
+
+#### `ready_for_bin_unavailable_reason`
+
+- Exact meaning:
+  - machine-readable explanation for why `ready_for_bin` is false
+- Represents:
+  - eligibility explanation, not state
+- Persisted or computed:
+  - computed/projected from the internal canonical model
+- Scope:
+  - group-level
+- Expected value form:
+  - enum-like string or `null`
+  - `null` when `ready_for_bin` is true or when no reason is applicable
+
+#### `bin_item_status`
+
+- Exact meaning:
+  - item-level bin/lifecycle projection for an individual duplicate item
+- Represents:
+  - state
+- Persisted or computed:
+  - computed/projected from the internal canonical model
+- Scope:
+  - item-level
+- Expected value form:
+  - enum-like string
+  - nullable only if this alias is introduced before the canonical model can truthfully project an item-level value for all current response shapes
+- Notes:
+  - this alias remains optional
+  - it should only be introduced if a concrete consumer need and mapped status semantics exist
+
+### `archive_path` compatibility guardrail
+
+- `archive_path` remains a compatibility-shaped field for now
+- its current name likely reflects legacy archive/reclaim semantics more than the desired future bin-centered contract language
+- it should not be used as the naming basis for future contract design without separate semantic clarification
+- until that clarification exists, `archive_path` should be preserved as a compatibility surface rather than treated as a model for new bin-centered naming
+
 ### Field-family authority rule
 
 The spec must not say:
@@ -174,6 +250,12 @@ Reason:
 - policy contracts are tightly coupled to admin update flows
 - combining policy rename with route alias rollout would widen compatibility risk unnecessarily
 
+Naming rule for the future bin-centered policy contract:
+
+- future policy contracts should use one coherent bin-centered namespace/structure
+- flattened legacy `duplicate_reclaim_*` keys remain compatibility-only during migration
+- Phase 5 must not introduce mixed ad hoc naming that combines new bin-centered names with unrelated legacy flattened naming patterns in the same first-party target contract
+
 ## Formal Compatibility Matrix
 
 The following matrix defines the minimum controlled migration surface.
@@ -195,19 +277,19 @@ The following matrix defines the minimum controlled migration surface.
 | `reclaim_status` | `bin_status` | Phase 4 | Yes | Internal canonical model | Clients may read either field during transition | All supported clients migrated off `reclaim_status` |
 | `duplicate_reclaim_actionable` | `ready_for_bin` | Phase 4 | Yes | Internal canonical model | Eligibility UI can migrate incrementally | All supported clients migrated off legacy actionable field |
 | `duplicate_reclaim_unavailable_reason` | `ready_for_bin_unavailable_reason` | Phase 4 | Yes | Internal canonical model | Eligibility-explanation UI can migrate incrementally | All supported clients migrated off legacy unavailable-reason field |
-| `archive_path` | No public rename initially | Not introduced in this phase | No | Internal canonical model | Current clients keep existing path semantics | Path semantics clarified enough to justify a public rename |
+| `archive_path` | No public rename initially | Not introduced in this phase | No | Internal canonical model | Current clients keep existing path semantics; field remains compatibility-shaped | Path semantics clarified enough to justify a public rename |
 | `item_status` | `bin_item_status` only if later needed | Optional later phase after Phase 4 | Maybe | Internal canonical model | Item-level clients may continue using current field until justified alias exists | A concrete consumer need and fully mapped status semantics exist |
 
 ### Policy/config payload fields
 
-| Current name | Future name | Phase introduced | Dual-supported? | Source of truth | Client impact | Removal precondition |
+| Current name | Future name | Phase introduced | Dual-supported? | Canonical source | Client impact | Removal precondition |
 | --- | --- | --- | --- | --- | --- | --- |
-| `duplicate_reclaim.archive_root` | duplicate-bin move-root field | Phase 5 | Yes | Internal canonical model | Read consumers can migrate separately from routes | Admin and frontend policy readers migrated |
-| `duplicate_reclaim.default_retention_days` | duplicate-bin retention field | Phase 5 | Yes | Internal canonical model | Read consumers can migrate separately from routes | Admin and frontend policy readers migrated |
+| `duplicate_reclaim.archive_root` | future read contract uses a coherent nested bin-centered namespace | Phase 5 | Yes | Internal canonical model | Read consumers can migrate separately from routes | Admin and frontend policy readers migrated |
+| `duplicate_reclaim.default_retention_days` | future write/update contract uses the same namespace pattern | Phase 5 | Yes | Internal canonical model | Read consumers can migrate separately from routes | Admin and frontend policy readers migrated |
 | `duplicate_reclaim.notify_on_reviewed_safe` | later review/bin policy field if still needed | Phase 5 | Yes | Internal canonical model | Depends on whether concept survives redesign | Field meaning confirmed and all consumers migrated |
-| `duplicate_reclaim_archive_root` | bin-centered update field | Phase 5 | Yes | Internal canonical model | Admin/update clients can migrate incrementally | Admin/update clients fully migrated |
-| `duplicate_reclaim_default_retention_days` | bin-centered update field | Phase 5 | Yes | Internal canonical model | Admin/update clients can migrate incrementally | Admin/update clients fully migrated |
-| `duplicate_reclaim_notify_on_reviewed_safe` | bin-centered update field if retained | Phase 5 | Yes | Internal canonical model | Depends on whether concept survives redesign | Admin/update clients fully migrated and field still needed |
+| `duplicate_reclaim_archive_root` | exact field names deferred to Phase 5 design | Phase 5 | Yes | Internal canonical model | Admin/update clients can migrate incrementally | Admin/update clients fully migrated |
+| `duplicate_reclaim_default_retention_days` | exact field names deferred to Phase 5 design | Phase 5 | Yes | Internal canonical model | Admin/update clients can migrate incrementally | Admin/update clients fully migrated |
+| `duplicate_reclaim_notify_on_reviewed_safe` | exact field names deferred to Phase 5 design if retained | Phase 5 | Yes | Internal canonical model | Depends on whether concept survives redesign | Admin/update clients fully migrated and field still needed |
 
 ## Phase Sequencing with Gates
 
@@ -232,10 +314,15 @@ The following matrix defines the minimum controlled migration surface.
   - reclaim routes remain stable
 - Work performed:
   - add bin move/items/restore aliases
-  - keep behavior identical to reclaim routes
+  - keep behavior-identical parity with reclaim routes
+  - keep validation-identical parity with reclaim routes
+  - keep status-code-identical parity with reclaim routes
+  - keep side-effect-identical parity with reclaim routes
+  - implement aliases through shared handler/service logic rather than duplicated route-family business logic
   - do not change payloads yet
 - Exit condition:
   - both route families operate correctly over the same canonical model
+  - parity tests or equivalent proof exist for behavior, validation, status-code, and side-effect parity
 - Rollback posture:
   - remove or disable new bin aliases while retaining reclaim routes
 
@@ -248,6 +335,8 @@ The following matrix defines the minimum controlled migration surface.
   - stop introducing reclaim routes in first-party code
 - Exit condition:
   - no first-party frontend traffic depends on reclaim move/items/restore routes
+  - no first-party helpers/default call sites for active UI flows point to reclaim move/items/restore routes
+  - first-party docs/examples use bin routes
 - Rollback posture:
   - frontend can fall back to reclaim routes because compatibility remains live
 
@@ -256,7 +345,7 @@ The following matrix defines the minimum controlled migration surface.
 - Entry condition:
   - first-party route cutover complete or underway
 - Work performed:
-  - dual-project bin-centered response aliases beside reclaim-shaped fields
+  - dual-project bin-centered response aliases as temporary top-level additive aliases beside reclaim-shaped fields
   - keep both field families projected from the canonical model
 - Exit condition:
   - first-party clients can read bin-centered names without breakage
