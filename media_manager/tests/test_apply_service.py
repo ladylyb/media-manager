@@ -181,6 +181,24 @@ def test_apply_service_records_invalid_target_parent_path_failure(tmp_path: Path
         assert "APPLY_FAILED" in error_codes
 
 
+def test_apply_service_invalid_target_parent_includes_os_error_detail(tmp_path: Path, session_factory) -> None:
+    run_id = _create_planned_run_with_actions(tmp_path, session_factory)
+
+    photos_dir = tmp_path / "Media" / "Photos"
+    for child in sorted(photos_dir.rglob("*"), reverse=True):
+        if child.is_file():
+            child.unlink()
+        elif child.is_dir():
+            child.rmdir()
+    photos_dir.rmdir()
+    photos_dir.write_bytes(b"not-a-directory")
+
+    service = ApplyService(session_factory)
+
+    with pytest.raises(RuntimeError, match="existing non-directory path"):
+        service.apply_run(run_id)
+
+
 def test_apply_rename_collision_mode_resolves_to_collision_suffix(tmp_path: Path, session_factory) -> None:
     run_id = _create_planned_run_with_moves_only(tmp_path, session_factory)
 
