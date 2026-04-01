@@ -36,10 +36,15 @@ import type { DuplicateFile, DuplicateGroup, DuplicateReclaimItem, IntegrityIssu
 
 type ReviewMark = "looks_right" | "needs_review" | "not_sure";
 type ReviewFilter = "all" | "unreviewed" | ReviewMark;
-type DuplicatesTab = "review" | "process" | "recycle-bin" | "playback-issues";
+type DuplicatesTab = "review" | "ready-for-bin" | "recycle-bin" | "playback-issues";
 type ReclaimSyncStatus = "UNREVIEWED" | "REVIEWED_SAFE_TO_RECLAIM";
 type FeedbackTone = "success" | "warning";
 type DuplicateWorkspaceViewMode = "focus" | "gallery" | "list";
+
+interface RecycleBinDisplayItem extends DuplicateReclaimItem {
+  recycle_bin_state: "restorable" | "expired";
+  restore_allowed: boolean;
+}
 
 interface MutationSummary {
   applied_count?: number;
@@ -85,13 +90,15 @@ const reviewOptions: Array<{ value: ReviewFilter; label: string }> = [
 ];
 
 const binStateLabels = {
-  ready: "Ready to move",
+  ready: "Ready for Bin",
   inBin: "In Recycle Bin",
   needsReview: "Needs review",
   safeToRemove: "Safe to remove",
   restore: "Restore from Recycle Bin",
   moveToBin: "Move to Recycle Bin",
   daysRemaining: "Days remaining",
+  expired: "Expired",
+  restoreWindowEnded: "Restore window ended",
   approachingExpiry: "Approaching permanent deletion",
   needsChecking: "Needs checking",
   playbackIssue: "Playback issue",
@@ -192,9 +199,15 @@ function findNextGroupIdAfterReview({
 }
 
 function getDuplicatesTab(value: string | null): DuplicatesTab {
-  if (value === "process" || value === "recycle-bin" || value === "playback-issues") return value;
-  if (value === "removal") return "process";
+  if (value === "ready-for-bin" || value === "recycle-bin" || value === "playback-issues") return value;
+  if (value === "removal" || value === "process") return "ready-for-bin";
   return "review";
+}
+
+function hasRestoreWindowEnded(expiresAt: string | null | undefined): boolean {
+  if (!expiresAt) return false;
+  const expiresAtMs = new Date(expiresAt).getTime();
+  return Number.isFinite(expiresAtMs) && expiresAtMs < Date.now();
 }
 
 function isIssueBlocking(issue: IntegrityIssue): boolean {
@@ -306,8 +319,8 @@ export default function DuplicatesPage() {
   const [selectedDuplicateId, setSelectedDuplicateId] = useState<string | null>(null);
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("unreviewed");
   const [isReviewQueueOpen, setIsReviewQueueOpen] = useState(false);
-  const [processViewMode, setProcessViewMode] = useState<DuplicateWorkspaceViewMode>("focus");
-  const [recycleBinViewMode, setRecycleBinViewMode] = useState<DuplicateWorkspaceViewMode>("focus");
+  const [readyForBinViewMode, setReadyForBinViewMode] = useState<DuplicateWorkspaceViewMode>("focus");
+  const [recycleBinViewMode, setRecycleBinViewMode] = useState<DuplicateWorkspaceViewMode>("gallery");
   const [selectedReadyGroupIds, setSelectedReadyGroupIds] = useState<string[]>([]);
   const [focusedReadyGroupId, setFocusedReadyGroupId] = useState<string | null>(null);
   const [focusedArchivedItemId, setFocusedArchivedItemId] = useState<string | null>(null);
@@ -479,7 +492,18 @@ export default function DuplicatesPage() {
   const selectedDuplicate =
     selectedDuplicates.find((file) => file.file_instance_id === selectedDuplicateId) ?? selectedDuplicates[0] ?? null;
   const reclaimItems = ((reclaimItemsQuery.data?.items ?? []) as DuplicateReclaimItem[]) ?? [];
-  const archivedItems = reclaimItems.filter((item) => item.item_status === "ARCHIVED");
+  const recycleBinItems = reclaimItems
+    .filter((item) => item.item_status === "ARCHIVED")
+    .map<RecycleBinDisplayItem>((item) => {
+      const restoreWindowEnded = hasRestoreWindowEnded(item.expires_at);
+      return {
+        ...item,
+        recycle_bin_state: restoreWindowEnded ? "expired" : "restorable",
+        restore_allowed: !restoreWindowEnded,
+      };
+    });
+  const restorableRecycleBinItems = recycleBinItems.filter((item) => item.restore_allowed);
+  const expiredRecycleBinItems = recycleBinItems.filter((item) => !item.restore_allowed);
   const restoredItems = reclaimItems.filter((item) => item.item_status === "RESTORED");
   const archivedReclaimCounts = useMemo(() => getArchivedReclaimCountByGroup(reclaimItems), [reclaimItems]);
   const groupsById = useMemo(
@@ -502,9 +526,9 @@ export default function DuplicatesPage() {
     ? readyGroups.findIndex((group) => group.group_id === focusedReadyGroup.group_id)
     : -1;
   const focusedArchivedItem =
-    archivedItems.find((item) => item.file_instance_id === focusedArchivedItemId) ?? archivedItems[0] ?? null;
+    recycleBinItems.find((item) => item.file_instance_id === focusedArchivedItemId) ?? recycleBinItems[0] ?? null;
   const focusedArchivedIndex = focusedArchivedItem
-    ? archivedItems.findIndex((item) => item.file_instance_id === focusedArchivedItem.file_instance_id)
+    ? recycleBinItems.findIndex((item) => item.file_instance_id === focusedArchivedItem.file_instance_id)
     : -1;
   const removalReviewGroups = sortedGroups.filter(
     (group) =>
@@ -578,17 +602,17 @@ export default function DuplicatesPage() {
     }
   }, [focusedReadyGroupId, readyGroupIdList, readyGroups, readyGroupIds]);
 
-  const archivedItemIdList = archivedItems.map((item) => item.file_instance_id).join("|");
+  const archivedItemIdList = recycleBinItems.map((item) => item.file_instance_id).join("|");
 
   useEffect(() => {
-    if (!archivedItems.length) {
+    if (!recycleBinItems.length) {
       setFocusedArchivedItemId(null);
       return;
     }
-    if (!focusedArchivedItemId || !archivedItems.some((item) => item.file_instance_id === focusedArchivedItemId)) {
-      setFocusedArchivedItemId(archivedItems[0].file_instance_id);
+    if (!focusedArchivedItemId || !recycleBinItems.some((item) => item.file_instance_id === focusedArchivedItemId)) {
+      setFocusedArchivedItemId(recycleBinItems[0].file_instance_id);
     }
-  }, [archivedItemIdList, archivedItems, focusedArchivedItemId]);
+  }, [archivedItemIdList, recycleBinItems, focusedArchivedItemId]);
 
   function setActiveTab(nextTab: DuplicatesTab) {
     const nextParams = new URLSearchParams(searchParams);
@@ -669,10 +693,10 @@ export default function DuplicatesPage() {
   }
 
   function moveArchivedFocus(direction: -1 | 1) {
-    if (!archivedItems.length || focusedArchivedIndex < 0) return;
+    if (!recycleBinItems.length || focusedArchivedIndex < 0) return;
     const nextIndex = focusedArchivedIndex + direction;
-    if (nextIndex < 0 || nextIndex >= archivedItems.length) return;
-    setFocusedArchivedItemId(archivedItems[nextIndex].file_instance_id);
+    if (nextIndex < 0 || nextIndex >= recycleBinItems.length) return;
+    setFocusedArchivedItemId(recycleBinItems[nextIndex].file_instance_id);
   }
 
   async function refreshRecycleBinQueries() {
@@ -771,7 +795,7 @@ export default function DuplicatesPage() {
         applied > 0
           ? {
               tone: "success",
-              message: `${applied} file${applied === 1 ? "" : "s"} restored from the Recycle Bin. Restored groups stay out of Ready to move until they are reviewed again.`,
+              message: `${applied} file${applied === 1 ? "" : "s"} restored from the Recycle Bin. Restored groups stay out of Ready for Bin until they are reviewed again.`,
             }
           : {
               tone: "warning",
@@ -812,7 +836,7 @@ export default function DuplicatesPage() {
       void syncReclaimBridge(
         selected,
         "REVIEWED_SAFE_TO_RECLAIM",
-        `Saved “Looks right” for ${basename(selected.canonical_path)}, but the app could not add it to Ready to move. Try again from the Recycle Bin tab.`,
+        `Saved “Looks right” for ${basename(selected.canonical_path)}, but the app could not add it to Ready for Bin. Try again from the Recycle Bin tab.`,
       );
     } else if (
       selected.reclaim_status === "REVIEWED_SAFE_TO_RECLAIM" ||
@@ -821,7 +845,7 @@ export default function DuplicatesPage() {
       void syncReclaimBridge(
         selected,
         "UNREVIEWED",
-        `Saved the review change for ${basename(selected.canonical_path)}, but the app could not remove it from Ready to move.`,
+        `Saved the review change for ${basename(selected.canonical_path)}, but the app could not remove it from Ready for Bin.`,
       );
     } else {
       markBridgeBlocked(selected.group_id, false);
@@ -842,7 +866,7 @@ export default function DuplicatesPage() {
     return (
       <Card
         key={group.group_id}
-        data-testid={`process-gallery-card-${group.group_id}`}
+        data-testid={`ready-for-bin-gallery-card-${group.group_id}`}
         className={cn(
           "rounded-[24px] border-border/70 bg-card/95 shadow-sm transition-all",
           isFocused && "border-primary/30 shadow-md",
@@ -992,7 +1016,7 @@ export default function DuplicatesPage() {
     );
   }
 
-  function renderGalleryHoldingCard(item: DuplicateReclaimItem) {
+  function renderGalleryHoldingCard(item: RecycleBinDisplayItem) {
     const group = groupsById[item.content_id];
     const keepCopy = group ? getKeepCopy(group) : null;
     const movedCopy =
@@ -1005,18 +1029,35 @@ export default function DuplicatesPage() {
         <CardContent className="space-y-4 p-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0 space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <StatusBadge
+                  label={item.restore_allowed ? binStateLabels.inBin : binStateLabels.expired}
+                  severity={item.restore_allowed ? "neutral" : "caution"}
+                />
+                {item.expires_at ? (
+                  <StatusBadge
+                    label={
+                      item.restore_allowed
+                        ? formatDaysRemaining(item.expires_at) ?? binStateLabels.daysRemaining
+                        : binStateLabels.restoreWindowEnded
+                    }
+                    severity={item.restore_allowed ? "info" : "caution"}
+                  />
+                ) : null}
+              </div>
               <p className="truncate text-base font-semibold text-foreground">{basename(item.original_path)}</p>
               <p className="text-sm text-muted-foreground">
-                Restore from the Recycle Bin here. Later recycle/purge still happens elsewhere.
+                {item.restore_allowed
+                  ? "Restore from the Recycle Bin here while the restore window is still open."
+                  : "Restore window ended. This file stays visible here until a later purge removes it."}
               </p>
-              {item.expires_at ? <p className="text-xs text-muted-foreground">{formatDaysRemaining(item.expires_at) ?? binStateLabels.daysRemaining}</p> : null}
             </div>
             <Button
               type="button"
               variant="outline"
               size="sm"
               onClick={() => void handleRestore(item)}
-              disabled={restoreReclaimMutation.isPending}
+              disabled={restoreReclaimMutation.isPending || !item.restore_allowed}
             >
               Restore from Recycle Bin
             </Button>
@@ -1057,7 +1098,10 @@ export default function DuplicatesPage() {
               )}
             </div>
           </div>
-          <p className="truncate text-xs text-muted-foreground">{item.archive_path}</p>
+          <div className="space-y-1">
+            <p className="truncate text-xs font-medium text-foreground">{basename(item.original_path)}</p>
+            <p className="truncate text-xs text-muted-foreground">{item.archive_path}</p>
+          </div>
         </CardContent>
       </Card>
     );
@@ -1069,13 +1113,13 @@ export default function DuplicatesPage() {
     const extraCopies = getExtraCopies(group);
     return (
       <div
-        data-testid="process-focused-panel"
+        data-testid="ready-for-bin-focused-panel"
         className="rounded-[22px] border border-border/70 bg-background/80 p-4"
       >
         <div className="flex flex-col gap-3 border-b border-border/70 pb-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0 space-y-1">
-            <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Focused process group</p>
-            <p data-testid="process-focused-title" className="truncate text-lg font-semibold text-foreground">
+            <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Focused Ready for Bin group</p>
+            <p data-testid="ready-for-bin-focused-title" className="truncate text-lg font-semibold text-foreground">
               {basename(group.canonical_path)}
             </p>
             <p className="text-sm text-muted-foreground">
@@ -1158,7 +1202,7 @@ export default function DuplicatesPage() {
     );
   }
 
-  function renderFocusedArchivedItem(item: DuplicateReclaimItem) {
+  function renderFocusedArchivedItem(item: RecycleBinDisplayItem) {
     const group = groupsById[item.content_id];
     const keepCopy = group ? getKeepCopy(group) : null;
     const movedCopy =
@@ -1175,8 +1219,10 @@ export default function DuplicatesPage() {
               {basename(item.original_path)}
             </p>
             <p className="text-sm text-muted-foreground">
-              {focusedArchivedIndex + 1} of {archivedItems.length} items in Recycle Bin
-              {item.expires_at ? ` • ${formatDaysRemaining(item.expires_at) ?? binStateLabels.daysRemaining}` : ""}
+              {focusedArchivedIndex + 1} of {recycleBinItems.length} items in Recycle Bin
+              {item.expires_at
+                ? ` • ${item.restore_allowed ? formatDaysRemaining(item.expires_at) ?? binStateLabels.daysRemaining : binStateLabels.restoreWindowEnded}`
+                : ""}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -1195,7 +1241,7 @@ export default function DuplicatesPage() {
               variant="outline"
               size="sm"
               onClick={() => moveArchivedFocus(1)}
-              disabled={focusedArchivedIndex < 0 || focusedArchivedIndex >= archivedItems.length - 1}
+              disabled={focusedArchivedIndex < 0 || focusedArchivedIndex >= recycleBinItems.length - 1}
             >
               Next
               <ChevronRight className="ml-1 h-4 w-4" />
@@ -1229,7 +1275,7 @@ export default function DuplicatesPage() {
                 alt={basename(movedCopy.path)}
                 isImage={movedCopy.is_image}
                 mediaType={movedCopy.media_type}
-                className="aspect-[4/3] max-h-[24rem]"
+                className="aspect-[4/3] max-h-[20rem]"
                 fit="contain"
               />
             ) : (
@@ -1237,19 +1283,28 @@ export default function DuplicatesPage() {
                 Preview is not available for this Recycle Bin item.
               </div>
             )}
-            <p className="truncate text-xs text-muted-foreground">{item.archive_path}</p>
+            <div className="space-y-1">
+              <StatusBadge
+                label={item.restore_allowed ? binStateLabels.inBin : binStateLabels.expired}
+                severity={item.restore_allowed ? "neutral" : "caution"}
+              />
+              <p className="truncate text-xs font-medium text-foreground">{basename(item.original_path)}</p>
+              <p className="truncate text-xs text-muted-foreground">{item.archive_path}</p>
+            </div>
           </div>
         </div>
 
         <div className="mt-4 flex flex-col gap-3 border-t border-border/70 pt-4 lg:flex-row lg:items-center lg:justify-between">
           <p className="text-sm text-muted-foreground">
-            Restore this extra copy from the Recycle Bin back to its original location.
+            {item.restore_allowed
+              ? "Restore this extra copy from the Recycle Bin back to its original location."
+              : "Restore window ended. This extra copy remains visible here until it is purged."}
           </p>
           <Button
             type="button"
             size="sm"
             onClick={() => void handleRestore(item)}
-            disabled={restoreReclaimMutation.isPending}
+            disabled={restoreReclaimMutation.isPending || !item.restore_allowed}
           >
             Restore from Recycle Bin
           </Button>
@@ -1331,7 +1386,7 @@ export default function DuplicatesPage() {
       {playbackIssuesQuery.error && activeTab === "playback-issues" ? (
         <ErrorAlert message={getErrorMessage(playbackIssuesQuery.error) || "Failed to load playback issues for duplicates"} />
       ) : null}
-      {reclaimBridgeWarning && activeTab === "process" ? <ErrorAlert message={reclaimBridgeWarning} /> : null}
+      {reclaimBridgeWarning && activeTab === "ready-for-bin" ? <ErrorAlert message={reclaimBridgeWarning} /> : null}
 
       {duplicatesQuery.isLoading ? (
         <div className="space-y-4">
@@ -1350,7 +1405,7 @@ export default function DuplicatesPage() {
             <CardContent className={cn("space-y-4 p-4", activeTab === "review" && "space-y-3 p-2.5 sm:p-3")}>
               <TabsList className="flex h-auto w-full flex-wrap justify-start gap-2 rounded-[18px] bg-muted/60 p-1">
                 <TabsTrigger value="review">Review duplicates</TabsTrigger>
-                <TabsTrigger value="process">Process duplicates</TabsTrigger>
+                <TabsTrigger value="ready-for-bin">Ready for Bin</TabsTrigger>
                 <TabsTrigger value="recycle-bin">Recycle Bin</TabsTrigger>
                 <TabsTrigger value="playback-issues">Playback issues</TabsTrigger>
               </TabsList>
@@ -1369,11 +1424,11 @@ export default function DuplicatesPage() {
                 </div>
               </TabsContent>
 
-              <TabsContent value="process" className="mt-0">
+              <TabsContent value="ready-for-bin" className="mt-0">
                 <div className="space-y-2">
-                  <h2 className="text-xl font-semibold tracking-tight text-foreground">Process duplicates</h2>
+                  <h2 className="text-xl font-semibold tracking-tight text-foreground">Ready for Bin</h2>
                   <p className="text-sm text-muted-foreground">
-                    Move reviewed extra copies into the Recycle Bin. Restore happens on the Recycle Bin tab.
+                    Move eligible extra copies into the Recycle Bin here. Restore happens only on the Recycle Bin tab.
                   </p>
                 </div>
               </TabsContent>
@@ -1676,12 +1731,12 @@ export default function DuplicatesPage() {
             </div>
           </TabsContent>
 
-          <TabsContent value="process" className="mt-0">
+          <TabsContent value="ready-for-bin" className="mt-0">
             <div className="space-y-4">
               <div className="grid gap-3 md:grid-cols-3">
                 <Card className="rounded-[22px] border-border/70 bg-card/95 shadow-sm">
                   <CardContent className="space-y-1 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Ready to move</p>
+                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Ready for Bin</p>
                     <p className="text-2xl font-semibold text-foreground">{readyGroups.length}</p>
                     <p className="text-sm text-muted-foreground">{readyExtraCopyCount} extra copies are ready for the Recycle Bin.</p>
                   </CardContent>
@@ -1706,28 +1761,28 @@ export default function DuplicatesPage() {
                 <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
                   <div>
                     <p className="text-sm font-semibold text-foreground">View</p>
-                    <p className="text-sm text-muted-foreground">Focus is the primary workflow. Switch to list or gallery when you need multi-select.</p>
+                    <p className="text-sm text-muted-foreground">Focus is the primary workflow here. Switch quietly to list or gallery only when you need to scan or bulk-select groups.</p>
                   </div>
                   <ToggleGroup
                     type="single"
-                    value={processViewMode}
+                    value={readyForBinViewMode}
                     onValueChange={(value) => {
-                      if (value === "focus" || value === "gallery" || value === "list") setProcessViewMode(value);
+                      if (value === "focus" || value === "gallery" || value === "list") setReadyForBinViewMode(value);
                     }}
                     variant="outline"
                     size="sm"
                     className="justify-start"
-                    data-testid="process-view-toggle"
+                    data-testid="ready-for-bin-view-toggle"
                   >
-                    <ToggleGroupItem value="focus" aria-label="Focus view" data-testid="process-view-focus">
+                    <ToggleGroupItem value="focus" aria-label="Focus view" data-testid="ready-for-bin-view-focus">
                       <PanelLeft className="h-4 w-4" />
                       Focus
                     </ToggleGroupItem>
-                    <ToggleGroupItem value="list" aria-label="List view" data-testid="process-view-list">
+                    <ToggleGroupItem value="list" aria-label="List view" data-testid="ready-for-bin-view-list">
                       <List className="h-4 w-4" />
                       List
                     </ToggleGroupItem>
-                    <ToggleGroupItem value="gallery" aria-label="Gallery view" data-testid="process-view-gallery">
+                    <ToggleGroupItem value="gallery" aria-label="Gallery view" data-testid="ready-for-bin-view-gallery">
                       <LayoutGrid className="h-4 w-4" />
                       Gallery
                     </ToggleGroupItem>
@@ -1751,10 +1806,10 @@ export default function DuplicatesPage() {
                   ) : null}
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div>
-                      <p className="text-sm font-semibold text-foreground">Process duplicates</p>
-                      <p className="text-sm text-muted-foreground">Only groups marked “Looks right” can be moved to the Recycle Bin. The keep copy stays in place.</p>
+                      <p className="text-sm font-semibold text-foreground">Ready for Bin</p>
+                      <p className="text-sm text-muted-foreground">Only groups marked “Looks right” can be moved to the Recycle Bin. The keep copy always stays in place.</p>
                     </div>
-                    {processViewMode !== "focus" ? (
+                    {readyForBinViewMode !== "focus" ? (
                       <div className="flex flex-wrap gap-2">
                         <Button
                           type="button"
@@ -1781,13 +1836,13 @@ export default function DuplicatesPage() {
                     <p className="text-sm text-muted-foreground">No eligible extra copies are left to move to the Recycle Bin.</p>
                   ) : null}
 
-                  {processViewMode === "focus" ? (
+                  {readyForBinViewMode === "focus" ? (
                     focusedReadyGroup ? renderFocusedReadyGroup(focusedReadyGroup) : null
                   ) : null}
 
-                  {processViewMode !== "focus" && selectedReadyGroups.length ? (
+                  {readyForBinViewMode !== "focus" && selectedReadyGroups.length ? (
                     <div
-                      data-testid="process-bulk-action-bar"
+                      data-testid="ready-for-bin-bulk-action-bar"
                       className="flex flex-col gap-3 rounded-[20px] border border-primary/20 bg-primary/5 px-4 py-3 lg:flex-row lg:items-center lg:justify-between"
                     >
                       <div className="space-y-1">
@@ -1811,14 +1866,14 @@ export default function DuplicatesPage() {
                     </div>
                   ) : null}
 
-                  {readyGroups.length && processViewMode === "gallery" ? (
-                    <div data-testid="process-ready-gallery" className="grid gap-4 xl:grid-cols-2">
+                  {readyGroups.length && readyForBinViewMode === "gallery" ? (
+                    <div data-testid="ready-for-bin-gallery" className="grid gap-4 xl:grid-cols-2">
                       {readyGroups.map((group) => renderGalleryReadyCard(group))}
                     </div>
                   ) : null}
 
-                  {readyGroups.length && processViewMode === "list" ? (
-                    <div data-testid="process-ready-list" className="space-y-3">
+                  {readyGroups.length && readyForBinViewMode === "list" ? (
+                    <div data-testid="ready-for-bin-list" className="space-y-3">
                       {readyGroups.map((group) => {
                         const isSelected = selectedReadyGroupIds.includes(group.group_id);
                         return (
@@ -1883,13 +1938,13 @@ export default function DuplicatesPage() {
                 <CardContent className="space-y-4 p-4">
                   <div>
                     <p className="text-sm font-semibold text-foreground">Needs review before moving to Recycle Bin</p>
-                    <p className="text-sm text-muted-foreground">Groups must be reviewed again before they can re-enter Ready to move. Restored groups stay out until the operator marks Looks right again.</p>
+                    <p className="text-sm text-muted-foreground">These groups are secondary here. Review them again before they can re-enter Ready for Bin. Restored groups stay out until the operator marks Looks right again.</p>
                   </div>
 
                   {!removalReviewGroups.length ? (
                     <p className="text-sm text-muted-foreground">No additional duplicate groups are waiting for review.</p>
-                  ) : processViewMode === "gallery" ? (
-                    <div data-testid="process-review-gallery" className="grid gap-4 xl:grid-cols-2">
+                  ) : readyForBinViewMode === "gallery" ? (
+                    <div data-testid="ready-for-bin-review-gallery" className="grid gap-4 xl:grid-cols-2">
                       {removalReviewGroups.map((group) => renderGalleryReviewCard(group))}
                     </div>
                   ) : (
@@ -1933,22 +1988,22 @@ export default function DuplicatesPage() {
                 <Card className="rounded-[22px] border-border/70 bg-card/95 shadow-sm">
                   <CardContent className="space-y-1 p-4">
                     <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">In Recycle Bin</p>
-                    <p className="text-2xl font-semibold text-foreground">{archivedItems.length}</p>
-                    <p className="text-sm text-muted-foreground">These extra copies are currently available to restore.</p>
+                    <p className="text-2xl font-semibold text-foreground">{recycleBinItems.length}</p>
+                    <p className="text-sm text-muted-foreground">These extra copies still physically exist in the Recycle Bin.</p>
                   </CardContent>
                 </Card>
                 <Card className="rounded-[22px] border-border/70 bg-card/95 shadow-sm">
                   <CardContent className="space-y-1 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Recently restored</p>
-                    <p className="text-2xl font-semibold text-foreground">{restoredItems.length}</p>
-                    <p className="text-sm text-muted-foreground">Restored groups stay out of Ready to move until they are reviewed again.</p>
+                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Restore available</p>
+                    <p className="text-2xl font-semibold text-foreground">{restorableRecycleBinItems.length}</p>
+                    <p className="text-sm text-muted-foreground">These items can still be restored from the Recycle Bin.</p>
                   </CardContent>
                 </Card>
                 <Card className="rounded-[22px] border-border/70 bg-card/95 shadow-sm">
                   <CardContent className="space-y-1 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Current restore window</p>
-                    <p className="text-2xl font-semibold text-foreground">{archiveRetentionDays ?? "--"}</p>
-                    <p className="text-sm text-muted-foreground">Days before later recycle/purge workflows take over.</p>
+                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Restore window ended</p>
+                    <p className="text-2xl font-semibold text-foreground">{expiredRecycleBinItems.length}</p>
+                    <p className="text-sm text-muted-foreground">Expired items stay visible here until they are purged.</p>
                   </CardContent>
                 </Card>
               </div>
@@ -1957,7 +2012,7 @@ export default function DuplicatesPage() {
                 <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
                   <div>
                     <p className="text-sm font-semibold text-foreground">View</p>
-                    <p className="text-sm text-muted-foreground">Focus is the primary restore workflow. Switch to list or gallery to browse more items at once.</p>
+                    <p className="text-sm text-muted-foreground">Gallery is the primary browsing workflow here. Switch to list for denser scanning or focus for a single-item drill-in.</p>
                   </div>
                   <ToggleGroup
                     type="single"
@@ -1970,17 +2025,17 @@ export default function DuplicatesPage() {
                     className="justify-start"
                     data-testid="recycle-bin-view-toggle"
                   >
-                    <ToggleGroupItem value="focus" aria-label="Focus view" data-testid="recycle-bin-view-focus">
-                      <PanelLeft className="h-4 w-4" />
-                      Focus
+                    <ToggleGroupItem value="gallery" aria-label="Gallery view" data-testid="recycle-bin-view-gallery">
+                      <LayoutGrid className="h-4 w-4" />
+                      Gallery
                     </ToggleGroupItem>
                     <ToggleGroupItem value="list" aria-label="List view" data-testid="recycle-bin-view-list">
                       <List className="h-4 w-4" />
                       List
                     </ToggleGroupItem>
-                    <ToggleGroupItem value="gallery" aria-label="Gallery view" data-testid="recycle-bin-view-gallery">
-                      <LayoutGrid className="h-4 w-4" />
-                      Gallery
+                    <ToggleGroupItem value="focus" aria-label="Focus view" data-testid="recycle-bin-view-focus">
+                      <PanelLeft className="h-4 w-4" />
+                      Focus
                     </ToggleGroupItem>
                   </ToggleGroup>
                 </CardContent>
@@ -2003,7 +2058,7 @@ export default function DuplicatesPage() {
 
                   <div>
                     <p className="text-sm font-semibold text-foreground">In Recycle Bin</p>
-                    <p className="text-sm text-muted-foreground">Browse extra copies already moved to the Recycle Bin and restore them from here.</p>
+                    <p className="text-sm text-muted-foreground">Browse already moved extra copies here. Restore is available only while the restore window remains open.</p>
                   </div>
 
                   {recycleConfigWarning ? (
@@ -2016,25 +2071,29 @@ export default function DuplicatesPage() {
                     </div>
                   )}
 
-                  {!archivedItems.length ? (
+                  {!recycleBinItems.length ? (
                     <p className="text-sm text-muted-foreground">No duplicate files are in the Recycle Bin right now.</p>
-                  ) : recycleBinViewMode === "focus" ? (
-                    focusedArchivedItem ? renderFocusedArchivedItem(focusedArchivedItem) : null
                   ) : recycleBinViewMode === "gallery" ? (
-                    <div data-testid="recycle-bin-gallery" className="grid gap-4 xl:grid-cols-2">
-                      {archivedItems.map((item) => renderGalleryHoldingCard(item))}
+                    <div data-testid="recycle-bin-gallery" className="grid gap-4 xl:grid-cols-3">
+                      {recycleBinItems.map((item) => renderGalleryHoldingCard(item))}
                     </div>
-                  ) : (
+                  ) : recycleBinViewMode === "list" ? (
                     <div data-testid="recycle-bin-list" className="space-y-3">
-                      {archivedItems.map((item) => (
+                      {recycleBinItems.map((item) => (
                         <div
                           key={item.file_instance_id}
                           className="flex flex-col gap-3 rounded-[22px] border border-border/70 bg-background/70 p-4 lg:flex-row lg:items-center lg:justify-between"
                         >
                           <div className="min-w-0 space-y-2">
                             <div className="flex flex-wrap items-center gap-2">
-                              <StatusBadge label={binStateLabels.inBin} severity="neutral" />
-                              {item.expires_at ? <StatusBadge label={formatDaysRemaining(item.expires_at) ?? binStateLabels.daysRemaining} severity="info" /> : null}
+                              <StatusBadge
+                                label={item.restore_allowed ? binStateLabels.inBin : binStateLabels.expired}
+                                severity={item.restore_allowed ? "neutral" : "caution"}
+                              />
+                              <StatusBadge
+                                label={item.restore_allowed ? formatDaysRemaining(item.expires_at) ?? binStateLabels.daysRemaining : binStateLabels.restoreWindowEnded}
+                                severity={item.restore_allowed ? "info" : "caution"}
+                              />
                             </div>
                             <p className="truncate text-sm font-semibold text-foreground">{basename(item.original_path)}</p>
                             <p className="truncate text-xs text-muted-foreground">{item.archive_path}</p>
@@ -2043,18 +2102,20 @@ export default function DuplicatesPage() {
                             type="button"
                             variant="outline"
                             onClick={() => void handleRestore(item)}
-                            disabled={restoreReclaimMutation.isPending}
+                            disabled={restoreReclaimMutation.isPending || !item.restore_allowed}
                           >
                             Restore from Recycle Bin
                           </Button>
                         </div>
                       ))}
                     </div>
+                  ) : (
+                    focusedArchivedItem ? renderFocusedArchivedItem(focusedArchivedItem) : null
                   )}
 
                   {restoredItems.length ? (
                     <div className="rounded-[18px] border border-border/70 bg-background/70 px-4 py-3 text-sm text-muted-foreground">
-                      {restoredItems.length} restored file{restoredItems.length === 1 ? "" : "s"} already left the Recycle Bin. Those groups stay out of Ready to move until they are reviewed again.
+                      {restoredItems.length} restored file{restoredItems.length === 1 ? "" : "s"} already left the Recycle Bin. Those groups stay out of Ready for Bin until they are reviewed again.
                     </div>
                   ) : null}
                 </CardContent>
