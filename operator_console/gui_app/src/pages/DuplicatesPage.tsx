@@ -35,7 +35,7 @@ import { cn } from "@/lib/utils";
 import type { DuplicateFile, DuplicateGroup, DuplicateReclaimItem, IntegrityIssue } from "@/types";
 
 type ReviewMark = "looks_right" | "needs_review" | "not_sure";
-type ReviewFilter = "all" | "unreviewed" | ReviewMark;
+type ReviewFilter = "all" | "unreviewed" | "restored" | ReviewMark;
 type DuplicatesTab = "review" | "ready-for-bin" | "recycle-bin" | "playback-issues";
 type ReclaimSyncStatus = "UNREVIEWED" | "REVIEWED_SAFE_TO_RECLAIM";
 type FeedbackTone = "success" | "warning";
@@ -84,6 +84,7 @@ interface ReadyGroupOptions {
 const reviewOptions: Array<{ value: ReviewFilter; label: string }> = [
   { value: "all", label: "All" },
   { value: "unreviewed", label: "Still to review" },
+  { value: "restored", label: "Restored" },
   { value: "looks_right", label: "Looks right" },
   { value: "needs_review", label: "Needs review" },
   { value: "not_sure", label: "Not sure" },
@@ -128,6 +129,12 @@ function formatDaysRemaining(value: string | null | undefined): string | null {
   if (Number.isNaN(milliseconds)) return null;
   const days = Math.max(Math.ceil(milliseconds / (1000 * 60 * 60 * 24)), 0);
   return days === 1 ? "1 day remaining" : `${days} days remaining`;
+}
+
+function parseTimestamp(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function getReviewPresentation(mark?: ReviewMark, isStale = false) {
@@ -448,15 +455,65 @@ export default function DuplicatesPage() {
     [groups],
   );
 
+  const reclaimItems = ((reclaimItemsQuery.data?.items ?? []) as DuplicateReclaimItem[]) ?? [];
+  const recycleBinItems = reclaimItems
+    .filter((item) => item.item_status === "ARCHIVED")
+    .map<RecycleBinDisplayItem>((item) => {
+      const restoreWindowEnded = hasRestoreWindowEnded(item.expires_at);
+      return {
+        ...item,
+        recycle_bin_state: restoreWindowEnded ? "expired" : "restorable",
+        restore_allowed: !restoreWindowEnded,
+      };
+    });
+  const restorableRecycleBinItems = recycleBinItems.filter((item) => item.restore_allowed);
+  const expiredRecycleBinItems = recycleBinItems.filter((item) => !item.restore_allowed);
+  const restoredItems = reclaimItems.filter((item) => item.item_status === "RESTORED");
+  const restoredItemsByGroupId = useMemo(
+    () =>
+      restoredItems.reduce<Record<string, DuplicateReclaimItem[]>>((acc, item) => {
+        if (!acc[item.content_id]) acc[item.content_id] = [];
+        acc[item.content_id].push(item);
+        return acc;
+      }, {}),
+    [restoredItems],
+  );
+  const groupsById = useMemo(
+    () =>
+      sortedGroups.reduce<Record<string, DuplicateGroup>>((acc, group) => {
+        acc[group.group_id] = group;
+        return acc;
+      }, {}),
+    [sortedGroups],
+  );
+  const restoredReviewGroupIds = useMemo(() => {
+    return new Set(
+      sortedGroups
+        .filter((group) => {
+          const restoredGroupItems = restoredItemsByGroupId[group.group_id] ?? [];
+          if (!restoredGroupItems.length) return false;
+
+          const reviewedAtMs = parseTimestamp(group.reviewed_at);
+          return restoredGroupItems.some((item) => {
+            const restoredAtMs = parseTimestamp(item.restored_at);
+            if (restoredAtMs === null) return reviewedAtMs === null;
+            if (reviewedAtMs === null) return true;
+            return restoredAtMs > reviewedAtMs;
+          });
+        })
+        .map((group) => group.group_id),
+    );
+  }, [restoredItemsByGroupId, sortedGroups]);
   const filteredGroups = useMemo(
     () =>
       sortedGroups.filter((group) => {
         if (reviewFilter === "all") return true;
+        if (reviewFilter === "restored") return restoredReviewGroupIds.has(group.group_id);
         const mark = currentReviewMark(group);
         if (reviewFilter === "unreviewed") return !mark;
         return mark === reviewFilter;
       }),
-    [reviewFilter, sortedGroups],
+    [reviewFilter, restoredReviewGroupIds, sortedGroups],
   );
 
   useEffect(() => {
@@ -491,29 +548,6 @@ export default function DuplicatesPage() {
 
   const selectedDuplicate =
     selectedDuplicates.find((file) => file.file_instance_id === selectedDuplicateId) ?? selectedDuplicates[0] ?? null;
-  const reclaimItems = ((reclaimItemsQuery.data?.items ?? []) as DuplicateReclaimItem[]) ?? [];
-  const recycleBinItems = reclaimItems
-    .filter((item) => item.item_status === "ARCHIVED")
-    .map<RecycleBinDisplayItem>((item) => {
-      const restoreWindowEnded = hasRestoreWindowEnded(item.expires_at);
-      return {
-        ...item,
-        recycle_bin_state: restoreWindowEnded ? "expired" : "restorable",
-        restore_allowed: !restoreWindowEnded,
-      };
-    });
-  const restorableRecycleBinItems = recycleBinItems.filter((item) => item.restore_allowed);
-  const expiredRecycleBinItems = recycleBinItems.filter((item) => !item.restore_allowed);
-  const restoredItems = reclaimItems.filter((item) => item.item_status === "RESTORED");
-  const archivedReclaimCounts = useMemo(() => getArchivedReclaimCountByGroup(reclaimItems), [reclaimItems]);
-  const groupsById = useMemo(
-    () =>
-      sortedGroups.reduce<Record<string, DuplicateGroup>>((acc, group) => {
-        acc[group.group_id] = group;
-        return acc;
-      }, {}),
-    [sortedGroups],
-  );
   const readyGroups = deriveActionableReadyGroups(sortedGroups, reclaimItems, {
     blockedGroupIds: reclaimBridgeBlockedIds,
   });
@@ -530,13 +564,6 @@ export default function DuplicatesPage() {
   const focusedArchivedIndex = focusedArchivedItem
     ? recycleBinItems.findIndex((item) => item.file_instance_id === focusedArchivedItem.file_instance_id)
     : -1;
-  const removalReviewGroups = sortedGroups.filter(
-    (group) =>
-      (group.reclaimable_file_count ?? 0) > 0 &&
-      !readyGroupIds.has(group.group_id) &&
-      !((archivedReclaimCounts[group.group_id] ?? 0) >= (group.reclaimable_file_count ?? 0)) &&
-      !isPendingRemovalStatus(group.reclaim_status),
-  );
   const archiveRoot = duplicateBinPolicy?.current_move_root?.trim() ?? "";
   const archiveRetentionDays = duplicateBinPolicy?.current_retention_days ?? null;
   const recycleConfigWarning =
@@ -585,6 +612,7 @@ export default function DuplicatesPage() {
   const reviewMetaLine = selected
     ? `${reviewProgressLabel} • ${selectedDuplicates.length === 1 ? "1 matching copy" : `${selectedDuplicates.length} matching copies`} • ${reviewedCount} reviewed`
     : `${reviewProgressLabel} • ${reviewedCount} reviewed`;
+  const selectedNeedsRestoredReview = selected ? restoredReviewGroupIds.has(selected.group_id) : false;
 
   const readyGroupIdList = readyGroups.map((group) => group.group_id).join("|");
 
@@ -830,7 +858,15 @@ export default function DuplicatesPage() {
     });
     setRecycleBinFeedback(null);
 
-    if (isPendingRemovalStatus(selected.reclaim_status)) {
+    if (selectedNeedsRestoredReview) {
+      void syncReclaimBridge(
+        selected,
+        mark === "looks_right" ? "REVIEWED_SAFE_TO_RECLAIM" : "UNREVIEWED",
+        mark === "looks_right"
+          ? `Saved “Looks right” for ${basename(selected.canonical_path)}, but the app could not return it to Ready for Bin.`
+          : `Saved the review change for ${basename(selected.canonical_path)}, but the app could not clear its restored-review state.`,
+      );
+    } else if (isPendingRemovalStatus(selected.reclaim_status)) {
       markBridgeBlocked(selected.group_id, false);
     } else if (mark === "looks_right") {
       void syncReclaimBridge(
@@ -950,67 +986,6 @@ export default function DuplicatesPage() {
               Move to Recycle Bin
             </Button>
           </div>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  function renderGalleryReviewCard(group: DuplicateGroup) {
-    const keepCopy = getKeepCopy(group);
-    if (!keepCopy) return null;
-    const extraCopies = getExtraCopies(group);
-    const reviewLabel = getReviewPresentation(currentReviewMark(group), Boolean(group.is_stale)).label;
-
-    return (
-      <Card key={group.group_id} className="rounded-[24px] border-border/70 bg-card/95 shadow-sm">
-        <CardContent className="space-y-4 p-4">
-          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
-            <div className="space-y-2">
-              <p className="truncate text-base font-semibold text-foreground">{basename(group.canonical_path)}</p>
-              <p className="text-sm text-muted-foreground">
-                {reviewLabel}
-                {reclaimBridgeBlockedIds.includes(group.group_id)
-                  ? " • Eligibility sync needs attention"
-                  : group.duplicate_reclaim_unavailable_reason === "missing_canonical_file_content_mapping"
-                    ? " • Planner-confirmed keep copy is missing"
-                    : ""}
-              </p>
-              {group.duplicate_reclaim_unavailable_reason === "missing_canonical_file_content_mapping" ? (
-                <p className="text-xs text-muted-foreground">
-                  This group cannot move yet because the planner could not confirm a keep-copy mapping.
-                </p>
-              ) : null}
-              <p className="text-xs text-muted-foreground">
-                {extraCopies.length === 1 ? "1 extra copy" : `${extraCopies.length} extra copies`} • {formatBytes(group.estimated_reclaim_bytes ?? 0)}
-              </p>
-            </div>
-              <DuplicateMediaPreview
-                  src={keepCopy.preview_url ?? (keepCopy.is_image ? keepCopy.media_url ?? keepCopy.thumbnail_url : null)}
-                  alt={basename(keepCopy.path)}
-                  isImage={keepCopy.is_image}
-                  mediaType={keepCopy.media_type}
-                  className="aspect-[4/3]"
-                  fit="contain"
-                />
-          </div>
-          {extraCopies.length ? (
-            <div className="space-y-2">
-              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Extra copies</p>
-              <div className="grid grid-cols-3 gap-2">
-                {extraCopies.slice(0, 3).map((file) => (
-                  <DuplicateMediaPreview
-                    key={file.file_instance_id}
-                    src={file.preview_url ?? (file.is_image ? file.media_url ?? file.thumbnail_url : null)}
-                    alt={basename(file.path)}
-                    isImage={file.is_image}
-                    mediaType={file.media_type}
-                    className="aspect-square max-h-24"
-                    fit="contain"
-                  />
-                ))}
-              </div>
-            </div>
-          ) : null}
         </CardContent>
       </Card>
     );
@@ -1499,7 +1474,9 @@ export default function DuplicatesPage() {
                       <ScrollArea className="h-[40rem] pr-2">
                         <div className="space-y-2">
                           {filteredGroups.map((group, index) => {
-                            const presentation = getReviewPresentation(currentReviewMark(group), Boolean(group.is_stale));
+                            const presentation = restoredReviewGroupIds.has(group.group_id)
+                              ? { label: "Restored", severity: "info" as const }
+                              : getReviewPresentation(currentReviewMark(group), Boolean(group.is_stale));
                             return (
                               <DuplicateQueueItem
                                 key={group.group_id}
@@ -1547,6 +1524,12 @@ export default function DuplicatesPage() {
                             compact
                             progressLabel={reviewProgressLabel}
                           />
+                          {selectedNeedsRestoredReview ? (
+                            <div className="flex flex-col gap-1 rounded-[18px] border border-primary/20 bg-primary/5 px-3 py-2.5">
+                              <p className="text-sm font-semibold text-foreground">Restored from Recycle Bin</p>
+                              <p className="text-sm text-muted-foreground">Review again before this group can re-enter Ready for Bin.</p>
+                            </div>
+                          ) : null}
                           {(selected.integrity_issue_count ?? 0) > 0 ? (
                             <div className="flex flex-col gap-2 rounded-[18px] border border-caution/30 bg-caution/10 px-3 py-2.5 lg:flex-row lg:items-center lg:justify-between">
                               <div className="min-w-0">
@@ -1733,7 +1716,7 @@ export default function DuplicatesPage() {
 
           <TabsContent value="ready-for-bin" className="mt-0">
             <div className="space-y-4">
-              <div className="grid gap-3 md:grid-cols-3">
+              <div className="grid gap-3 md:grid-cols-2">
                 <Card className="rounded-[22px] border-border/70 bg-card/95 shadow-sm">
                   <CardContent className="space-y-1 p-4">
                     <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Ready for Bin</p>
@@ -1746,13 +1729,6 @@ export default function DuplicatesPage() {
                     <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Space you could free up</p>
                     <p className="text-2xl font-semibold text-foreground">{formatBytes(readyEstimatedBytes)}</p>
                     <p className="text-sm text-muted-foreground">Estimated space if the ready extra copies move out of the main library.</p>
-                  </CardContent>
-                </Card>
-                <Card className="rounded-[22px] border-border/70 bg-card/95 shadow-sm">
-                  <CardContent className="space-y-1 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Needs review</p>
-                    <p className="text-2xl font-semibold text-foreground">{removalReviewGroups.length}</p>
-                    <p className="text-sm text-muted-foreground">These groups need review before they can move to the Recycle Bin.</p>
                   </CardContent>
                 </Card>
               </div>
@@ -1831,6 +1807,25 @@ export default function DuplicatesPage() {
                       </p>
                     )}
                   </div>
+
+                  {restoredReviewGroupIds.size ? (
+                    <div className="flex flex-col gap-3 rounded-[18px] border border-border/70 bg-background/70 px-4 py-3 text-sm text-muted-foreground lg:flex-row lg:items-center lg:justify-between">
+                      <p>
+                        {restoredReviewGroupIds.size} restored group{restoredReviewGroupIds.size === 1 ? "" : "s"} {restoredReviewGroupIds.size === 1 ? "needs" : "need"} review before {restoredReviewGroupIds.size === 1 ? "it can" : "they can"} re-enter Ready for Bin.
+                      </p>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setReviewFilter("restored");
+                          setActiveTab("review");
+                        }}
+                      >
+                        Review restored groups
+                      </Button>
+                    </div>
+                  ) : null}
 
                   {!readyGroups.length ? (
                     <p className="text-sm text-muted-foreground">No eligible extra copies are left to move to the Recycle Bin.</p>
@@ -1934,51 +1929,6 @@ export default function DuplicatesPage() {
                 </CardContent>
               </Card>
 
-              <Card className="rounded-[24px] border-border/70 bg-card/95 shadow-sm">
-                <CardContent className="space-y-4 p-4">
-                  <div>
-                    <p className="text-sm font-semibold text-foreground">Needs review before moving to Recycle Bin</p>
-                    <p className="text-sm text-muted-foreground">These groups are secondary here. Review them again before they can re-enter Ready for Bin. Restored groups stay out until the operator marks Looks right again.</p>
-                  </div>
-
-                  {!removalReviewGroups.length ? (
-                    <p className="text-sm text-muted-foreground">No additional duplicate groups are waiting for review.</p>
-                  ) : readyForBinViewMode === "gallery" ? (
-                    <div data-testid="ready-for-bin-review-gallery" className="grid gap-4 xl:grid-cols-2">
-                      {removalReviewGroups.map((group) => renderGalleryReviewCard(group))}
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {removalReviewGroups.map((group) => (
-                        <div
-                          key={group.group_id}
-                          className="flex flex-col gap-3 rounded-[22px] border border-border/70 bg-background/70 p-4 lg:flex-row lg:items-center lg:justify-between"
-                        >
-                          <div className="min-w-0 space-y-2">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <StatusBadge label={binStateLabels.needsReview} severity="caution" />
-                              <StatusBadge
-                                label={`${group.reclaimable_file_count ?? 0} extra cop${(group.reclaimable_file_count ?? 0) === 1 ? "y" : "ies"}`}
-                                severity="neutral"
-                              />
-                              <StatusBadge label={formatBytes(group.estimated_reclaim_bytes ?? 0)} severity="info" />
-                            </div>
-                            <p className="truncate text-sm font-semibold text-foreground">{basename(group.canonical_path)}</p>
-                            <p className="text-xs text-muted-foreground">
-                              Review state: {getReviewPresentation(currentReviewMark(group), Boolean(group.is_stale)).label}
-                              {reclaimBridgeBlockedIds.includes(group.group_id)
-                                ? " • Eligibility sync needs attention before this group can move."
-                                : group.duplicate_reclaim_unavailable_reason === "missing_canonical_file_content_mapping"
-                                  ? " • This group cannot move yet because the planner could not confirm a keep-copy mapping."
-                                  : ""}
-                            </p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
             </div>
           </TabsContent>
 
@@ -2113,11 +2063,6 @@ export default function DuplicatesPage() {
                     focusedArchivedItem ? renderFocusedArchivedItem(focusedArchivedItem) : null
                   )}
 
-                  {restoredItems.length ? (
-                    <div className="rounded-[18px] border border-border/70 bg-background/70 px-4 py-3 text-sm text-muted-foreground">
-                      {restoredItems.length} restored file{restoredItems.length === 1 ? "" : "s"} already left the Recycle Bin. Those groups stay out of Ready for Bin until they are reviewed again.
-                    </div>
-                  ) : null}
                 </CardContent>
               </Card>
             </div>

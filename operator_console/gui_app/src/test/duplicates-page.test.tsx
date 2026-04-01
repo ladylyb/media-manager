@@ -371,7 +371,7 @@ describe("DuplicatesPage", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("ready-for-bin-focused-panel")).not.toBeInTheDocument();
       expect(screen.getByTestId("ready-for-bin-gallery")).toBeInTheDocument();
-      expect(screen.getByTestId("ready-for-bin-review-gallery")).toBeInTheDocument();
+      expect(screen.queryByText("Needs review before moving to Recycle Bin")).not.toBeInTheDocument();
     });
 
     processView.unmount();
@@ -555,9 +555,7 @@ describe("DuplicatesPage", () => {
     expect(await screen.findByTestId("ready-for-bin-gallery")).toBeInTheDocument();
     expect(screen.queryByTestId("ready-for-bin-gallery-card-group-alpha")).not.toBeInTheDocument();
     expect(screen.getByTestId("ready-for-bin-gallery-card-group-beta")).toBeInTheDocument();
-    expect(
-      screen.getByText("This group cannot move yet because the planner could not confirm a keep-copy mapping."),
-    ).toBeInTheDocument();
+    expect(screen.queryByText("This group cannot move yet because the planner could not confirm a keep-copy mapping.")).not.toBeInTheDocument();
   });
 
   it("uses Looks right groups as the only move-eligible groups and shows move and restore feedback", async () => {
@@ -619,7 +617,7 @@ describe("DuplicatesPage", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Mark safe to remove" })).not.toBeInTheDocument();
     expect(screen.getAllByText("alpha-main.jpg").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("beta-main.jpg").length).toBeGreaterThan(0);
+    expect(screen.queryByText("beta-main.jpg")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("ready-for-bin-view-gallery"));
     fireEvent.click(screen.getByRole("button", { name: "Move all eligible groups" }));
@@ -650,11 +648,6 @@ describe("DuplicatesPage", () => {
       expect(
         screen.getByText(
           "1 file restored from the Recycle Bin. Restored groups stay out of Ready for Bin until they are reviewed again.",
-        ),
-      ).toBeInTheDocument();
-      expect(
-        screen.getByText(
-          "1 restored file already left the Recycle Bin. Those groups stay out of Ready for Bin until they are reviewed again.",
         ),
       ).toBeInTheDocument();
       expect(screen.getByText("No duplicate files are in the Recycle Bin right now.")).toBeInTheDocument();
@@ -799,6 +792,116 @@ describe("DuplicatesPage", () => {
         reclaim_status: "UNREVIEWED",
       }),
     );
+  });
+
+  it("routes restored groups back into Review duplicates with a dedicated Restored filter", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        review_status: "looks_right",
+        reviewed_at: "2026-03-21T10:00:00+00:00",
+        reclaim_status: "RESTORED",
+      },
+      {
+        ...buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
+        review_status: "looks_right",
+        reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
+      },
+    ];
+    reclaimItemsData = [
+      {
+        file_instance_id: "group-alpha-duplicate-0",
+        content_id: "group-alpha",
+        original_path: "/library/alpha-copy.jpg",
+        archive_path: "/archive/alpha-copy.jpg",
+        item_status: "RESTORED",
+        restored_at: "2026-03-22T10:00:00+00:00",
+      },
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+
+    renderPage("/duplicates?tab=ready-for-bin");
+
+    expect(await screen.findByText("1 restored group needs review before it can re-enter Ready for Bin.")).toBeInTheDocument();
+    expect(screen.queryByText("Needs review before moving to Recycle Bin")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Review restored groups" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Review duplicates" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Restored" })).toBeInTheDocument();
+      expect(screen.getAllByText("alpha-main.jpg").length).toBeGreaterThan(0);
+      expect(screen.queryByText("beta-main.jpg")).not.toBeInTheDocument();
+      expect(screen.getByText("Restored from Recycle Bin")).toBeInTheDocument();
+      expect(screen.getByText("Review again before this group can re-enter Ready for Bin.")).toBeInTheDocument();
+    });
+  });
+
+  it("drops a restored group out of the Restored filter after it is reviewed again and returns it to Ready for Bin", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        review_status: "looks_right",
+        reviewed_at: "2026-03-21T10:00:00+00:00",
+        reclaim_status: "RESTORED",
+      },
+    ];
+    reclaimItemsData = [
+      {
+        file_instance_id: "group-alpha-duplicate-0",
+        content_id: "group-alpha",
+        original_path: "/library/alpha-copy.jpg",
+        archive_path: "/archive/alpha-copy.jpg",
+        item_status: "RESTORED",
+        restored_at: "2026-03-22T10:00:00+00:00",
+      },
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+    mocks.setDuplicateReview.mockImplementationOnce(
+      async (payload: { content_id: string; review_status: string; reviewed_canonical_instance_id: string }) => {
+        groupsData = groupsData.map((group) =>
+          group.group_id === payload.content_id
+            ? {
+                ...group,
+                review_status: payload.review_status,
+                reviewed_at: "2026-03-23T10:00:00+00:00",
+                reviewed_canonical_instance_id: payload.reviewed_canonical_instance_id,
+                is_stale: false,
+                stale_reason: null,
+              }
+            : group,
+        );
+        return { data: {} };
+      },
+    );
+
+    const reviewView = renderPage("/duplicates?tab=review");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Restored" }));
+    expect(screen.getByText("Restored from Recycle Bin")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark as looks right" }));
+
+    await waitFor(() => {
+      expect(mocks.setDuplicateReview).toHaveBeenCalledWith({
+        content_id: "group-alpha",
+        review_status: "looks_right",
+        reviewed_canonical_instance_id: "group-alpha-canonical",
+      });
+      expect(mocks.setDuplicateReclaim).toHaveBeenCalledWith({
+        content_id: "group-alpha",
+        reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
+      });
+      expect(screen.getByText("Select a group to compare")).toBeInTheDocument();
+    });
+
+    reviewView.unmount();
+    renderPage("/duplicates?tab=ready-for-bin");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("ready-for-bin-focused-title")).toHaveTextContent("alpha-main.jpg");
+      expect(screen.queryByText("Review restored groups")).not.toBeInTheDocument();
+    });
   });
 
   it("surfaces duplicate-related playback issues without becoming a generic integrity dashboard", async () => {
