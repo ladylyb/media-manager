@@ -895,6 +895,17 @@ describe("DuplicatesPage", () => {
       expect(screen.getByText("Select a group to compare")).toBeInTheDocument();
     });
 
+    groupsData = groupsData.map((group) =>
+      group.group_id === "group-alpha"
+        ? {
+            ...group,
+            review_status: "looks_right",
+            reviewed_at: "2026-03-23T10:00:00+00:00",
+            reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
+          }
+        : group,
+    );
+
     reviewView.unmount();
     renderPage("/duplicates?tab=ready-for-bin");
 
