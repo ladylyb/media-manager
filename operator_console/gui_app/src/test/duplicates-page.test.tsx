@@ -115,6 +115,8 @@ function renderPage(initialEntry = "/duplicates") {
 describe("DuplicatesPage", () => {
   let groupsData: ReturnType<typeof buildGroup>[];
   let reclaimItemsData: Array<Record<string, unknown>>;
+  let reclaimItemsTotalCount: number;
+  let reclaimItemsPageSize: number;
 
   beforeEach(() => {
     groupsData = [
@@ -123,6 +125,8 @@ describe("DuplicatesPage", () => {
       buildGroup("group-gamma", "gamma-main.jpg", ["gamma-copy.jpg"]),
     ];
     reclaimItemsData = [];
+    reclaimItemsTotalCount = 0;
+    reclaimItemsPageSize = 50;
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
     mocks.getDuplicateBinPolicy.mockResolvedValue({
       data: {
@@ -132,7 +136,20 @@ describe("DuplicatesPage", () => {
         implementation: "reclaim_compatibility",
       },
     });
-    mocks.getDuplicateReclaimItems.mockImplementation(async () => ({ data: { items: reclaimItemsData } }));
+    mocks.getDuplicateReclaimItems.mockImplementation(async (params?: { page?: number; limit?: number }) => {
+      const page = params?.page ?? 1;
+      const limit = params?.limit ?? reclaimItemsPageSize;
+      const totalCount = reclaimItemsTotalCount || reclaimItemsData.length;
+      return {
+        data: {
+          total_count: totalCount,
+          page,
+          limit,
+          total_pages: Math.max(1, Math.ceil(totalCount / limit)),
+          items: reclaimItemsData,
+        },
+      };
+    });
     mocks.getIntegrityIssues.mockResolvedValue({ data: { items: [] } });
     mocks.executeDuplicateReclaim.mockResolvedValue({
       data: { summary: { applied_count: 1, skipped_count: 0, moves_count: 1 } },
@@ -426,6 +443,69 @@ describe("DuplicatesPage", () => {
     expect(restoreButtons[1]).toBeDisabled();
   });
 
+  it("shows truthful global recycle-bin totals, labels page-scoped restore counts, and paginates independently of view mode", async () => {
+    reclaimItemsTotalCount = 75;
+    mocks.getDuplicateReclaimItems.mockImplementation(async (params?: { page?: number; limit?: number }) => {
+      const page = params?.page ?? 1;
+      const limit = params?.limit ?? 50;
+      const items =
+        page === 1
+          ? Array.from({ length: 50 }, (_, index) => ({
+              file_instance_id: `archived-${index + 1}`,
+              content_id: index % 2 === 0 ? "group-alpha" : "group-beta",
+              original_path: `/library/item-${index + 1}.jpg`,
+              archive_path: `/archive/item-${index + 1}.jpg`,
+              item_status: "ARCHIVED",
+              expires_at: index < 30 ? "2099-04-10T10:00:00+00:00" : "2020-04-10T10:00:00+00:00",
+            }))
+          : Array.from({ length: 25 }, (_, index) => ({
+              file_instance_id: `archived-page2-${index + 1}`,
+              content_id: "group-gamma",
+              original_path: `/library/page2-item-${index + 1}.jpg`,
+              archive_path: `/archive/page2-item-${index + 1}.jpg`,
+              item_status: "ARCHIVED",
+              expires_at: "2099-04-10T10:00:00+00:00",
+            }));
+      return {
+        data: {
+          total_count: 75,
+          page,
+          limit,
+          total_pages: 2,
+          items,
+        },
+      };
+    });
+
+    renderPage("/duplicates?tab=recycle-bin");
+
+    expect(await screen.findByRole("heading", { name: "Recycle Bin" })).toBeInTheDocument();
+    expect(screen.getByText("These extra copies still physically exist in the Recycle Bin across all pages.")).toBeInTheDocument();
+    expect(screen.getByText("Restore available on this page")).toBeInTheDocument();
+    expect(screen.getByText("Restore window ended on this page")).toBeInTheDocument();
+    expect(screen.getByText("Showing page 1 of 2 for Recycle Bin items.")).toBeInTheDocument();
+    expect(screen.getByTestId("recycle-bin-gallery")).toBeInTheDocument();
+    expect(screen.getAllByText("75").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByTestId("recycle-bin-view-focus"));
+    expect(await screen.findByTestId("recycle-bin-focused-panel")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+
+    await waitFor(() => {
+      expect(mocks.getDuplicateReclaimItems).toHaveBeenCalledWith({ page: 2, limit: 50 });
+      expect(screen.getByText("Showing page 2 of 2 for Recycle Bin items.")).toBeInTheDocument();
+      expect(screen.getByTestId("recycle-bin-focused-title")).toHaveTextContent("page2-item-1.jpg");
+    });
+
+    fireEvent.click(screen.getByTestId("recycle-bin-view-gallery"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("recycle-bin-gallery")).toBeInTheDocument();
+      expect(screen.getByText("Showing page 2 of 2 for Recycle Bin items.")).toBeInTheDocument();
+    });
+  });
+
   it("supports focused Previous and Next navigation across ready groups on Ready for Bin", async () => {
     groupsData = [
       {
@@ -654,6 +734,70 @@ describe("DuplicatesPage", () => {
     });
   });
 
+  it("refreshes recycle-bin data on page 1 after a successful bulk move", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        review_status: "looks_right",
+      },
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+    let moved = false;
+    mocks.getDuplicateReclaimItems.mockImplementation(async (params?: { page?: number; limit?: number }) => {
+      const page = params?.page ?? 1;
+      return {
+        data: {
+          total_count: moved ? 60 : 0,
+          page,
+          limit: params?.limit ?? 50,
+          total_pages: moved ? 2 : 1,
+          items:
+            !moved
+              ? []
+              : page === 1
+              ? [
+                  {
+                    file_instance_id: "group-alpha-duplicate-0",
+                    content_id: "group-alpha",
+                    original_path: "/library/alpha-copy.jpg",
+                    archive_path: "/archive/alpha-copy.jpg",
+                    item_status: "ARCHIVED",
+                    expires_at: "2099-04-10T10:00:00+00:00",
+                  },
+                ]
+              : [
+                  {
+                    file_instance_id: "older-item",
+                    content_id: "group-beta",
+                    original_path: "/library/older-item.jpg",
+                    archive_path: "/archive/older-item.jpg",
+                    item_status: "ARCHIVED",
+                    expires_at: "2099-04-10T10:00:00+00:00",
+                  },
+                ],
+        },
+      };
+    });
+    mocks.executeDuplicateReclaim.mockImplementation(async () => {
+      moved = true;
+      return { data: { summary: { applied_count: 1, skipped_count: 0, moves_count: 1 } } };
+    });
+
+    renderPage("/duplicates?tab=ready-for-bin");
+
+    fireEvent.click(await screen.findByTestId("ready-for-bin-view-gallery"));
+    fireEvent.click(screen.getByRole("button", { name: "Move all eligible groups" }));
+
+    await waitFor(() => {
+      expect(mocks.executeDuplicateReclaim).toHaveBeenCalledWith({
+        content_ids: ["group-alpha"],
+        retention_days: 21,
+      });
+      expect(mocks.getDuplicateReclaimItems).toHaveBeenCalledWith({ page: 1, limit: 50 });
+      expect(screen.getByText("1 duplicate file moved from 1 group into the Recycle Bin. The keep copy stayed in place.")).toBeInTheDocument();
+    });
+  });
+
   it("shows explicit sync failure feedback and blocks the move action when the bridge update fails", async () => {
     groupsData = [
       {
@@ -835,6 +979,48 @@ describe("DuplicatesPage", () => {
       expect(screen.getByText("Restored from Recycle Bin")).toBeInTheDocument();
       expect(screen.getByText("Review again before this group can re-enter Ready for Bin.")).toBeInTheDocument();
     });
+  });
+
+  it("shows a subdued In Recycle Bin lifecycle indicator only for groups whose extra copies are already moved", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        review_status: "needs_review",
+        reclaim_status: "ARCHIVED",
+      },
+      {
+        ...buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
+        review_status: "needs_review",
+      },
+    ];
+    reclaimItemsData = [
+      {
+        file_instance_id: "group-alpha-duplicate-0",
+        content_id: "group-alpha",
+        original_path: "/library/alpha-copy.jpg",
+        archive_path: "/archive/alpha-copy.jpg",
+        item_status: "ARCHIVED",
+        expires_at: "2099-04-10T10:00:00+00:00",
+      },
+    ];
+    reclaimItemsTotalCount = 1;
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+
+    renderPage("/duplicates?tab=review");
+
+    expect(await screen.findByRole("heading", { name: "Review duplicates" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Needs review" }));
+    expect(await screen.findByText("In Recycle Bin")).toBeInTheDocument();
+    expect(await screen.findByText("Extra copies are already in the Recycle Bin. The keep copy stays in place.")).toBeInTheDocument();
+    expect(screen.getAllByText("Needs review").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Show group navigation" }));
+    const navigation = await screen.findByTestId("review-group-navigation");
+    const alphaButton = within(navigation).getByRole("button", { name: /alpha-main\.jpg/i });
+    const betaButton = within(navigation).getByRole("button", { name: /beta-main\.jpg/i });
+
+    expect(within(alphaButton).getByText("In Recycle Bin")).toBeInTheDocument();
+    expect(within(betaButton).queryByText("In Recycle Bin")).not.toBeInTheDocument();
   });
 
   it("drops a restored group out of the Restored filter after it is reviewed again and returns it to Ready for Bin", async () => {
