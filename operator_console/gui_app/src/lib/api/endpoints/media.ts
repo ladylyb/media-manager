@@ -67,7 +67,7 @@ export const setDuplicateReclaim = async (payload: {
   return withData(envelope, envelope.data);
 };
 
-export const executeDuplicateReclaim = async (payload?: {
+export const moveDuplicatesToBin = async (payload?: {
   content_ids?: string[];
   retention_days?: number;
 }) => {
@@ -78,7 +78,7 @@ export const executeDuplicateReclaim = async (payload?: {
   return withData(envelope, envelope.data);
 };
 
-export const getDuplicateReclaimItems = async (params?: { page?: number; limit?: number }) => {
+export const getDuplicateBinItems = async (params?: { page?: number; limit?: number }) => {
   const envelope = await apiGet<Record<string, unknown>>("/duplicates/reclaim/items", {
     page: params?.page ?? 1,
     limit: params?.limit ?? 30,
@@ -97,7 +97,7 @@ export const getDuplicateBinPolicy = async () => {
   });
 };
 
-export const restoreDuplicateReclaim = async (payload?: { file_instance_ids?: string[] }) => {
+export const restoreDuplicatesFromBin = async (payload?: { file_instance_ids?: string[] }) => {
   const envelope = await apiPost<Record<string, unknown>>("/duplicates/reclaim/restore", {
     file_instance_ids: payload?.file_instance_ids ?? [],
   });

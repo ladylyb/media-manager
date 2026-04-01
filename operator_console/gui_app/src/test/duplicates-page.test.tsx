@@ -6,23 +6,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import DuplicatesPage from "@/pages/DuplicatesPage";
 
 const mocks = vi.hoisted(() => ({
-  executeDuplicateReclaim: vi.fn(),
+  moveDuplicatesToBin: vi.fn(),
   getDuplicateBinPolicy: vi.fn(),
   getDuplicates: vi.fn(),
-  getDuplicateReclaimItems: vi.fn(),
+  getDuplicateBinItems: vi.fn(),
   getIntegrityIssues: vi.fn(),
-  restoreDuplicateReclaim: vi.fn(),
+  restoreDuplicatesFromBin: vi.fn(),
   setDuplicateReclaim: vi.fn(),
   setDuplicateReview: vi.fn(),
 }));
 
 vi.mock("@/lib/api/endpoints", () => ({
-  executeDuplicateReclaim: mocks.executeDuplicateReclaim,
+  moveDuplicatesToBin: mocks.moveDuplicatesToBin,
   getDuplicateBinPolicy: mocks.getDuplicateBinPolicy,
   getDuplicates: mocks.getDuplicates,
-  getDuplicateReclaimItems: mocks.getDuplicateReclaimItems,
+  getDuplicateBinItems: mocks.getDuplicateBinItems,
   getIntegrityIssues: mocks.getIntegrityIssues,
-  restoreDuplicateReclaim: mocks.restoreDuplicateReclaim,
+  restoreDuplicatesFromBin: mocks.restoreDuplicatesFromBin,
   setDuplicateReclaim: mocks.setDuplicateReclaim,
   setDuplicateReview: mocks.setDuplicateReview,
 }));
@@ -115,6 +115,8 @@ function renderPage(initialEntry = "/duplicates") {
 describe("DuplicatesPage", () => {
   let groupsData: ReturnType<typeof buildGroup>[];
   let reclaimItemsData: Array<Record<string, unknown>>;
+  let reclaimItemsTotalCount: number;
+  let duplicateBinItemsPageSize: number;
 
   beforeEach(() => {
     groupsData = [
@@ -123,6 +125,8 @@ describe("DuplicatesPage", () => {
       buildGroup("group-gamma", "gamma-main.jpg", ["gamma-copy.jpg"]),
     ];
     reclaimItemsData = [];
+    reclaimItemsTotalCount = 0;
+    duplicateBinItemsPageSize = 50;
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
     mocks.getDuplicateBinPolicy.mockResolvedValue({
       data: {
@@ -132,12 +136,25 @@ describe("DuplicatesPage", () => {
         implementation: "reclaim_compatibility",
       },
     });
-    mocks.getDuplicateReclaimItems.mockImplementation(async () => ({ data: { items: reclaimItemsData } }));
+    mocks.getDuplicateBinItems.mockImplementation(async (params?: { page?: number; limit?: number }) => {
+      const page = params?.page ?? 1;
+      const limit = params?.limit ?? duplicateBinItemsPageSize;
+      const totalCount = reclaimItemsTotalCount || reclaimItemsData.length;
+      return {
+        data: {
+          total: totalCount,
+          page,
+          page_size: limit,
+          total_pages: Math.max(1, Math.ceil(totalCount / limit)),
+          items: reclaimItemsData,
+        },
+      };
+    });
     mocks.getIntegrityIssues.mockResolvedValue({ data: { items: [] } });
-    mocks.executeDuplicateReclaim.mockResolvedValue({
+    mocks.moveDuplicatesToBin.mockResolvedValue({
       data: { summary: { applied_count: 1, skipped_count: 0, moves_count: 1 } },
     });
-    mocks.restoreDuplicateReclaim.mockResolvedValue({
+    mocks.restoreDuplicatesFromBin.mockResolvedValue({
       data: { summary: { applied_count: 1, skipped_count: 0, moves_count: 1 } },
     });
     mocks.setDuplicateReclaim.mockImplementation(
@@ -426,6 +443,97 @@ describe("DuplicatesPage", () => {
     expect(restoreButtons[1]).toBeDisabled();
   });
 
+  it("shows truthful global recycle-bin totals, labels page-scoped restore counts, and paginates independently of view mode", async () => {
+    reclaimItemsTotalCount = 75;
+    mocks.getDuplicateBinItems.mockImplementation(async (params?: { page?: number; limit?: number }) => {
+      const page = params?.page ?? 1;
+      const limit = params?.limit ?? 50;
+      const items =
+        page === 1
+          ? Array.from({ length: 50 }, (_, index) => ({
+              file_instance_id: `archived-${index + 1}`,
+              content_id: index % 2 === 0 ? "group-alpha" : "group-beta",
+              original_path: `/library/item-${index + 1}.jpg`,
+              archive_path: `/archive/item-${index + 1}.jpg`,
+              item_status: "ARCHIVED",
+              expires_at: index < 30 ? "2099-04-10T10:00:00+00:00" : "2020-04-10T10:00:00+00:00",
+            }))
+          : Array.from({ length: 25 }, (_, index) => ({
+              file_instance_id: `archived-page2-${index + 1}`,
+              content_id: "group-gamma",
+              original_path: `/library/page2-item-${index + 1}.jpg`,
+              archive_path: `/archive/page2-item-${index + 1}.jpg`,
+              item_status: "ARCHIVED",
+              expires_at: "2099-04-10T10:00:00+00:00",
+            }));
+      return {
+        data: {
+          total: 75,
+          page,
+          page_size: limit,
+          total_pages: 2,
+          items,
+        },
+      };
+    });
+
+    renderPage("/duplicates?tab=recycle-bin");
+
+    expect(await screen.findByRole("heading", { name: "Recycle Bin" })).toBeInTheDocument();
+    expect(screen.getByText("These extra copies still physically exist in the Recycle Bin across all pages.")).toBeInTheDocument();
+    expect(screen.getByText("Restore available on this page")).toBeInTheDocument();
+    expect(screen.getByText("Restore window ended on this page")).toBeInTheDocument();
+    expect(screen.getByText("Showing page 1 of 2 for Recycle Bin items.")).toBeInTheDocument();
+    expect(screen.getByTestId("recycle-bin-gallery")).toBeInTheDocument();
+    expect(screen.getAllByText("75").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByTestId("recycle-bin-view-focus"));
+    expect(await screen.findByTestId("recycle-bin-focused-panel")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+
+    await waitFor(() => {
+      expect(mocks.getDuplicateBinItems).toHaveBeenCalledWith({ page: 2, limit: 50 });
+      expect(screen.getByText("Showing page 2 of 2 for Recycle Bin items.")).toBeInTheDocument();
+      expect(screen.getByTestId("recycle-bin-focused-title")).toHaveTextContent("page2-item-1.jpg");
+    });
+
+    fireEvent.click(screen.getByTestId("recycle-bin-view-gallery"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("recycle-bin-gallery")).toBeInTheDocument();
+      expect(screen.getByText("Showing page 2 of 2 for Recycle Bin items.")).toBeInTheDocument();
+    });
+  });
+
+  it("uses the mapped global pagination total for the In Recycle Bin KPI instead of the loaded page length", async () => {
+    mocks.getDuplicateBinItems.mockResolvedValue({
+      data: {
+        total: 903,
+        page: 1,
+        page_size: 50,
+        total_pages: 19,
+        items: Array.from({ length: 50 }, (_, index) => ({
+          file_instance_id: `archived-${index + 1}`,
+          content_id: index % 2 === 0 ? "group-alpha" : "group-beta",
+          original_path: `/library/item-${index + 1}.jpg`,
+          archive_path: `/archive/item-${index + 1}.jpg`,
+          item_status: "ARCHIVED",
+          expires_at: "2099-04-10T10:00:00+00:00",
+        })),
+      },
+    });
+
+    renderPage("/duplicates?tab=recycle-bin");
+
+    expect(await screen.findByRole("heading", { name: "Recycle Bin" })).toBeInTheDocument();
+    expect(screen.getByText("These extra copies still physically exist in the Recycle Bin across all pages.")).toBeInTheDocument();
+    expect(screen.getByText("Restore available on this page")).toBeInTheDocument();
+    expect(screen.getAllByText("903").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("50").length).toBeGreaterThan(0);
+    expect(screen.getByText("Showing page 1 of 19 for Recycle Bin items.")).toBeInTheDocument();
+  });
+
   it("supports focused Previous and Next navigation across ready groups on Ready for Bin", async () => {
     groupsData = [
       {
@@ -469,7 +577,7 @@ describe("DuplicatesPage", () => {
       buildGroup("group-gamma", "gamma-main.jpg", ["gamma-copy.jpg"]),
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
-    mocks.executeDuplicateReclaim.mockResolvedValue({
+    mocks.moveDuplicatesToBin.mockResolvedValue({
       data: { summary: { applied_count: 2, skipped_count: 0, moves_count: 2 } },
     });
 
@@ -487,7 +595,7 @@ describe("DuplicatesPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Move selected groups" }));
 
     await waitFor(() => {
-      expect(mocks.executeDuplicateReclaim).toHaveBeenCalledWith({
+      expect(mocks.moveDuplicatesToBin).toHaveBeenCalledWith({
         content_ids: ["group-alpha", "group-beta"],
         retention_days: 21,
       });
@@ -568,7 +676,7 @@ describe("DuplicatesPage", () => {
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
     reclaimItemsData = [];
-    mocks.executeDuplicateReclaim.mockImplementation(async () => {
+    mocks.moveDuplicatesToBin.mockImplementation(async () => {
       groupsData = groupsData.map((group) =>
         group.group_id === "group-alpha"
           ? {
@@ -590,7 +698,7 @@ describe("DuplicatesPage", () => {
       ];
       return { data: { summary: { applied_count: 1, skipped_count: 0, moves_count: 1 } } };
     });
-    mocks.restoreDuplicateReclaim.mockImplementation(async () => {
+    mocks.restoreDuplicatesFromBin.mockImplementation(async () => {
       groupsData = groupsData.map((group) =>
         group.group_id === "group-alpha"
           ? {
@@ -627,7 +735,7 @@ describe("DuplicatesPage", () => {
         content_id: "group-alpha",
         reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
       });
-      expect(mocks.executeDuplicateReclaim).toHaveBeenCalledWith({
+      expect(mocks.moveDuplicatesToBin).toHaveBeenCalledWith({
         content_ids: ["group-alpha"],
         retention_days: 21,
       });
@@ -642,7 +750,7 @@ describe("DuplicatesPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Restore from Recycle Bin" }));
 
     await waitFor(() => {
-      expect(mocks.restoreDuplicateReclaim).toHaveBeenCalledWith({
+      expect(mocks.restoreDuplicatesFromBin).toHaveBeenCalledWith({
         file_instance_ids: ["group-alpha-duplicate-0"],
       });
       expect(
@@ -651,6 +759,70 @@ describe("DuplicatesPage", () => {
         ),
       ).toBeInTheDocument();
       expect(screen.getByText("No duplicate files are in the Recycle Bin right now.")).toBeInTheDocument();
+    });
+  });
+
+  it("refreshes recycle-bin data on page 1 after a successful bulk move", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        review_status: "looks_right",
+      },
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+    let moved = false;
+    mocks.getDuplicateBinItems.mockImplementation(async (params?: { page?: number; limit?: number }) => {
+      const page = params?.page ?? 1;
+      return {
+        data: {
+          total: moved ? 60 : 0,
+          page,
+          page_size: params?.limit ?? 50,
+          total_pages: moved ? 2 : 1,
+          items:
+            !moved
+              ? []
+              : page === 1
+              ? [
+                  {
+                    file_instance_id: "group-alpha-duplicate-0",
+                    content_id: "group-alpha",
+                    original_path: "/library/alpha-copy.jpg",
+                    archive_path: "/archive/alpha-copy.jpg",
+                    item_status: "ARCHIVED",
+                    expires_at: "2099-04-10T10:00:00+00:00",
+                  },
+                ]
+              : [
+                  {
+                    file_instance_id: "older-item",
+                    content_id: "group-beta",
+                    original_path: "/library/older-item.jpg",
+                    archive_path: "/archive/older-item.jpg",
+                    item_status: "ARCHIVED",
+                    expires_at: "2099-04-10T10:00:00+00:00",
+                  },
+                ],
+        },
+      };
+    });
+    mocks.moveDuplicatesToBin.mockImplementation(async () => {
+      moved = true;
+      return { data: { summary: { applied_count: 1, skipped_count: 0, moves_count: 1 } } };
+    });
+
+    renderPage("/duplicates?tab=ready-for-bin");
+
+    fireEvent.click(await screen.findByTestId("ready-for-bin-view-gallery"));
+    fireEvent.click(screen.getByRole("button", { name: "Move all eligible groups" }));
+
+    await waitFor(() => {
+      expect(mocks.moveDuplicatesToBin).toHaveBeenCalledWith({
+        content_ids: ["group-alpha"],
+        retention_days: 21,
+      });
+      expect(mocks.getDuplicateBinItems).toHaveBeenCalledWith({ page: 1, limit: 50 });
+      expect(screen.getByText("1 duplicate file moved from 1 group into the Recycle Bin. The keep copy stayed in place.")).toBeInTheDocument();
     });
   });
 
@@ -673,7 +845,7 @@ describe("DuplicatesPage", () => {
         content_id: "group-alpha",
         reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
       });
-      expect(mocks.executeDuplicateReclaim).not.toHaveBeenCalled();
+      expect(mocks.moveDuplicatesToBin).not.toHaveBeenCalled();
       expect(
         screen.getAllByText(
           "Saved “Looks right” for alpha-main.jpg, but the app could not confirm move eligibility. Try again before moving duplicates.",
@@ -691,7 +863,7 @@ describe("DuplicatesPage", () => {
       },
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
-    mocks.executeDuplicateReclaim.mockResolvedValue({
+    mocks.moveDuplicatesToBin.mockResolvedValue({
       data: {
         summary: { applied_count: 0, skipped_count: 1, moves_count: 0 },
         diagnostics: { planned_action_count: 1, applied_count: 0, skipped_count: 1, result_type: "planned_skipped" },
@@ -705,7 +877,7 @@ describe("DuplicatesPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Move selected groups" }));
 
     await waitFor(() => {
-      expect(mocks.executeDuplicateReclaim).toHaveBeenCalledWith({
+      expect(mocks.moveDuplicatesToBin).toHaveBeenCalledWith({
         content_ids: ["group-alpha"],
         retention_days: 21,
       });
@@ -728,7 +900,7 @@ describe("DuplicatesPage", () => {
       },
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
-    mocks.executeDuplicateReclaim.mockResolvedValue({
+    mocks.moveDuplicatesToBin.mockResolvedValue({
       data: {
         summary: { applied_count: 0, skipped_count: 0, moves_count: 0 },
         diagnostics: {
@@ -835,6 +1007,48 @@ describe("DuplicatesPage", () => {
       expect(screen.getByText("Restored from Recycle Bin")).toBeInTheDocument();
       expect(screen.getByText("Review again before this group can re-enter Ready for Bin.")).toBeInTheDocument();
     });
+  });
+
+  it("shows a subdued In Recycle Bin lifecycle indicator only for groups whose extra copies are already moved", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        review_status: "needs_review",
+        reclaim_status: "ARCHIVED",
+      },
+      {
+        ...buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
+        review_status: "needs_review",
+      },
+    ];
+    reclaimItemsData = [
+      {
+        file_instance_id: "group-alpha-duplicate-0",
+        content_id: "group-alpha",
+        original_path: "/library/alpha-copy.jpg",
+        archive_path: "/archive/alpha-copy.jpg",
+        item_status: "ARCHIVED",
+        expires_at: "2099-04-10T10:00:00+00:00",
+      },
+    ];
+    reclaimItemsTotalCount = 1;
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+
+    renderPage("/duplicates?tab=review");
+
+    expect(await screen.findByRole("heading", { name: "Review duplicates" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Needs review" }));
+    expect(await screen.findByText("In Recycle Bin")).toBeInTheDocument();
+    expect(await screen.findByText("Extra copies are already in the Recycle Bin. The keep copy stays in place.")).toBeInTheDocument();
+    expect(screen.getAllByText("Needs review").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Show group navigation" }));
+    const navigation = await screen.findByTestId("review-group-navigation");
+    const alphaButton = within(navigation).getByRole("button", { name: /alpha-main\.jpg/i });
+    const betaButton = within(navigation).getByRole("button", { name: /beta-main\.jpg/i });
+
+    expect(within(alphaButton).getByText("In Recycle Bin")).toBeInTheDocument();
+    expect(within(betaButton).queryByText("In Recycle Bin")).not.toBeInTheDocument();
   });
 
   it("drops a restored group out of the Restored filter after it is reviewed again and returns it to Ready for Bin", async () => {

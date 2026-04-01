@@ -651,23 +651,6 @@ def test_duplicate_bin_execute_rejects_unusable_recycle_root(monkeypatch: pytest
         services.duplicate_bin_execute(content_ids=["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"], retention_days=21)
 
 
-def test_duplicate_reclaim_execute_delegates_to_duplicate_bin_execute(monkeypatch: pytest.MonkeyPatch) -> None:
-    recorded: dict[str, object] = {}
-
-    def _fake_duplicate_bin_execute(self, *, content_ids=None, retention_days=None):  # type: ignore[no-untyped-def]
-        recorded["content_ids"] = content_ids
-        recorded["retention_days"] = retention_days
-        return {"ok": True}
-
-    monkeypatch.setattr(OperationServices, "duplicate_bin_execute", _fake_duplicate_bin_execute)
-
-    services = OperationServices(session_factory=object(), cache=_FakeCache(invalidations=[]))  # type: ignore[arg-type]
-    payload = services.duplicate_reclaim_execute(content_ids=["x"], retention_days=9)
-
-    assert payload == {"ok": True}
-    assert recorded == {"content_ids": ["x"], "retention_days": 9}
-
-
 def test_duplicate_bin_restore_preserves_behavior_and_links_run(monkeypatch: pytest.MonkeyPatch) -> None:
     linked_ids: list[UUID] = []
 
@@ -698,22 +681,6 @@ def test_duplicate_bin_restore_preserves_behavior_and_links_run(monkeypatch: pyt
     assert payload["run_id"] == "88888888-8888-8888-8888-888888888888"
     assert linked_ids == [UUID("88888888-8888-8888-8888-888888888888")]
     assert any({"duplicates", "duplicate_reclaim_items", "analytics"}.issubset(set(invalidated)) for invalidated in cache.invalidations)
-
-
-def test_duplicate_reclaim_restore_delegates_to_duplicate_bin_restore(monkeypatch: pytest.MonkeyPatch) -> None:
-    recorded: dict[str, object] = {}
-
-    def _fake_duplicate_bin_restore(self, *, file_instance_ids=None):  # type: ignore[no-untyped-def]
-        recorded["file_instance_ids"] = file_instance_ids
-        return {"ok": True}
-
-    monkeypatch.setattr(OperationServices, "duplicate_bin_restore", _fake_duplicate_bin_restore)
-
-    services = OperationServices(session_factory=object(), cache=_FakeCache(invalidations=[]))  # type: ignore[arg-type]
-    payload = services.duplicate_reclaim_restore(file_instance_ids=["y"])
-
-    assert payload == {"ok": True}
-    assert recorded == {"file_instance_ids": ["y"]}
 
 
 def test_run_dry_run_is_validation_only_and_skips_mutators(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

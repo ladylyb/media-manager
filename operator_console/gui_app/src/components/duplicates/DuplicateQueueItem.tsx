@@ -17,6 +17,7 @@ interface DuplicateQueueItemProps {
   active: boolean;
   group: DuplicateGroup;
   markLabel: string;
+  secondaryStatusText?: string | null;
   onSelect: () => void;
 }
 
@@ -25,6 +26,7 @@ export function DuplicateQueueItem({
   active,
   group,
   markLabel,
+  secondaryStatusText,
   onSelect,
 }: DuplicateQueueItemProps) {
   const duplicateCount = group.duplicates.filter((file) => !file.is_canonical).length;
@@ -61,6 +63,7 @@ export function DuplicateQueueItem({
         <p className="text-[11px] text-muted-foreground">
           {markLabel} • {duplicateCount === 1 ? "1 extra copy" : `${duplicateCount} extra copies`}
         </p>
+        {secondaryStatusText ? <p className="text-[11px] text-muted-foreground">{secondaryStatusText}</p> : null}
         <div data-testid="review-queue-no-thumbnails" className="hidden" />
       </div>
     </button>

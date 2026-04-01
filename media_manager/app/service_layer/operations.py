@@ -1001,15 +1001,6 @@ class OperationServices:
             self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))
             raise
 
-    def duplicate_reclaim_execute(
-        self,
-        *,
-        content_ids: list[str] | None = None,
-        retention_days: int | None = None,
-    ) -> dict[str, object]:
-        """Compatibility wrapper: keep reclaim naming stable while the service boundary shifts to bin-centered terms."""
-        return self.duplicate_bin_execute(content_ids=content_ids, retention_days=retention_days)
-
     def duplicate_bin_restore(self, *, file_instance_ids: list[str] | None = None) -> dict[str, object]:
         """Bin-centered duplicate restore entrypoint backed by reclaim compatibility internals."""
         parsed_file_ids: list[UUID] | None = None
@@ -1050,10 +1041,6 @@ class OperationServices:
         except Exception as exc:
             self._op_runs().fail(UUID(run_log.operation_run_id), error_message=str(exc))
             raise
-
-    def duplicate_reclaim_restore(self, *, file_instance_ids: list[str] | None = None) -> dict[str, object]:
-        """Compatibility wrapper: keep reclaim naming stable while the service boundary shifts to bin-centered terms."""
-        return self.duplicate_bin_restore(file_instance_ids=file_instance_ids)
 
     def retention_recycle_duplicates(self, *, file_instance_ids: list[str] | None = None) -> dict[str, object]:
         parsed_file_ids: list[UUID] | None = None

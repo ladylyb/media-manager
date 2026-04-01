@@ -20,19 +20,19 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
-  executeDuplicateReclaim,
   getDuplicateBinPolicy,
-  getDuplicateReclaimItems,
+  getDuplicateBinItems,
   getDuplicates,
   getIntegrityIssues,
-  restoreDuplicateReclaim,
+  moveDuplicatesToBin,
+  restoreDuplicatesFromBin,
   setDuplicateReclaim,
   setDuplicateReview,
 } from "@/lib/api/endpoints";
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
 import { cn } from "@/lib/utils";
-import type { DuplicateFile, DuplicateGroup, DuplicateReclaimItem, IntegrityIssue } from "@/types";
+import type { DuplicateFile, DuplicateGroup, DuplicateReclaimItem, IntegrityIssue, PaginatedResponse } from "@/types";
 
 type ReviewMark = "looks_right" | "needs_review" | "not_sure";
 type ReviewFilter = "all" | "unreviewed" | "restored" | ReviewMark;
@@ -41,7 +41,9 @@ type ReclaimSyncStatus = "UNREVIEWED" | "REVIEWED_SAFE_TO_RECLAIM";
 type FeedbackTone = "success" | "warning";
 type DuplicateWorkspaceViewMode = "focus" | "gallery" | "list";
 
-interface RecycleBinDisplayItem extends DuplicateReclaimItem {
+type DuplicateBinItem = DuplicateReclaimItem;
+
+interface RecycleBinDisplayItem extends DuplicateBinItem {
   recycle_bin_state: "restorable" | "expired";
   restore_allowed: boolean;
 }
@@ -52,7 +54,7 @@ interface MutationSummary {
   moves_count?: number;
 }
 
-interface DuplicateReclaimDiagnostics {
+interface DuplicateBinOperationDiagnostics {
   requested_group_count?: number;
   planned_action_count?: number;
   applied_count?: number;
@@ -231,9 +233,9 @@ function getMutationSummary(payload: unknown): MutationSummary {
   return summary && typeof summary === "object" ? summary : {};
 }
 
-function getDuplicateReclaimDiagnostics(payload: unknown): DuplicateReclaimDiagnostics {
+function getDuplicateBinOperationDiagnostics(payload: unknown): DuplicateBinOperationDiagnostics {
   if (!payload || typeof payload !== "object") return {};
-  const diagnostics = (payload as { diagnostics?: DuplicateReclaimDiagnostics }).diagnostics;
+  const diagnostics = (payload as { diagnostics?: DuplicateBinOperationDiagnostics }).diagnostics;
   return diagnostics && typeof diagnostics === "object" ? diagnostics : {};
 }
 
@@ -241,8 +243,8 @@ function isPendingRemovalStatus(status: DuplicateGroup["reclaim_status"] | undef
   return status === "ARCHIVED" || status === "RESTORED" || status === "SCHEDULED_FOR_DELETE";
 }
 
-function getArchivedReclaimCountByGroup(reclaimItems: DuplicateReclaimItem[]) {
-  return reclaimItems.reduce<Record<string, number>>((acc, item) => {
+function getArchivedBinItemCountByGroup(duplicateBinItems: DuplicateBinItem[]) {
+  return duplicateBinItems.reduce<Record<string, number>>((acc, item) => {
     if (item.item_status !== "ARCHIVED") return acc;
     acc[item.content_id] = (acc[item.content_id] ?? 0) + 1;
     return acc;
@@ -251,11 +253,11 @@ function getArchivedReclaimCountByGroup(reclaimItems: DuplicateReclaimItem[]) {
 
 function deriveActionableReadyGroups(
   groups: DuplicateGroup[],
-  reclaimItems: DuplicateReclaimItem[],
+  duplicateBinItems: DuplicateBinItem[],
   options: ReadyGroupOptions = {},
 ) {
   const blockedIds = new Set(options.blockedGroupIds ?? []);
-  const archivedCounts = getArchivedReclaimCountByGroup(reclaimItems);
+  const archivedCounts = getArchivedBinItemCountByGroup(duplicateBinItems);
 
   return groups.filter((group) => {
     const reclaimableCount = group.reclaimable_file_count ?? 0;
@@ -287,7 +289,7 @@ function getGalleryActionSummary(groupCount: number, appliedCount: number) {
 
 function getGalleryNoOpSummary(
   scope: "selected" | "all" | "single",
-  diagnostics: DuplicateReclaimDiagnostics = {},
+  diagnostics: DuplicateBinOperationDiagnostics = {},
 ) {
   if (diagnostics.result_type === "planned_skipped") {
     if (scope === "selected") {
@@ -331,6 +333,7 @@ export default function DuplicatesPage() {
   const [selectedReadyGroupIds, setSelectedReadyGroupIds] = useState<string[]>([]);
   const [focusedReadyGroupId, setFocusedReadyGroupId] = useState<string | null>(null);
   const [focusedArchivedItemId, setFocusedArchivedItemId] = useState<string | null>(null);
+  const [recycleBinPage, setRecycleBinPage] = useState(1);
   const [reclaimBridgeBlockedIds, setReclaimBridgeBlockedIds] = useState<string[]>([]);
   const [reclaimBridgeWarning, setReclaimBridgeWarning] = useState<string | null>(null);
   const [recycleBinFeedback, setRecycleBinFeedback] = useState<RecycleBinFeedback | null>(null);
@@ -412,9 +415,9 @@ export default function DuplicatesPage() {
     },
   });
 
-  const reclaimItemsQuery = useQuery({
-    queryKey: queryKeys.duplicateReclaimItems(1, 50),
-    queryFn: async () => (await getDuplicateReclaimItems({ page: 1, limit: 50 })).data,
+  const duplicateBinItemsQuery = useQuery({
+    queryKey: queryKeys.duplicateBinItems(recycleBinPage, 50),
+    queryFn: async () => (await getDuplicateBinItems({ page: recycleBinPage, limit: 50 })).data,
   });
 
   const playbackIssuesQuery = useQuery({
@@ -423,19 +426,19 @@ export default function DuplicatesPage() {
     enabled: activeTab === "playback-issues",
   });
 
-  const executeReclaimMutation = useMutation({
-    mutationFn: (payload: { content_ids: string[]; retention_days: number }) => executeDuplicateReclaim(payload),
+  const moveToBinMutation = useMutation({
+    mutationFn: (payload: { content_ids: string[]; retention_days: number }) => moveDuplicatesToBin(payload),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.duplicates });
-      void queryClient.invalidateQueries({ queryKey: ["duplicates", "reclaim-items"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.duplicateBinItemsRoot });
     },
   });
 
-  const restoreReclaimMutation = useMutation({
-    mutationFn: (fileInstanceId: string) => restoreDuplicateReclaim({ file_instance_ids: [fileInstanceId] }),
+  const restoreFromBinMutation = useMutation({
+    mutationFn: (fileInstanceId: string) => restoreDuplicatesFromBin({ file_instance_ids: [fileInstanceId] }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.duplicates });
-      void queryClient.invalidateQueries({ queryKey: ["duplicates", "reclaim-items"] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.duplicateBinItemsRoot });
     },
   });
 
@@ -455,8 +458,11 @@ export default function DuplicatesPage() {
     [groups],
   );
 
-  const reclaimItems = ((reclaimItemsQuery.data?.items ?? []) as DuplicateReclaimItem[]) ?? [];
-  const recycleBinItems = reclaimItems
+  const duplicateBinItemsPage = (duplicateBinItemsQuery.data as PaginatedResponse<DuplicateBinItem> | undefined) ?? undefined;
+  const duplicateBinItems = duplicateBinItemsPage?.items ?? [];
+  const recycleBinTotalCount = duplicateBinItemsPage?.total ?? duplicateBinItems.length;
+  const recycleBinTotalPages = duplicateBinItemsPage?.total_pages ?? 1;
+  const recycleBinItems = duplicateBinItems
     .filter((item) => item.item_status === "ARCHIVED")
     .map<RecycleBinDisplayItem>((item) => {
       const restoreWindowEnded = hasRestoreWindowEnded(item.expires_at);
@@ -468,10 +474,19 @@ export default function DuplicatesPage() {
     });
   const restorableRecycleBinItems = recycleBinItems.filter((item) => item.restore_allowed);
   const expiredRecycleBinItems = recycleBinItems.filter((item) => !item.restore_allowed);
-  const restoredItems = reclaimItems.filter((item) => item.item_status === "RESTORED");
+  const recycleBinLifecycleGroupIds = useMemo(
+    () =>
+      new Set(
+        sortedGroups
+          .filter((group) => group.reclaim_status === "ARCHIVED" || group.reclaim_status === "SCHEDULED_FOR_DELETE")
+          .map((group) => group.group_id),
+      ),
+    [sortedGroups],
+  );
+  const restoredItems = duplicateBinItems.filter((item) => item.item_status === "RESTORED");
   const restoredItemsByGroupId = useMemo(
     () =>
-      restoredItems.reduce<Record<string, DuplicateReclaimItem[]>>((acc, item) => {
+      restoredItems.reduce<Record<string, DuplicateBinItem[]>>((acc, item) => {
         if (!acc[item.content_id]) acc[item.content_id] = [];
         acc[item.content_id].push(item);
         return acc;
@@ -548,7 +563,7 @@ export default function DuplicatesPage() {
 
   const selectedDuplicate =
     selectedDuplicates.find((file) => file.file_instance_id === selectedDuplicateId) ?? selectedDuplicates[0] ?? null;
-  const readyGroups = deriveActionableReadyGroups(sortedGroups, reclaimItems, {
+  const readyGroups = deriveActionableReadyGroups(sortedGroups, duplicateBinItems, {
     blockedGroupIds: reclaimBridgeBlockedIds,
   });
   const readyExtraCopyCount = readyGroups.reduce((sum, group) => sum + (group.reclaimable_file_count ?? 0), 0);
@@ -615,6 +630,12 @@ export default function DuplicatesPage() {
   const selectedNeedsRestoredReview = selected ? restoredReviewGroupIds.has(selected.group_id) : false;
 
   const readyGroupIdList = readyGroups.map((group) => group.group_id).join("|");
+
+  useEffect(() => {
+    if (duplicateBinItemsPage && recycleBinPage > recycleBinTotalPages) {
+      setRecycleBinPage(Math.max(1, recycleBinTotalPages));
+    }
+  }, [duplicateBinItemsPage, recycleBinPage, recycleBinTotalPages]);
 
   useEffect(() => {
     setSelectedReadyGroupIds((current) => current.filter((groupId) => readyGroupIds.has(groupId)));
@@ -727,12 +748,16 @@ export default function DuplicatesPage() {
     setFocusedArchivedItemId(recycleBinItems[nextIndex].file_instance_id);
   }
 
-  async function refreshRecycleBinQueries() {
+  async function refreshRecycleBinQueries(targetPage: number | null = null) {
+    const nextPage = targetPage ?? recycleBinPage;
+    if (targetPage !== null && targetPage !== recycleBinPage) {
+      setRecycleBinPage(targetPage);
+    }
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.duplicates }),
-      queryClient.invalidateQueries({ queryKey: ["duplicates", "reclaim-items"] }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.duplicateBinItemsRoot }),
       queryClient.refetchQueries({ queryKey: queryKeys.duplicates, type: "active" }),
-      queryClient.refetchQueries({ queryKey: ["duplicates", "reclaim-items"], type: "active" }),
+      queryClient.refetchQueries({ queryKey: queryKeys.duplicateBinItems(nextPage, 50), type: "active" }),
     ]);
   }
 
@@ -777,12 +802,12 @@ export default function DuplicatesPage() {
     if (!synced) return;
 
     try {
-      const result = await executeReclaimMutation.mutateAsync({
+      const result = await moveToBinMutation.mutateAsync({
         content_ids: actionableGroups.map((group) => group.group_id),
         retention_days: archiveRetentionDays ?? 14,
       });
       const summary = getMutationSummary(result.data);
-      const diagnostics = getDuplicateReclaimDiagnostics(result.data);
+      const diagnostics = getDuplicateBinOperationDiagnostics(result.data);
       console.debug("duplicate_reclaim_debug: ui move result", {
         stage: "duplicate_reclaim_ui_result",
         scope,
@@ -793,6 +818,7 @@ export default function DuplicatesPage() {
       const applied = Number(summary.applied_count ?? 0);
       if (applied > 0) {
         setSelectedReadyGroupIds((current) => current.filter((groupId) => !actionableGroupIds.has(groupId)));
+        await refreshRecycleBinQueries(1);
         setRecycleBinFeedback({
           tone: "success",
           message: getGalleryActionSummary(actionableGroups.length, applied),
@@ -813,10 +839,10 @@ export default function DuplicatesPage() {
     }
   }
 
-  async function handleRestore(item: DuplicateReclaimItem) {
+  async function handleRestore(item: DuplicateBinItem) {
     setRecycleBinFeedback(null);
     try {
-      const result = await restoreReclaimMutation.mutateAsync(item.file_instance_id);
+      const result = await restoreFromBinMutation.mutateAsync(item.file_instance_id);
       const summary = getMutationSummary(result.data);
       const applied = Number(summary.applied_count ?? 0);
       setRecycleBinFeedback(
@@ -981,7 +1007,7 @@ export default function DuplicatesPage() {
               variant="outline"
               size="sm"
               onClick={() => void handleMoveEligibleDuplicates([group], "single")}
-              disabled={executeReclaimMutation.isPending || Boolean(recycleConfigWarning)}
+              disabled={moveToBinMutation.isPending || Boolean(recycleConfigWarning)}
             >
               Move to Recycle Bin
             </Button>
@@ -1032,7 +1058,7 @@ export default function DuplicatesPage() {
               variant="outline"
               size="sm"
               onClick={() => void handleRestore(item)}
-              disabled={restoreReclaimMutation.isPending || !item.restore_allowed}
+              disabled={restoreFromBinMutation.isPending || !item.restore_allowed}
             >
               Restore from Recycle Bin
             </Button>
@@ -1167,7 +1193,7 @@ export default function DuplicatesPage() {
               type="button"
               size="sm"
               onClick={() => void handleMoveEligibleDuplicates([group], "single")}
-              disabled={executeReclaimMutation.isPending || Boolean(recycleConfigWarning)}
+              disabled={moveToBinMutation.isPending || Boolean(recycleConfigWarning)}
             >
               Move to Recycle Bin
             </Button>
@@ -1279,7 +1305,7 @@ export default function DuplicatesPage() {
             type="button"
             size="sm"
             onClick={() => void handleRestore(item)}
-            disabled={restoreReclaimMutation.isPending || !item.restore_allowed}
+            disabled={restoreFromBinMutation.isPending || !item.restore_allowed}
           >
             Restore from Recycle Bin
           </Button>
@@ -1352,11 +1378,11 @@ export default function DuplicatesPage() {
       {reclaimMutation.error && (
         <ErrorAlert message={getErrorMessage(reclaimMutation.error) || "Failed to update move eligibility"} />
       )}
-      {executeReclaimMutation.error && (
-        <ErrorAlert message={getErrorMessage(executeReclaimMutation.error) || "Failed to move duplicates to the Recycle Bin"} />
+      {moveToBinMutation.error && (
+        <ErrorAlert message={getErrorMessage(moveToBinMutation.error) || "Failed to move duplicates to the Recycle Bin"} />
       )}
-      {restoreReclaimMutation.error && (
-        <ErrorAlert message={getErrorMessage(restoreReclaimMutation.error) || "Failed to restore duplicate from the Recycle Bin"} />
+      {restoreFromBinMutation.error && (
+        <ErrorAlert message={getErrorMessage(restoreFromBinMutation.error) || "Failed to restore duplicate from the Recycle Bin"} />
       )}
       {playbackIssuesQuery.error && activeTab === "playback-issues" ? (
         <ErrorAlert message={getErrorMessage(playbackIssuesQuery.error) || "Failed to load playback issues for duplicates"} />
@@ -1478,14 +1504,15 @@ export default function DuplicatesPage() {
                               ? { label: "Restored", severity: "info" as const }
                               : getReviewPresentation(currentReviewMark(group), Boolean(group.is_stale));
                             return (
-                              <DuplicateQueueItem
-                                key={group.group_id}
-                                index={index}
-                                active={selected?.group_id === group.group_id}
-                                group={group}
-                                markLabel={presentation.label}
-                                onSelect={() => setSelectedId(group.group_id)}
-                              />
+                            <DuplicateQueueItem
+                              key={group.group_id}
+                              index={index}
+                              active={selected?.group_id === group.group_id}
+                              group={group}
+                              markLabel={presentation.label}
+                              secondaryStatusText={recycleBinLifecycleGroupIds.has(group.group_id) ? "In Recycle Bin" : null}
+                              onSelect={() => setSelectedId(group.group_id)}
+                            />
                             );
                           })}
                         </div>
@@ -1528,6 +1555,12 @@ export default function DuplicatesPage() {
                             <div className="flex flex-col gap-1 rounded-[18px] border border-primary/20 bg-primary/5 px-3 py-2.5">
                               <p className="text-sm font-semibold text-foreground">Restored from Recycle Bin</p>
                               <p className="text-sm text-muted-foreground">Review again before this group can re-enter Ready for Bin.</p>
+                            </div>
+                          ) : null}
+                          {selected && recycleBinLifecycleGroupIds.has(selected.group_id) ? (
+                            <div className="flex flex-col gap-1 rounded-[18px] border border-border/70 bg-background/70 px-3 py-2.5">
+                              <p className="text-sm font-medium text-foreground">In Recycle Bin</p>
+                              <p className="text-sm text-muted-foreground">Extra copies are already in the Recycle Bin. The keep copy stays in place.</p>
                             </div>
                           ) : null}
                           {(selected.integrity_issue_count ?? 0) > 0 ? (
@@ -1791,7 +1824,7 @@ export default function DuplicatesPage() {
                           type="button"
                           variant="outline"
                           onClick={() => void handleMoveEligibleDuplicates(readyGroups, "all")}
-                          disabled={executeReclaimMutation.isPending || readyGroups.length === 0 || Boolean(recycleConfigWarning)}
+                          disabled={moveToBinMutation.isPending || readyGroups.length === 0 || Boolean(recycleConfigWarning)}
                         >
                           Move all eligible groups
                         </Button>
@@ -1850,7 +1883,7 @@ export default function DuplicatesPage() {
                         <Button
                           type="button"
                           onClick={() => void handleMoveEligibleDuplicates(selectedReadyGroups, "selected")}
-                          disabled={executeReclaimMutation.isPending || Boolean(recycleConfigWarning)}
+                          disabled={moveToBinMutation.isPending || Boolean(recycleConfigWarning)}
                         >
                           Move selected groups
                         </Button>
@@ -1917,7 +1950,7 @@ export default function DuplicatesPage() {
                                 event.stopPropagation();
                                 void handleMoveEligibleDuplicates([group], "single");
                               }}
-                              disabled={executeReclaimMutation.isPending || Boolean(recycleConfigWarning)}
+                              disabled={moveToBinMutation.isPending || Boolean(recycleConfigWarning)}
                             >
                               Move this group
                             </Button>
@@ -1938,22 +1971,22 @@ export default function DuplicatesPage() {
                 <Card className="rounded-[22px] border-border/70 bg-card/95 shadow-sm">
                   <CardContent className="space-y-1 p-4">
                     <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">In Recycle Bin</p>
-                    <p className="text-2xl font-semibold text-foreground">{recycleBinItems.length}</p>
-                    <p className="text-sm text-muted-foreground">These extra copies still physically exist in the Recycle Bin.</p>
+                    <p className="text-2xl font-semibold text-foreground">{recycleBinTotalCount}</p>
+                    <p className="text-sm text-muted-foreground">These extra copies still physically exist in the Recycle Bin across all pages.</p>
                   </CardContent>
                 </Card>
                 <Card className="rounded-[22px] border-border/70 bg-card/95 shadow-sm">
                   <CardContent className="space-y-1 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Restore available</p>
+                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Restore available on this page</p>
                     <p className="text-2xl font-semibold text-foreground">{restorableRecycleBinItems.length}</p>
-                    <p className="text-sm text-muted-foreground">These items can still be restored from the Recycle Bin.</p>
+                    <p className="text-sm text-muted-foreground">These loaded items can still be restored from the Recycle Bin.</p>
                   </CardContent>
                 </Card>
                 <Card className="rounded-[22px] border-border/70 bg-card/95 shadow-sm">
                   <CardContent className="space-y-1 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Restore window ended</p>
+                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Restore window ended on this page</p>
                     <p className="text-2xl font-semibold text-foreground">{expiredRecycleBinItems.length}</p>
-                    <p className="text-sm text-muted-foreground">Expired items stay visible here until they are purged.</p>
+                    <p className="text-sm text-muted-foreground">These loaded expired items stay visible here until they are purged.</p>
                   </CardContent>
                 </Card>
               </div>
@@ -2021,6 +2054,34 @@ export default function DuplicatesPage() {
                     </div>
                   )}
 
+                  {recycleBinTotalPages > 1 ? (
+                    <div className="flex flex-col gap-3 rounded-[18px] border border-border/70 bg-background/70 px-4 py-3 text-sm text-muted-foreground lg:flex-row lg:items-center lg:justify-between">
+                      <p>
+                        Showing page {recycleBinPage} of {recycleBinTotalPages} for Recycle Bin items.
+                      </p>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setRecycleBinPage((current) => Math.max(1, current - 1))}
+                          disabled={recycleBinPage <= 1}
+                        >
+                          Previous page
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setRecycleBinPage((current) => Math.min(recycleBinTotalPages, current + 1))}
+                          disabled={recycleBinPage >= recycleBinTotalPages}
+                        >
+                          Next page
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+
                   {!recycleBinItems.length ? (
                     <p className="text-sm text-muted-foreground">No duplicate files are in the Recycle Bin right now.</p>
                   ) : recycleBinViewMode === "gallery" ? (
@@ -2052,7 +2113,7 @@ export default function DuplicatesPage() {
                             type="button"
                             variant="outline"
                             onClick={() => void handleRestore(item)}
-                            disabled={restoreReclaimMutation.isPending || !item.restore_allowed}
+                            disabled={restoreFromBinMutation.isPending || !item.restore_allowed}
                           >
                             Restore from Recycle Bin
                           </Button>

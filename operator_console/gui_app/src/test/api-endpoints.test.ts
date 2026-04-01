@@ -9,10 +9,13 @@ import { apiGet, apiPost } from "@/lib/api/client";
 import {
   adminDbReset,
   getDuplicateBinPolicy,
+  getDuplicateBinItems,
   getDirectoryPickerCapability,
   getDirectoryPickerListing,
   getIntegrityDashboard,
+  moveDuplicatesToBin,
   reportIntegrityPlaybackFailure,
+  restoreDuplicatesFromBin,
   runIntegrityScan,
   runIngest,
   setDuplicateReclaim,
@@ -298,6 +301,70 @@ describe("api endpoints", () => {
     expect(apiPost).toHaveBeenCalledWith("/duplicates/reclaim", {
       content_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
       reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
+    });
+  });
+
+  it("loads duplicate bin items through the existing reclaim-shaped route", async () => {
+    vi.mocked(apiGet).mockResolvedValue({
+      ok: true,
+      workflow_version: "v2-service-layer",
+      schema_version: "schema-1",
+      generated_at: "2026-04-01T00:00:00+00:00",
+      data: {
+        total_count: 75,
+        page: 2,
+        limit: 50,
+        total_pages: 2,
+        items: [],
+      },
+      errors: [],
+    });
+
+    await getDuplicateBinItems({ page: 2, limit: 50 });
+
+    expect(apiGet).toHaveBeenCalledWith("/duplicates/reclaim/items", {
+      page: 2,
+      limit: 50,
+    });
+  });
+
+  it("moves duplicate groups to the bin through the existing reclaim-shaped route", async () => {
+    vi.mocked(apiPost).mockResolvedValue({
+      ok: true,
+      workflow_version: "v2-service-layer",
+      schema_version: "schema-1",
+      generated_at: "2026-04-01T00:00:00+00:00",
+      data: { summary: { applied_count: 3 } },
+      errors: [],
+    });
+
+    await moveDuplicatesToBin({
+      content_ids: ["group-alpha", "group-beta"],
+      retention_days: 21,
+    });
+
+    expect(apiPost).toHaveBeenCalledWith("/duplicates/reclaim/execute", {
+      content_ids: ["group-alpha", "group-beta"],
+      retention_days: 21,
+    });
+  });
+
+  it("restores duplicate files from the bin through the existing reclaim-shaped route", async () => {
+    vi.mocked(apiPost).mockResolvedValue({
+      ok: true,
+      workflow_version: "v2-service-layer",
+      schema_version: "schema-1",
+      generated_at: "2026-04-01T00:00:00+00:00",
+      data: { summary: { applied_count: 1 } },
+      errors: [],
+    });
+
+    await restoreDuplicatesFromBin({
+      file_instance_ids: ["aaaaaaaa-0000-0000-0000-000000000010"],
+    });
+
+    expect(apiPost).toHaveBeenCalledWith("/duplicates/reclaim/restore", {
+      file_instance_ids: ["aaaaaaaa-0000-0000-0000-000000000010"],
     });
   });
 
