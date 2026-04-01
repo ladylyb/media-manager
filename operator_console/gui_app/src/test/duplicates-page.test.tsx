@@ -309,7 +309,7 @@ describe("DuplicatesPage", () => {
     expect(within(navigation).queryByRole("img")).toBeNull();
   });
 
-  it("keeps deep-link tab navigation on the Recycle Bin tab", async () => {
+  it("maps the legacy removal deep link to Process duplicates and keeps restore actions separate", async () => {
     groupsData = [
       {
         ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
@@ -320,19 +320,20 @@ describe("DuplicatesPage", () => {
 
     renderPage("/duplicates?tab=removal");
 
-    expect(await screen.findByRole("heading", { name: "Recycle Bin" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Process duplicates" })).toBeInTheDocument();
     expect(screen.getAllByText("Ready to move").length).toBeGreaterThan(0);
-    expect(screen.getByTestId("recycle-bin-view-gallery")).toBeInTheDocument();
-    expect(screen.getByTestId("recycle-bin-ready-gallery")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Move all eligible groups" })).toBeInTheDocument();
+    expect(screen.getByTestId("process-view-focus")).toBeInTheDocument();
+    expect(screen.getByTestId("process-focused-panel")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Move to Recycle Bin" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Restore from Recycle Bin" })).not.toBeInTheDocument();
     expect(
       screen.getByText(
-        "Move eligible extra copies into the configured duplicate holding area, restore them if needed, and keep later retention steps separate.",
+        "Move reviewed extra copies into the Recycle Bin. Restore happens on the Recycle Bin tab.",
       ),
     ).toBeInTheDocument();
   });
 
-  it("defaults the Recycle Bin to Gallery and toggles the full tab to List", async () => {
+  it("defaults Process duplicates and Recycle Bin to Focus view and lets each tab toggle independently", async () => {
     groupsData = [
       {
         ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
@@ -359,23 +360,38 @@ describe("DuplicatesPage", () => {
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
 
-    renderPage("/duplicates?tab=removal");
+    const processView = renderPage("/duplicates?tab=process");
 
-    expect(await screen.findByTestId("recycle-bin-ready-gallery")).toBeInTheDocument();
-    expect(screen.getByTestId("recycle-bin-review-gallery")).toBeInTheDocument();
-    expect(screen.getByTestId("recycle-bin-holding-gallery")).toBeInTheDocument();
+    expect(await screen.findByTestId("process-focused-panel")).toBeInTheDocument();
+    expect(screen.queryByTestId("process-ready-gallery")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("process-ready-list")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("process-view-gallery"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("process-focused-panel")).not.toBeInTheDocument();
+      expect(screen.getByTestId("process-ready-gallery")).toBeInTheDocument();
+      expect(screen.getByTestId("process-review-gallery")).toBeInTheDocument();
+    });
+
+    processView.unmount();
+
+    renderPage("/duplicates?tab=recycle-bin");
+
+    expect(await screen.findByRole("heading", { name: "Recycle Bin" })).toBeInTheDocument();
+    expect(screen.getByTestId("recycle-bin-focused-panel")).toBeInTheDocument();
+    expect(screen.queryByTestId("recycle-bin-gallery")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("recycle-bin-list")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("recycle-bin-view-list"));
 
     await waitFor(() => {
-      expect(screen.queryByTestId("recycle-bin-ready-gallery")).not.toBeInTheDocument();
-      expect(screen.getByTestId("recycle-bin-ready-list")).toBeInTheDocument();
-      expect(screen.queryByTestId("recycle-bin-review-gallery")).not.toBeInTheDocument();
-      expect(screen.queryByTestId("recycle-bin-holding-gallery")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("recycle-bin-focused-panel")).not.toBeInTheDocument();
+      expect(screen.getByTestId("recycle-bin-list")).toBeInTheDocument();
     });
   });
 
-  it("supports focused Previous and Next navigation across ready groups without breaking selection", async () => {
+  it("supports focused Previous and Next navigation across ready groups on Process duplicates", async () => {
     groupsData = [
       {
         ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
@@ -389,30 +405,20 @@ describe("DuplicatesPage", () => {
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
 
-    renderPage("/duplicates?tab=removal");
+    const processView = renderPage("/duplicates?tab=process");
 
-    expect(await screen.findByTestId("recycle-bin-focused-panel")).toBeInTheDocument();
-    expect(screen.getByTestId("recycle-bin-focused-title")).toHaveTextContent("alpha-main.jpg");
+    expect(await screen.findByTestId("process-focused-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("process-focused-title")).toHaveTextContent("alpha-main.jpg");
     expect(screen.getAllByText("Keep copy").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Extra copies").length).toBeGreaterThan(0);
-
-    fireEvent.click(screen.getByRole("button", { name: "Select current group" }));
-    expect(screen.getByTestId("recycle-bin-bulk-action-bar")).toBeInTheDocument();
-    expect(screen.getByText("1 selected group")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Select current group" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
 
-    await waitFor(() => expect(screen.getByTestId("recycle-bin-focused-title")).toHaveTextContent("beta-main.jpg"));
-    expect(screen.getByText("1 selected group")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByTestId("recycle-bin-view-list"));
-
-    await waitFor(() => expect(screen.getByTestId("recycle-bin-ready-list")).toBeInTheDocument());
-    expect(screen.getByTestId("recycle-bin-focused-title")).toHaveTextContent("beta-main.jpg");
+    await waitFor(() => expect(screen.getByTestId("process-focused-title")).toHaveTextContent("beta-main.jpg"));
 
     fireEvent.click(screen.getByRole("button", { name: "Previous" }));
-
-    await waitFor(() => expect(screen.getByTestId("recycle-bin-focused-title")).toHaveTextContent("alpha-main.jpg"));
+    await waitFor(() => expect(screen.getByTestId("process-focused-title")).toHaveTextContent("alpha-main.jpg"));
   });
 
   it("supports group-level multi-select in Gallery and moves only the selected groups", async () => {
@@ -432,13 +438,15 @@ describe("DuplicatesPage", () => {
       data: { summary: { applied_count: 2, skipped_count: 0, moves_count: 2 } },
     });
 
-    renderPage("/duplicates?tab=removal");
+    const processView = renderPage("/duplicates?tab=process");
 
-    expect(await screen.findByTestId("recycle-bin-gallery-card-group-alpha")).toBeInTheDocument();
+    fireEvent.click(await screen.findByTestId("process-view-gallery"));
+
+    expect(await screen.findByTestId("process-gallery-card-group-alpha")).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("Select group alpha-main.jpg"));
     fireEvent.click(screen.getByLabelText("Select group beta-main.jpg"));
 
-    expect(screen.getByTestId("recycle-bin-bulk-action-bar")).toBeInTheDocument();
+    expect(screen.getByTestId("process-bulk-action-bar")).toBeInTheDocument();
     expect(screen.getByText("2 selected groups")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Move selected groups" }));
@@ -449,7 +457,7 @@ describe("DuplicatesPage", () => {
         retention_days: 21,
       });
       expect(
-        screen.getByText("2 duplicate files moved from 2 groups into the configured holding area. The keep copy stayed in place."),
+        screen.getByText("2 duplicate files moved from 2 groups into the Recycle Bin. The keep copy stayed in place."),
       ).toBeInTheDocument();
     });
   });
@@ -478,12 +486,13 @@ describe("DuplicatesPage", () => {
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
 
-    renderPage("/duplicates?tab=removal");
+    const processView = renderPage("/duplicates?tab=process");
 
-    expect(await screen.findByTestId("recycle-bin-ready-gallery")).toBeInTheDocument();
-    expect(screen.queryByTestId("recycle-bin-gallery-card-group-alpha")).not.toBeInTheDocument();
-    expect(screen.getByTestId("recycle-bin-gallery-card-group-beta")).toBeInTheDocument();
-    expect(screen.getAllByText("alpha-copy.jpg").length).toBeGreaterThan(0);
+    fireEvent.click(await screen.findByTestId("process-view-gallery"));
+
+    expect(await screen.findByTestId("process-ready-gallery")).toBeInTheDocument();
+    expect(screen.queryByTestId("process-gallery-card-group-alpha")).not.toBeInTheDocument();
+    expect(screen.getByTestId("process-gallery-card-group-beta")).toBeInTheDocument();
   });
 
   it("keeps planner-blocked groups out of Ready to move and explains the missing keep-copy mapping", async () => {
@@ -504,11 +513,13 @@ describe("DuplicatesPage", () => {
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
 
-    renderPage("/duplicates?tab=removal");
+    const processView = renderPage("/duplicates?tab=process");
 
-    expect(await screen.findByTestId("recycle-bin-ready-gallery")).toBeInTheDocument();
-    expect(screen.queryByTestId("recycle-bin-gallery-card-group-alpha")).not.toBeInTheDocument();
-    expect(screen.getByTestId("recycle-bin-gallery-card-group-beta")).toBeInTheDocument();
+    fireEvent.click(await screen.findByTestId("process-view-gallery"));
+
+    expect(await screen.findByTestId("process-ready-gallery")).toBeInTheDocument();
+    expect(screen.queryByTestId("process-gallery-card-group-alpha")).not.toBeInTheDocument();
+    expect(screen.getByTestId("process-gallery-card-group-beta")).toBeInTheDocument();
     expect(
       screen.getByText("This group cannot move yet because the planner could not confirm a keep-copy mapping."),
     ).toBeInTheDocument();
@@ -523,16 +534,7 @@ describe("DuplicatesPage", () => {
       buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
-    reclaimItemsData = [
-      {
-        file_instance_id: "archived-1",
-        content_id: "group-archived",
-        original_path: "/library/archived-copy.jpg",
-        archive_path: "/archive/archived-copy.jpg",
-        item_status: "ARCHIVED",
-        expires_at: "2026-04-10T10:00:00+00:00",
-      },
-    ];
+    reclaimItemsData = [];
     mocks.executeDuplicateReclaim.mockImplementation(async () => {
       groupsData = groupsData.map((group) =>
         group.group_id === "group-alpha"
@@ -575,15 +577,16 @@ describe("DuplicatesPage", () => {
       return { data: { summary: { applied_count: 1, skipped_count: 0, moves_count: 1 } } };
     });
 
-    renderPage("/duplicates?tab=removal");
+    const processView = renderPage("/duplicates?tab=process");
 
     expect(
-      await screen.findByText("Only groups marked “Looks right” can be moved from this page. The keep copy stays in place."),
+      await screen.findByText("Only groups marked “Looks right” can be moved to the Recycle Bin. The keep copy stays in place."),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Mark safe to remove" })).not.toBeInTheDocument();
     expect(screen.getAllByText("alpha-main.jpg").length).toBeGreaterThan(0);
     expect(screen.getAllByText("beta-main.jpg").length).toBeGreaterThan(0);
 
+    fireEvent.click(screen.getByTestId("process-view-gallery"));
     fireEvent.click(screen.getByRole("button", { name: "Move all eligible groups" }));
 
     await waitFor(() => {
@@ -596,11 +599,14 @@ describe("DuplicatesPage", () => {
         retention_days: 21,
       });
       expect(
-        screen.getByText("1 duplicate file moved from 1 group into the configured holding area. The keep copy stayed in place."),
+        screen.getByText("1 duplicate file moved from 1 group into the Recycle Bin. The keep copy stayed in place."),
       ).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Restore" }).at(-1)!);
+    processView.unmount();
+    renderPage("/duplicates?tab=recycle-bin");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Restore from Recycle Bin" }));
 
     await waitFor(() => {
       expect(mocks.restoreDuplicateReclaim).toHaveBeenCalledWith({
@@ -608,16 +614,15 @@ describe("DuplicatesPage", () => {
       });
       expect(
         screen.getByText(
-          "1 file restored from the configured holding area. Restored groups stay out of Ready to move until they are reviewed again.",
+          "1 file restored from the Recycle Bin. Restored groups stay out of Ready to move until they are reviewed again.",
         ),
       ).toBeInTheDocument();
       expect(
         screen.getByText(
-          "1 restored file already left the holding area. Those groups stay out of Ready to move until they are reviewed again.",
+          "1 restored file already left the Recycle Bin. Those groups stay out of Ready to move until they are reviewed again.",
         ),
       ).toBeInTheDocument();
-      expect(screen.queryByText("alpha-main.jpg")).not.toBeInTheDocument();
-      expect(screen.getByText("archived-copy.jpg")).toBeInTheDocument();
+      expect(screen.getByText("No duplicate files are in the Recycle Bin right now.")).toBeInTheDocument();
     });
   });
 
@@ -631,9 +636,9 @@ describe("DuplicatesPage", () => {
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
     mocks.setDuplicateReclaim.mockRejectedValue(new Error("bridge failed"));
 
-    renderPage("/duplicates?tab=removal");
+    renderPage("/duplicates?tab=process");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Move all eligible groups" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Move to Recycle Bin" }));
 
     await waitFor(() => {
       expect(mocks.setDuplicateReclaim).toHaveBeenCalledWith({
@@ -665,8 +670,9 @@ describe("DuplicatesPage", () => {
       },
     });
 
-    renderPage("/duplicates?tab=removal");
+    renderPage("/duplicates?tab=process");
 
+    fireEvent.click(await screen.findByTestId("process-view-gallery"));
     fireEvent.click(await screen.findByLabelText("Select group alpha-main.jpg"));
     fireEvent.click(screen.getByRole("button", { name: "Move selected groups" }));
 
@@ -680,9 +686,8 @@ describe("DuplicatesPage", () => {
           "The selected groups were planned for move, but the duplicate files were skipped during apply. The list has been refreshed.",
         ),
       ).toBeInTheDocument();
-      expect(screen.queryByTestId("recycle-bin-bulk-action-bar")).not.toBeInTheDocument();
-      expect(screen.getByTestId("recycle-bin-gallery-card-group-alpha")).toBeInTheDocument();
-      expect(screen.getByTestId("recycle-bin-focused-title")).toHaveTextContent("alpha-main.jpg");
+      expect(screen.queryByTestId("process-bulk-action-bar")).not.toBeInTheDocument();
+      expect(screen.getByTestId("process-gallery-card-group-alpha")).toBeInTheDocument();
     });
   });
 
@@ -708,8 +713,9 @@ describe("DuplicatesPage", () => {
       },
     });
 
-    renderPage("/duplicates?tab=removal");
+    renderPage("/duplicates?tab=process");
 
+    fireEvent.click(await screen.findByTestId("process-view-gallery"));
     fireEvent.click(await screen.findByLabelText("Select group alpha-main.jpg"));
     fireEvent.click(screen.getByRole("button", { name: "Move selected groups" }));
 
@@ -719,21 +725,21 @@ describe("DuplicatesPage", () => {
           "No files were moved from the selected groups because one or more groups no longer had a planner-confirmed keep-copy mapping. The list has been refreshed.",
         ),
       ).toBeInTheDocument();
-      expect(screen.queryByTestId("recycle-bin-bulk-action-bar")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("process-bulk-action-bar")).not.toBeInTheDocument();
     });
   });
 
   it("shows a config warning instead of vague retention claims when policy details are unavailable", async () => {
     mocks.getDuplicateBinPolicy.mockRejectedValue(new Error("policy unavailable"));
 
-    renderPage("/duplicates?tab=removal");
+    renderPage("/duplicates?tab=process");
 
     expect(
       await screen.findByText(
-        "Recycle Bin details are unavailable right now. The app cannot confirm the configured holding area or retention window for this page.",
+        "Recycle Bin details are unavailable right now. The app cannot confirm the configured Recycle Bin location or retention window for this page.",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Move all eligible groups" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Move to Recycle Bin" })).not.toBeInTheDocument();
     expect(screen.queryByText(/Holding area:/)).not.toBeInTheDocument();
   });
 
