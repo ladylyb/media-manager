@@ -160,8 +160,8 @@ Review state and bin-item state remain separate concerns.
 
 Add new authoritative item-level fields:
 
-- `planned_bin_path`: planned destination before apply
-- `bin_path`: single authoritative current physical location of the duplicate for every non-restored, non-purged stage
+- `planned_bin_path`: authoritative planned destination before bin entry
+- `bin_path`: authoritative current physical location after the item has entered the bin and until it is restored or purged
 - `bin_entered_at`: timestamp when the item first became physically located in the bin
 - `restore_expires_at`: restore cutoff timestamp
 - `bin_state`: persisted coarse containment/workflow state
@@ -266,24 +266,30 @@ Current row mapping:
   - `bin_entered_at = reclaimed_at`
   - `restore_expires_at = expires_at`
   - `bin_state = IN_BIN`
+  - `planned_bin_path` must not remain authoritative after `apply` succeeds or the move is abandoned
 - `item_status = RECYCLED`
   - `planned_bin_path = NULL`
   - `bin_path = recycle_path if present else archive_path`
   - `bin_entered_at = reclaimed_at`
   - `restore_expires_at = expires_at`
   - `bin_state = IN_BIN`
+  - `planned_bin_path` must not remain authoritative after `apply` succeeds or the move is abandoned
   - purge progression remains represented by `purge_after_at` and `purged_at`
 - `item_status = RESTORED`
   - `planned_bin_path = NULL`
-  - `bin_path = NULL`
+  - `bin_path = NULL` 
   - `bin_entered_at = reclaimed_at`
   - `restore_expires_at = expires_at`
   - `bin_state = RESTORED`
+  - on restore: set `bin_state = RESTORED` and clear `bin_path`
+  - `planned_bin_path` must not remain authoritative after `apply` succeeds or the move is abandoned
 
 Final-purge mapping:
 
 - once an item is actually purged, `bin_state = PURGED`
 - `purged_at` remains the timestamp fact for when purge completed
+- on purge: set `bin_state = PURGED`; clear `bin_path` if the file no longer exists physically
+- `planned_bin_path` must not remain authoritative after `apply` succeeds or the move is abandoned
 
 ### Record-level posture
 
@@ -439,6 +445,7 @@ Work performed:
 - planner writes `planned_bin_path`, `restore_expires_at`, and `bin_state = PENDING_MOVE`
 - apply writes `bin_path`, `bin_entered_at`, and `bin_state`
 - legacy fields are still maintained for coexistence
+- `planned_bin_path` must not remain authoritative after apply succeeds or the move is abandoned
 
 Exit conditions:
 
