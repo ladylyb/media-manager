@@ -83,6 +83,7 @@ nav:
       - Duplicate Recycle Bin Persistence Phase 5 Cleanup Spec: architecture/duplicate-recycle-bin-persistence-phase5-cleanup-spec.md
       - Duplicate Recycle Bin Contract Migration Spec: architecture/duplicate-recycle-bin-contract-migration-spec.md
       - Duplicate-to-Integrity Decisioning Spec: architecture/duplicate-integrity-decisioning-spec.md
+      - Duplicate-to-Integrity Decisioning Implementation Plan: architecture/duplicate-integrity-decisioning-implementation-plan.md
       - API-Only Transition: architecture/api-only-transition.md
       - Integrity Review and Reclaim Rollout: architecture/integrity-reclaim-rollout.md
       - Organize Media UX Feedback: architecture/pipeline-wizard-ux-feedback-2026-03-15.md
