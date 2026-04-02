@@ -14,6 +14,8 @@ from media_manager.app.persistence.models import (
     DuplicateReclaimItemStatus,
     DuplicateReclaimRecord,
     DuplicateReclaimStatus,
+    FailureEvent,
+    FailurePhase,
     FileContent,
     FileInstance,
     FileInstanceStatus,
@@ -722,3 +724,443 @@ def test_restore_duplicate_reclaim_still_uses_legacy_archive_path_without_bin_na
         assert item.item_status == DuplicateReclaimItemStatus.RESTORED.value
         assert item.bin_path is None
         assert item.bin_state is None
+
+
+def test_restore_duplicate_reclaim_prefers_bin_path_over_legacy_archive_path(
+    session_factory,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    reclaim_root = tmp_path / "reclaim-root"
+    recycle_root = tmp_path / "recycle-bin-root"
+    monkeypatch.setenv("MEDIA_MANAGER_RECLAIM_ROOT", str(reclaim_root))
+    monkeypatch.setenv("MEDIA_MANAGER_RECYCLE_BIN_ROOT", str(recycle_root))
+    service = Phase3ActionService(session_factory)
+    base = datetime(2026, 3, 29, 18, 0, tzinfo=UTC)
+    content_id = UUID("8235b1ed-4dc6-4a0d-88d5-81726006507c")
+    canonical_instance = UUID("8235b1ed-4dc6-4a0d-88d5-817260065071")
+    duplicate_instance = UUID("8235b1ed-4dc6-4a0d-88d5-817260065072")
+
+    original_path = tmp_path / "library" / "copy.jpg"
+    archive_path = recycle_root / "duplicates" / str(content_id) / "stale-copy.jpg"
+    bin_path = recycle_root / "duplicates" / str(content_id) / f"{duplicate_instance}-copy.jpg"
+    original_path.parent.mkdir(parents=True, exist_ok=True)
+    bin_path.parent.mkdir(parents=True, exist_ok=True)
+    bin_path.write_bytes(b"copy")
+
+    with session_factory.begin() as session:
+        _add_content(session, content_id, "hash-bin-authority", base)
+        session.flush()
+        _add_instance(
+            session,
+            file_instance_id=canonical_instance,
+            content_id=content_id,
+            absolute_path=str(tmp_path / "library" / "main.jpg"),
+            first_seen_at=base,
+        )
+        _add_instance(
+            session,
+            file_instance_id=duplicate_instance,
+            content_id=content_id,
+            absolute_path=str(bin_path),
+            first_seen_at=base + timedelta(seconds=1),
+        )
+        session.flush()
+        _set_content_canonical_instance(session, content_id=content_id, canonical_file_instance_id=canonical_instance)
+        session.add(
+            DuplicateReclaimRecord(
+                content_id=content_id,
+                reclaim_status=DuplicateReclaimStatus.ARCHIVED.value,
+                reviewed_at=base,
+                reviewed_by="tester",
+                archive_path=str(archive_path),
+                reclaimed_at=base,
+                expires_at=base + timedelta(days=7),
+                restored_at=None,
+                created_at=base,
+                updated_at=base,
+            )
+        )
+        session.add(
+            DuplicateReclaimItem(
+                file_instance_id=duplicate_instance,
+                content_id=content_id,
+                original_path=str(original_path),
+                archive_path=str(archive_path),
+                planned_bin_path=str(archive_path),
+                bin_path=str(bin_path),
+                item_status=DuplicateReclaimItemStatus.ARCHIVED.value,
+                reclaimed_at=base,
+                bin_entered_at=base,
+                expires_at=base + timedelta(days=7),
+                restore_expires_at=base + timedelta(days=7),
+                bin_state=DuplicateBinState.IN_BIN.value,
+                recycle_path=None,
+                recycled_at=None,
+                purge_after_at=None,
+                purged_at=None,
+                restored_at=None,
+                created_at=base,
+                updated_at=base,
+            )
+        )
+
+    result = service.restore_duplicate_reclaim(file_instance_ids=[duplicate_instance])
+
+    assert result["summary"]["applied_count"] == 1
+    assert original_path.exists()
+    assert not bin_path.exists()
+    assert not archive_path.exists()
+
+
+def test_restore_duplicate_reclaim_blocks_expired_authoritative_rows_and_records_failure(
+    session_factory,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    reclaim_root = tmp_path / "reclaim-root"
+    recycle_root = tmp_path / "recycle-bin-root"
+    monkeypatch.setenv("MEDIA_MANAGER_RECLAIM_ROOT", str(reclaim_root))
+    monkeypatch.setenv("MEDIA_MANAGER_RECYCLE_BIN_ROOT", str(recycle_root))
+    service = Phase3ActionService(session_factory)
+    base = datetime(2026, 3, 29, 19, 0, tzinfo=UTC)
+    content_id = UUID("9235b1ed-4dc6-4a0d-88d5-81726006507c")
+    canonical_instance = UUID("9235b1ed-4dc6-4a0d-88d5-817260065071")
+    duplicate_instance = UUID("9235b1ed-4dc6-4a0d-88d5-817260065072")
+
+    original_path = tmp_path / "library" / "copy.jpg"
+    bin_path = recycle_root / "duplicates" / str(content_id) / f"{duplicate_instance}-copy.jpg"
+    bin_path.parent.mkdir(parents=True, exist_ok=True)
+    bin_path.write_bytes(b"copy")
+
+    with session_factory.begin() as session:
+        _add_content(session, content_id, "hash-expired", base)
+        session.flush()
+        _add_instance(
+            session,
+            file_instance_id=canonical_instance,
+            content_id=content_id,
+            absolute_path=str(tmp_path / "library" / "main.jpg"),
+            first_seen_at=base,
+        )
+        _add_instance(
+            session,
+            file_instance_id=duplicate_instance,
+            content_id=content_id,
+            absolute_path=str(bin_path),
+            first_seen_at=base + timedelta(seconds=1),
+        )
+        session.flush()
+        _set_content_canonical_instance(session, content_id=content_id, canonical_file_instance_id=canonical_instance)
+        session.add(
+            DuplicateReclaimRecord(
+                content_id=content_id,
+                reclaim_status=DuplicateReclaimStatus.ARCHIVED.value,
+                reviewed_at=base,
+                reviewed_by="tester",
+                archive_path=str(bin_path),
+                reclaimed_at=base,
+                expires_at=base + timedelta(days=10),
+                restored_at=None,
+                created_at=base,
+                updated_at=base,
+            )
+        )
+        session.add(
+            DuplicateReclaimItem(
+                file_instance_id=duplicate_instance,
+                content_id=content_id,
+                original_path=str(original_path),
+                archive_path=str(bin_path),
+                planned_bin_path=str(bin_path),
+                bin_path=str(bin_path),
+                item_status=DuplicateReclaimItemStatus.ARCHIVED.value,
+                reclaimed_at=base,
+                bin_entered_at=base,
+                expires_at=base + timedelta(days=10),
+                restore_expires_at=base - timedelta(minutes=1),
+                bin_state=DuplicateBinState.IN_BIN.value,
+                recycle_path=None,
+                recycled_at=None,
+                purge_after_at=None,
+                purged_at=None,
+                restored_at=None,
+                created_at=base,
+                updated_at=base,
+            )
+        )
+
+    result = service.restore_duplicate_reclaim(file_instance_ids=[duplicate_instance])
+
+    assert result["summary"]["applied_count"] == 0
+    assert result["summary"]["skipped_count"] == 0
+    assert not original_path.exists()
+    assert bin_path.exists()
+
+    with session_factory() as session:
+        failure = session.scalar(
+            select(FailureEvent)
+            .where(
+                FailureEvent.run_id == UUID(result["run_id"]),
+                FailureEvent.phase == FailurePhase.PLANNING,
+                FailureEvent.error_code == "DUPLICATE_RESTORE_EXPIRED",
+            )
+        )
+        item = session.get(DuplicateReclaimItem, duplicate_instance)
+        assert failure is not None
+        assert item is not None
+        assert item.item_status == DuplicateReclaimItemStatus.ARCHIVED.value
+
+
+def test_restore_duplicate_reclaim_fails_safe_when_only_record_archive_path_or_recycle_path_exist(
+    session_factory,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    reclaim_root = tmp_path / "reclaim-root"
+    recycle_root = tmp_path / "recycle-bin-root"
+    monkeypatch.setenv("MEDIA_MANAGER_RECLAIM_ROOT", str(reclaim_root))
+    monkeypatch.setenv("MEDIA_MANAGER_RECYCLE_BIN_ROOT", str(recycle_root))
+    service = Phase3ActionService(session_factory)
+    base = datetime(2026, 3, 29, 20, 0, tzinfo=UTC)
+    content_id = UUID("a235b1ed-4dc6-4a0d-88d5-81726006507c")
+    canonical_instance = UUID("a235b1ed-4dc6-4a0d-88d5-817260065071")
+    duplicate_instance = UUID("a235b1ed-4dc6-4a0d-88d5-817260065072")
+
+    original_path = tmp_path / "library" / "copy.jpg"
+    recycle_path = recycle_root / "duplicates" / str(content_id) / f"{duplicate_instance}-copy.jpg"
+    recycle_path.parent.mkdir(parents=True, exist_ok=True)
+    recycle_path.write_bytes(b"copy")
+
+    with session_factory.begin() as session:
+        _add_content(session, content_id, "hash-failsafe", base)
+        session.flush()
+        _add_instance(
+            session,
+            file_instance_id=canonical_instance,
+            content_id=content_id,
+            absolute_path=str(tmp_path / "library" / "main.jpg"),
+            first_seen_at=base,
+        )
+        _add_instance(
+            session,
+            file_instance_id=duplicate_instance,
+            content_id=content_id,
+            absolute_path=str(recycle_path),
+            first_seen_at=base + timedelta(seconds=1),
+        )
+        session.flush()
+        _set_content_canonical_instance(session, content_id=content_id, canonical_file_instance_id=canonical_instance)
+        session.add(
+            DuplicateReclaimRecord(
+                content_id=content_id,
+                reclaim_status=DuplicateReclaimStatus.ARCHIVED.value,
+                reviewed_at=base,
+                reviewed_by="tester",
+                archive_path=str(recycle_path),
+                reclaimed_at=base,
+                expires_at=base + timedelta(days=7),
+                restored_at=None,
+                created_at=base,
+                updated_at=base,
+            )
+        )
+        session.add(
+            DuplicateReclaimItem(
+                file_instance_id=duplicate_instance,
+                content_id=content_id,
+                original_path=str(original_path),
+                archive_path="",
+                planned_bin_path=None,
+                bin_path=None,
+                item_status=DuplicateReclaimItemStatus.ARCHIVED.value,
+                reclaimed_at=base,
+                bin_entered_at=None,
+                expires_at=base + timedelta(days=7),
+                restore_expires_at=base + timedelta(days=7),
+                bin_state=None,
+                recycle_path=str(recycle_path),
+                recycled_at=None,
+                purge_after_at=None,
+                purged_at=None,
+                restored_at=None,
+                created_at=base,
+                updated_at=base,
+            )
+        )
+
+    result = service.restore_duplicate_reclaim(file_instance_ids=[duplicate_instance])
+
+    assert result["summary"]["applied_count"] == 0
+    assert result["summary"]["skipped_count"] == 0
+    assert not original_path.exists()
+    assert recycle_path.exists()
+
+    with session_factory() as session:
+        failure = session.scalar(
+            select(FailureEvent)
+            .where(
+                FailureEvent.run_id == UUID(result["run_id"]),
+                FailureEvent.phase == FailurePhase.PLANNING,
+                FailureEvent.error_code == "DUPLICATE_RESTORE_SOURCE_MISSING",
+            )
+        )
+        planned_action = session.scalar(select(DuplicateReclaimItem).where(DuplicateReclaimItem.file_instance_id == duplicate_instance))
+        assert failure is not None
+        assert planned_action is not None
+        assert planned_action.item_status == DuplicateReclaimItemStatus.ARCHIVED.value
+
+
+def test_restore_duplicate_reclaim_handles_mixed_new_and_legacy_rows(session_factory, monkeypatch, tmp_path: Path) -> None:
+    reclaim_root = tmp_path / "reclaim-root"
+    recycle_root = tmp_path / "recycle-bin-root"
+    monkeypatch.setenv("MEDIA_MANAGER_RECLAIM_ROOT", str(reclaim_root))
+    monkeypatch.setenv("MEDIA_MANAGER_RECYCLE_BIN_ROOT", str(recycle_root))
+    service = Phase3ActionService(session_factory)
+    base = datetime(2026, 3, 29, 21, 0, tzinfo=UTC)
+
+    content_new = UUID("b235b1ed-4dc6-4a0d-88d5-81726006507c")
+    content_legacy = UUID("c235b1ed-4dc6-4a0d-88d5-81726006507c")
+    content_restored = UUID("d235b1ed-4dc6-4a0d-88d5-81726006507c")
+
+    new_duplicate = UUID("b235b1ed-4dc6-4a0d-88d5-817260065072")
+    legacy_duplicate = UUID("c235b1ed-4dc6-4a0d-88d5-817260065072")
+    restored_duplicate = UUID("d235b1ed-4dc6-4a0d-88d5-817260065072")
+
+    new_original = tmp_path / "library" / "new-copy.jpg"
+    legacy_original = tmp_path / "library" / "legacy-copy.jpg"
+    restored_original = tmp_path / "library" / "restored-copy.jpg"
+    new_bin = recycle_root / "duplicates" / str(content_new) / f"{new_duplicate}-copy.jpg"
+    legacy_archive = recycle_root / "duplicates" / str(content_legacy) / f"{legacy_duplicate}-copy.jpg"
+    restored_bin = recycle_root / "duplicates" / str(content_restored) / f"{restored_duplicate}-copy.jpg"
+    new_bin.parent.mkdir(parents=True, exist_ok=True)
+    legacy_archive.parent.mkdir(parents=True, exist_ok=True)
+    restored_bin.parent.mkdir(parents=True, exist_ok=True)
+    new_bin.write_bytes(b"new")
+    legacy_archive.write_bytes(b"legacy")
+    restored_bin.write_bytes(b"restored")
+
+    with session_factory.begin() as session:
+        for idx, content_id in enumerate((content_new, content_legacy, content_restored), start=1):
+            _add_content(session, content_id, f"hash-mixed-{idx}", base)
+        session.flush()
+        _add_instance(
+            session,
+            file_instance_id=UUID("b235b1ed-4dc6-4a0d-88d5-817260065071"),
+            content_id=content_new,
+            absolute_path=str(tmp_path / "library" / "new-main.jpg"),
+            first_seen_at=base,
+        )
+        _add_instance(
+            session,
+            file_instance_id=new_duplicate,
+            content_id=content_new,
+            absolute_path=str(new_bin),
+            first_seen_at=base + timedelta(seconds=1),
+        )
+        _add_instance(
+            session,
+            file_instance_id=UUID("c235b1ed-4dc6-4a0d-88d5-817260065071"),
+            content_id=content_legacy,
+            absolute_path=str(tmp_path / "library" / "legacy-main.jpg"),
+            first_seen_at=base,
+        )
+        _add_instance(
+            session,
+            file_instance_id=legacy_duplicate,
+            content_id=content_legacy,
+            absolute_path=str(legacy_archive),
+            first_seen_at=base + timedelta(seconds=1),
+        )
+        _add_instance(
+            session,
+            file_instance_id=UUID("d235b1ed-4dc6-4a0d-88d5-817260065071"),
+            content_id=content_restored,
+            absolute_path=str(tmp_path / "library" / "restored-main.jpg"),
+            first_seen_at=base,
+        )
+        _add_instance(
+            session,
+            file_instance_id=restored_duplicate,
+            content_id=content_restored,
+            absolute_path=str(restored_bin),
+            first_seen_at=base + timedelta(seconds=1),
+        )
+
+        session.add_all(
+            [
+                DuplicateReclaimItem(
+                    file_instance_id=new_duplicate,
+                    content_id=content_new,
+                    original_path=str(new_original),
+                    archive_path=str(new_bin),
+                    planned_bin_path=str(new_bin),
+                    bin_path=str(new_bin),
+                    item_status=DuplicateReclaimItemStatus.ARCHIVED.value,
+                    reclaimed_at=base,
+                    bin_entered_at=base,
+                    expires_at=base + timedelta(days=7),
+                    restore_expires_at=base + timedelta(days=7),
+                    bin_state=DuplicateBinState.IN_BIN.value,
+                    recycle_path=None,
+                    recycled_at=None,
+                    purge_after_at=None,
+                    purged_at=None,
+                    restored_at=None,
+                    created_at=base,
+                    updated_at=base,
+                ),
+                DuplicateReclaimItem(
+                    file_instance_id=legacy_duplicate,
+                    content_id=content_legacy,
+                    original_path=str(legacy_original),
+                    archive_path=str(legacy_archive),
+                    planned_bin_path=None,
+                    bin_path=None,
+                    item_status=DuplicateReclaimItemStatus.ARCHIVED.value,
+                    reclaimed_at=base,
+                    bin_entered_at=None,
+                    expires_at=base + timedelta(days=7),
+                    restore_expires_at=None,
+                    bin_state=None,
+                    recycle_path=None,
+                    recycled_at=None,
+                    purge_after_at=None,
+                    purged_at=None,
+                    restored_at=None,
+                    created_at=base,
+                    updated_at=base,
+                ),
+                DuplicateReclaimItem(
+                    file_instance_id=restored_duplicate,
+                    content_id=content_restored,
+                    original_path=str(restored_original),
+                    archive_path=str(restored_bin),
+                    planned_bin_path=None,
+                    bin_path=None,
+                    item_status=DuplicateReclaimItemStatus.RESTORED.value,
+                    reclaimed_at=base,
+                    bin_entered_at=base,
+                    expires_at=base + timedelta(days=7),
+                    restore_expires_at=base + timedelta(days=7),
+                    bin_state=DuplicateBinState.RESTORED.value,
+                    recycle_path=None,
+                    recycled_at=None,
+                    purge_after_at=None,
+                    purged_at=None,
+                    restored_at=base + timedelta(minutes=1),
+                    created_at=base,
+                    updated_at=base,
+                ),
+            ]
+        )
+
+    result = service.restore_duplicate_reclaim(file_instance_ids=[new_duplicate, legacy_duplicate, restored_duplicate])
+
+    assert result["summary"]["applied_count"] == 2
+    assert new_original.exists()
+    assert legacy_original.exists()
+    assert not restored_original.exists()
+    assert not new_bin.exists()
+    assert not legacy_archive.exists()
+    assert restored_bin.exists()

@@ -19,6 +19,8 @@ from media_manager.app.persistence.models import (
     DuplicateReclaimItemStatus,
     DuplicateReclaimRecord,
     DuplicateReclaimStatus,
+    FailureEvent,
+    FailurePhase,
     FileContent,
     FileInstance,
     FileInstanceStatus,
@@ -54,6 +56,28 @@ def _path_is_within_root(path_value: str | None, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _duplicate_restore_expiry(item: DuplicateReclaimItem) -> datetime | None:
+    return item.restore_expires_at or item.expires_at
+
+
+def _duplicate_restore_source_path(item: DuplicateReclaimItem) -> str | None:
+    if item.bin_state == DuplicateBinState.IN_BIN.value and item.bin_path:
+        return item.bin_path
+    if item.item_status == DuplicateReclaimItemStatus.ARCHIVED.value and item.archive_path:
+        return item.archive_path
+    return None
+
+
+def _duplicate_current_location_path(item: DuplicateReclaimItem) -> str | None:
+    if item.bin_state == DuplicateBinState.IN_BIN.value and item.bin_path:
+        return item.bin_path
+    if item.item_status == DuplicateReclaimItemStatus.RECYCLED.value:
+        return item.recycle_path or item.archive_path
+    if item.item_status == DuplicateReclaimItemStatus.ARCHIVED.value and item.archive_path:
+        return item.archive_path
+    return None
 
 
 class Phase3ActionService:
@@ -334,12 +358,34 @@ class Phase3ActionService:
             if file_instance_ids:
                 stmt = stmt.where(DuplicateReclaimItem.file_instance_id.in_(file_instance_ids))
             items = session.scalars(stmt.order_by(DuplicateReclaimItem.file_instance_id.asc())).all()
+            now = _utcnow()
             for item in items:
-                # Transitional compatibility note: archive_path may reference either the legacy
-                # reclaim-root path or the new recycle-bin-root path. Restore still uses this field
-                # as the source-of-truth move source in this migration phase.
+                restore_expires_at = _duplicate_restore_expiry(item)
+                if restore_expires_at is not None and restore_expires_at <= now:
+                    session.add(
+                        FailureEvent(
+                            run_id=run.id,
+                            phase=FailurePhase.PLANNING,
+                            error_code="DUPLICATE_RESTORE_EXPIRED",
+                            error_message=f"{item.file_instance_id}:{restore_expires_at.isoformat()}",
+                        )
+                    )
+                    continue
+
+                restore_source_path = _duplicate_restore_source_path(item)
+                if restore_source_path is None:
+                    session.add(
+                        FailureEvent(
+                            run_id=run.id,
+                            phase=FailurePhase.PLANNING,
+                            error_code="DUPLICATE_RESTORE_SOURCE_MISSING",
+                            error_message=str(item.file_instance_id),
+                        )
+                    )
+                    continue
+
                 item.item_status = DuplicateReclaimItemStatus.PENDING.value
-                item.updated_at = _utcnow()
+                item.updated_at = now
                 session.add(
                     PlannedAction(
                         run_id=run.id,
@@ -347,7 +393,7 @@ class Phase3ActionService:
                         action_type="RECLAIM_RESTORE",
                         role=PlannedActionRole.DUPLICATE.value,
                         duplicate_index=None,
-                        source_path=item.archive_path,
+                        source_path=restore_source_path,
                         target_path=item.original_path,
                     )
                 )
@@ -469,18 +515,28 @@ class Phase3ActionService:
                 stmt = stmt.where(DuplicateReclaimItem.file_instance_id.in_(file_instance_ids))
 
             items = session.scalars(stmt.order_by(DuplicateReclaimItem.file_instance_id.asc())).all()
+            now = _utcnow()
             for item in items:
-                already_under_target_root = _path_is_within_root(item.archive_path, recycle_root)
+                retention_expires_at = _duplicate_restore_expiry(item)
+                if retention_expires_at is None or retention_expires_at > now:
+                    continue
+                current_location_path = _duplicate_current_location_path(item)
+                if current_location_path is None:
+                    continue
+                already_under_target_root = _path_is_within_root(current_location_path, recycle_root)
                 recycle_path = (
-                    item.archive_path
+                    current_location_path
                     if already_under_target_root
                     else str(
-                        recycle_root / "duplicates" / str(item.content_id) / f"{item.file_instance_id}-{Path(item.archive_path).name}"
+                        recycle_root
+                        / "duplicates"
+                        / str(item.content_id)
+                        / f"{item.file_instance_id}-{Path(current_location_path).name}"
                     )
                 )
                 item.recycle_path = recycle_path
                 item.purge_after_at = purge_after_at
-                item.updated_at = _utcnow()
+                item.updated_at = now
                 session.add(
                     PlannedAction(
                         run_id=run.id,
@@ -488,8 +544,8 @@ class Phase3ActionService:
                         action_type="RECLAIM_RECYCLE",
                         role=PlannedActionRole.DUPLICATE.value,
                         duplicate_index=None,
-                        source_path=item.archive_path,
-                        target_path=item.archive_path if already_under_target_root else recycle_path,
+                        source_path=current_location_path,
+                        target_path=current_location_path if already_under_target_root else recycle_path,
                     )
                 )
             session.flush()
