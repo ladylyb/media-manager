@@ -196,6 +196,13 @@ class DuplicateReclaimItemStatus(StrEnum):
     RECYCLED = "RECYCLED"
 
 
+class DuplicateBinState(StrEnum):
+    PENDING_MOVE = "PENDING_MOVE"
+    IN_BIN = "IN_BIN"
+    RESTORED = "RESTORED"
+    PURGED = "PURGED"
+
+
 class IntegrityQuarantineStatus(StrEnum):
     PENDING = "PENDING"
     QUARANTINED = "QUARANTINED"
@@ -620,9 +627,6 @@ class DuplicateReclaimRecord(Base):
     reclaim_status: Mapped[str] = mapped_column(Text, nullable=False)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reviewed_by: Mapped[str | None] = mapped_column(Text, nullable=True)
-    archive_path: Mapped[str | None] = mapped_column(Text, nullable=True)
-    reclaimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     restored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
@@ -655,9 +659,14 @@ class DuplicateReclaimItem(Base):
     )
     original_path: Mapped[str] = mapped_column(Text, nullable=False)
     archive_path: Mapped[str] = mapped_column(Text, nullable=False)
+    planned_bin_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bin_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     item_status: Mapped[str] = mapped_column(Text, nullable=False)
     reclaimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    bin_entered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    restore_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    bin_state: Mapped[str | None] = mapped_column(Text, nullable=True)
     recycle_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     recycled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     purge_after_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

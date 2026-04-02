@@ -373,9 +373,6 @@ class DuplicateReclaimArchiveItem:
     restored_at: str | None
 
     def to_dict(self) -> dict[str, str | None]:
-        # Transitional compatibility note: archive_path may reference either the legacy
-        # reclaim-root location or the new recycle-bin-root location. Restore still uses
-        # this field as the source-of-truth path during the migration window.
         return {
             "file_instance_id": self.file_instance_id,
             "content_id": self.content_id,
@@ -426,6 +423,24 @@ class IntegrityQuarantineItem:
             "quarantined_at": self.quarantined_at,
             "restored_at": self.restored_at,
         }
+
+
+def _duplicate_item_restore_expires_at(row: DuplicateReclaimItem) -> datetime | None:
+    return row.restore_expires_at or row.expires_at
+
+
+def _duplicate_item_current_location(row: DuplicateReclaimItem) -> str | None:
+    if row.bin_state == "IN_BIN" and row.bin_path:
+        return row.bin_path
+    if row.item_status == "RECYCLED":
+        return row.recycle_path
+    return None
+
+
+def _duplicate_item_archive_page_path(row: DuplicateReclaimItem) -> str:
+    if row.item_status == "PENDING" and row.planned_bin_path:
+        return row.planned_bin_path
+    return _duplicate_item_current_location(row) or ""
 
 
 @dataclass(frozen=True)
@@ -888,6 +903,18 @@ class OperatorConsoleReadService:
                     select(DuplicateReclaimRecord).where(DuplicateReclaimRecord.content_id.in_(duplicate_content_ids))
                 ).all()
             }
+            duplicate_reclaim_items = session.scalars(
+                select(DuplicateReclaimItem).where(DuplicateReclaimItem.content_id.in_(duplicate_content_ids))
+            ).all()
+            retention_expires_by_content: dict[UUID, str | None] = {}
+            for item in duplicate_reclaim_items:
+                retention_expires_at = _duplicate_item_restore_expires_at(item)
+                if retention_expires_at is None:
+                    continue
+                current = retention_expires_by_content.get(item.content_id)
+                iso = retention_expires_at.isoformat()
+                if current is None or iso < current:
+                    retention_expires_by_content[item.content_id] = iso
 
             instance_rows = session.execute(
                 select(
@@ -1001,9 +1028,7 @@ class OperatorConsoleReadService:
                     else:
                         stale_reason = "group_membership_changed"
             reclaim_status = reclaim_row.reclaim_status if reclaim_row is not None else None
-            retention_expires_at = (
-                reclaim_row.expires_at.isoformat() if reclaim_row is not None and reclaim_row.expires_at is not None else None
-            )
+            retention_expires_at = retention_expires_by_content.get(content_id)
             reclaimable_file_count = sum(1 for item in files if item.role == "DUPLICATE")
             planner_canonical_instance_id = file_content_canonical_by_content.get(content_id)
             duplicate_reclaim_actionable = True
@@ -1230,10 +1255,14 @@ class OperatorConsoleReadService:
                 file_instance_id=str(row.file_instance_id),
                 content_id=str(row.content_id),
                 original_path=row.original_path,
-                archive_path=row.archive_path,
+                archive_path=_duplicate_item_archive_page_path(row),
                 item_status=row.item_status,
                 reclaimed_at=row.reclaimed_at.isoformat() if row.reclaimed_at is not None else None,
-                expires_at=row.expires_at.isoformat() if row.expires_at is not None else None,
+                expires_at=(
+                    _duplicate_item_restore_expires_at(row).isoformat()
+                    if _duplicate_item_restore_expires_at(row) is not None
+                    else None
+                ),
                 restored_at=row.restored_at.isoformat() if row.restored_at is not None else None,
             )
             for row in paged_rows
@@ -1304,11 +1333,13 @@ class OperatorConsoleReadService:
             ).all()
 
         for item in duplicate_items:
+            retention_expires_at = _duplicate_item_restore_expires_at(item)
+            current_location = _duplicate_item_current_location(item)
             ready_for_recycle = (
                 item.purged_at is None
                 and item.item_status == "ARCHIVED"
-                and item.expires_at is not None
-                and item.expires_at <= now
+                and retention_expires_at is not None
+                and retention_expires_at <= now
             )
             ready_for_purge = (
                 item.purged_at is None
@@ -1323,10 +1354,10 @@ class OperatorConsoleReadService:
                 RetentionRecycleItem(
                     workflow="duplicate_reclaim",
                     file_instance_id=str(item.file_instance_id),
-                    source_path=item.archive_path if item.item_status == "RECYCLED" else item.original_path,
+                    source_path=current_location or item.original_path,
                     recycle_path=item.recycle_path,
                     current_status=item.item_status,
-                    retention_expires_at=item.expires_at.isoformat() if item.expires_at is not None else None,
+                    retention_expires_at=retention_expires_at.isoformat() if retention_expires_at is not None else None,
                     recycled_at=item.recycled_at.isoformat() if item.recycled_at is not None else None,
                     purge_after_at=item.purge_after_at.isoformat() if item.purge_after_at is not None else None,
                     purged_at=item.purged_at.isoformat() if item.purged_at is not None else None,

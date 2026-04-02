@@ -35,6 +35,7 @@ from media_manager.app.persistence.models import (
     FailureEvent,
     FailurePhase,
     CanonicalAssignment,
+    DuplicateBinState,
     DuplicateReclaimItem,
     DuplicateReclaimItemStatus,
     FileInstance,
@@ -890,15 +891,17 @@ class ApplyService:
         if action.action_type == "RECLAIM_ARCHIVE":
             item = session.get(DuplicateReclaimItem, action.file_id)
             if item is not None:
+                archive_path = outcome.target_path or item.archive_path
                 item.item_status = DuplicateReclaimItemStatus.ARCHIVED.value
+                item.bin_path = archive_path
                 item.reclaimed_at = now
+                item.bin_entered_at = now
+                item.restore_expires_at = item.expires_at
+                item.bin_state = DuplicateBinState.IN_BIN.value
                 item.updated_at = now
                 record = session.get(DuplicateReclaimRecord, item.content_id)
                 if record is not None:
                     record.reclaim_status = DuplicateReclaimStatus.ARCHIVED.value
-                    record.archive_path = item.archive_path
-                    record.reclaimed_at = now
-                    record.expires_at = item.expires_at
                     record.updated_at = now
                 logger.debug(
                     "duplicate_reclaim_debug: persisted archive outcome",
@@ -917,6 +920,9 @@ class ApplyService:
             item = session.get(DuplicateReclaimItem, action.file_id)
             if item is not None:
                 item.item_status = DuplicateReclaimItemStatus.RESTORED.value
+                item.planned_bin_path = None
+                item.bin_path = None
+                item.bin_state = DuplicateBinState.RESTORED.value
                 item.restored_at = now
                 item.updated_at = now
                 record = session.get(DuplicateReclaimRecord, item.content_id)
@@ -939,15 +945,17 @@ class ApplyService:
         elif action.action_type == "RECLAIM_RECYCLE":
             item = session.get(DuplicateReclaimItem, action.file_id)
             if item is not None:
+                recycle_path = outcome.target_path or item.recycle_path or item.bin_path
                 item.item_status = DuplicateReclaimItemStatus.RECYCLED.value
+                item.planned_bin_path = None
+                item.bin_path = recycle_path
+                item.bin_state = DuplicateBinState.IN_BIN.value
+                item.recycle_path = recycle_path
                 item.recycled_at = now
                 item.updated_at = now
                 record = session.get(DuplicateReclaimRecord, item.content_id)
                 if record is not None:
                     record.reclaim_status = DuplicateReclaimStatus.SCHEDULED_FOR_DELETE.value
-                    record.archive_path = item.recycle_path
-                    record.reclaimed_at = now
-                    record.expires_at = item.purge_after_at
                     record.updated_at = now
                 logger.debug(
                     "duplicate_reclaim_debug: persisted recycle outcome",
