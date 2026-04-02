@@ -408,3 +408,141 @@ def test_duplicate_bin_item_backfill_is_idempotent_and_does_not_clobber_phase2_r
             os.environ.pop("DATABASE_URL", None)
         else:
             os.environ["DATABASE_URL"] = original_database_url
+
+
+def test_duplicate_bin_item_backfill_normalizes_reachable_partial_rows(test_database_url: str) -> None:
+    cfg = Config("alembic.ini")
+    cfg.set_main_option("sqlalchemy.url", test_database_url)
+
+    original_database_url = os.getenv("DATABASE_URL")
+    os.environ["DATABASE_URL"] = test_database_url
+    engine = create_engine(test_database_url, future=True)
+    module = _load_0031_module()
+    try:
+        command.downgrade(cfg, "0030")
+
+        base = datetime(2026, 4, 2, 15, 0, tzinfo=UTC)
+        archived_after_phase2_file_id = uuid4()
+        restored_after_phase2_file_id = uuid4()
+        recycled_after_phase2_file_id = uuid4()
+
+        archived_after_phase2_content_id = uuid4()
+        restored_after_phase2_content_id = uuid4()
+        recycled_after_phase2_content_id = uuid4()
+
+        _insert_duplicate_reclaim_item(
+            engine,
+            file_instance_id=archived_after_phase2_file_id,
+            content_id=archived_after_phase2_content_id,
+            original_path="/library/archived-after-phase2.jpg",
+            archive_path="/bin/archived-after-phase2.jpg",
+            item_status="ARCHIVED",
+            reclaimed_at=base,
+            expires_at=base + timedelta(days=7),
+            recycle_path=None,
+            recycled_at=None,
+            purge_after_at=None,
+            purged_at=None,
+            restored_at=None,
+            planned_bin_path=None,
+            bin_path="/bin/archived-after-phase2.jpg",
+            bin_entered_at=base,
+            restore_expires_at=base + timedelta(days=7),
+            bin_state="IN_BIN",
+        )
+        _insert_duplicate_reclaim_item(
+            engine,
+            file_instance_id=restored_after_phase2_file_id,
+            content_id=restored_after_phase2_content_id,
+            original_path="/library/restored-after-phase2.jpg",
+            archive_path="/bin/restored-after-phase2.jpg",
+            item_status="RESTORED",
+            reclaimed_at=base - timedelta(days=5),
+            expires_at=base + timedelta(days=2),
+            recycle_path=None,
+            recycled_at=None,
+            purge_after_at=None,
+            purged_at=None,
+            restored_at=base - timedelta(days=1),
+            planned_bin_path="/bin/restored-after-phase2.jpg",
+            bin_path="/bin/restored-after-phase2.jpg",
+            bin_entered_at=base - timedelta(days=5),
+            restore_expires_at=base + timedelta(days=2),
+            bin_state="IN_BIN",
+        )
+        _insert_duplicate_reclaim_item(
+            engine,
+            file_instance_id=recycled_after_phase2_file_id,
+            content_id=recycled_after_phase2_content_id,
+            original_path="/library/recycled-after-phase2.jpg",
+            archive_path="/bin/archive-recycled-after-phase2.jpg",
+            item_status="RECYCLED",
+            reclaimed_at=base - timedelta(days=10),
+            expires_at=base - timedelta(days=3),
+            recycle_path="/bin/recycled-after-phase2.jpg",
+            recycled_at=base - timedelta(days=2),
+            purge_after_at=base + timedelta(days=20),
+            purged_at=None,
+            restored_at=None,
+            planned_bin_path="/bin/archive-recycled-after-phase2.jpg",
+            bin_path="/bin/archive-recycled-after-phase2.jpg",
+            bin_entered_at=base - timedelta(days=10),
+            restore_expires_at=base - timedelta(days=3),
+            bin_state="IN_BIN",
+        )
+
+        with engine.begin() as conn:
+            module.backfill_duplicate_bin_item_fields(conn)
+            module.backfill_duplicate_bin_item_fields(conn)
+
+        with engine.connect() as conn:
+            rows = {
+                row["file_instance_id"]: row
+                for row in conn.execute(
+                    text(
+                        """
+                        SELECT
+                            file_instance_id,
+                            archive_path,
+                            recycle_path,
+                            planned_bin_path,
+                            bin_path,
+                            bin_entered_at,
+                            reclaimed_at,
+                            restore_expires_at,
+                            expires_at,
+                            bin_state
+                        FROM duplicate_reclaim_items
+                        ORDER BY file_instance_id
+                        """
+                    )
+                ).mappings()
+            }
+
+        archived_after_phase2 = rows[archived_after_phase2_file_id]
+        assert archived_after_phase2["planned_bin_path"] is None
+        assert archived_after_phase2["bin_path"] == archived_after_phase2["archive_path"]
+        assert archived_after_phase2["bin_entered_at"] == archived_after_phase2["reclaimed_at"]
+        assert archived_after_phase2["restore_expires_at"] == archived_after_phase2["expires_at"]
+        assert archived_after_phase2["bin_state"] == "IN_BIN"
+
+        restored_after_phase2 = rows[restored_after_phase2_file_id]
+        assert restored_after_phase2["planned_bin_path"] is None
+        assert restored_after_phase2["bin_path"] is None
+        assert restored_after_phase2["bin_entered_at"] == restored_after_phase2["reclaimed_at"]
+        assert restored_after_phase2["restore_expires_at"] == restored_after_phase2["expires_at"]
+        assert restored_after_phase2["bin_state"] == "RESTORED"
+
+        recycled_after_phase2 = rows[recycled_after_phase2_file_id]
+        assert recycled_after_phase2["planned_bin_path"] is None
+        assert recycled_after_phase2["bin_path"] == recycled_after_phase2["recycle_path"]
+        assert recycled_after_phase2["bin_entered_at"] == recycled_after_phase2["reclaimed_at"]
+        assert recycled_after_phase2["restore_expires_at"] == recycled_after_phase2["expires_at"]
+        assert recycled_after_phase2["bin_state"] == "IN_BIN"
+    finally:
+        command.upgrade(cfg, "head")
+        engine.dispose()
+        if original_database_url is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = original_database_url

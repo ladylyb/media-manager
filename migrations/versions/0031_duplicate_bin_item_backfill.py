@@ -25,18 +25,20 @@ def backfill_duplicate_bin_item_fields(connection: sa.engine.Connection) -> None
             SET
                 planned_bin_path = CASE
                     WHEN item_status = 'PENDING' THEN archive_path
+                    WHEN item_status IN ('RECYCLED', 'RESTORED') THEN NULL
+                    WHEN item_status = 'ARCHIVED' THEN planned_bin_path
                     ELSE NULL
                 END,
                 bin_path = CASE
-                    WHEN item_status = 'ARCHIVED' THEN archive_path
+                    WHEN item_status = 'ARCHIVED' THEN COALESCE(bin_path, archive_path)
                     WHEN item_status = 'RECYCLED' THEN COALESCE(recycle_path, archive_path)
                     ELSE NULL
                 END,
                 bin_entered_at = CASE
-                    WHEN item_status IN ('ARCHIVED', 'RECYCLED', 'RESTORED') THEN reclaimed_at
+                    WHEN item_status IN ('ARCHIVED', 'RECYCLED', 'RESTORED') THEN COALESCE(bin_entered_at, reclaimed_at)
                     ELSE NULL
                 END,
-                restore_expires_at = expires_at,
+                restore_expires_at = COALESCE(restore_expires_at, expires_at),
                 bin_state = CASE
                     WHEN item_status = 'PENDING' THEN 'PENDING_MOVE'
                     WHEN item_status IN ('ARCHIVED', 'RECYCLED') THEN 'IN_BIN'
@@ -44,11 +46,52 @@ def backfill_duplicate_bin_item_fields(connection: sa.engine.Connection) -> None
                     ELSE bin_state
                 END
             WHERE
-                planned_bin_path IS NULL
-                AND bin_path IS NULL
-                AND bin_entered_at IS NULL
-                AND restore_expires_at IS NULL
-                AND bin_state IS NULL
+                (
+                    item_status = 'PENDING'
+                    AND (
+                        planned_bin_path IS NULL
+                        OR planned_bin_path != archive_path
+                        OR bin_path IS NOT NULL
+                        OR bin_entered_at IS NOT NULL
+                        OR restore_expires_at IS NULL
+                        OR restore_expires_at != expires_at
+                        OR bin_state IS NULL
+                        OR bin_state != 'PENDING_MOVE'
+                    )
+                )
+                OR (
+                    item_status = 'ARCHIVED'
+                    AND (
+                        bin_path IS NULL
+                        OR bin_entered_at IS NULL
+                        OR restore_expires_at IS NULL
+                        OR bin_state IS NULL
+                        OR bin_state != 'IN_BIN'
+                    )
+                )
+                OR (
+                    item_status = 'RECYCLED'
+                    AND (
+                        planned_bin_path IS NOT NULL
+                        OR bin_path IS NULL
+                        OR bin_path != COALESCE(recycle_path, archive_path)
+                        OR bin_entered_at IS NULL
+                        OR restore_expires_at IS NULL
+                        OR bin_state IS NULL
+                        OR bin_state != 'IN_BIN'
+                    )
+                )
+                OR (
+                    item_status = 'RESTORED'
+                    AND (
+                        planned_bin_path IS NOT NULL
+                        OR bin_path IS NOT NULL
+                        OR bin_entered_at IS NULL
+                        OR restore_expires_at IS NULL
+                        OR bin_state IS NULL
+                        OR bin_state != 'RESTORED'
+                    )
+                )
             """
         )
     )
