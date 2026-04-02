@@ -79,6 +79,7 @@ nav:
       - Run Lifecycle: architecture/run-lifecycle.md
       - Duplicate Recycle Bin Lifecycle Simplification: architecture/duplicate-recycle-bin-lifecycle.md
       - Duplicate Recycle Bin Migration Spec: architecture/duplicate-recycle-bin-migration-spec.md
+      - Duplicate Recycle Bin Persistence Migration Spec: architecture/duplicate-recycle-bin-persistence-migration-spec.md
       - Duplicate Recycle Bin Contract Migration Spec: architecture/duplicate-recycle-bin-contract-migration-spec.md
       - API-Only Transition: architecture/api-only-transition.md
       - Integrity Review and Reclaim Rollout: architecture/integrity-reclaim-rollout.md
