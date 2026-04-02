@@ -920,6 +920,9 @@ class ApplyService:
             item = session.get(DuplicateReclaimItem, action.file_id)
             if item is not None:
                 item.item_status = DuplicateReclaimItemStatus.RESTORED.value
+                item.planned_bin_path = None
+                item.bin_path = None
+                item.bin_state = DuplicateBinState.RESTORED.value
                 item.restored_at = now
                 item.updated_at = now
                 record = session.get(DuplicateReclaimRecord, item.content_id)
@@ -942,7 +945,12 @@ class ApplyService:
         elif action.action_type == "RECLAIM_RECYCLE":
             item = session.get(DuplicateReclaimItem, action.file_id)
             if item is not None:
+                recycle_path = outcome.target_path or item.recycle_path or item.bin_path
                 item.item_status = DuplicateReclaimItemStatus.RECYCLED.value
+                item.planned_bin_path = None
+                item.bin_path = recycle_path
+                item.bin_state = DuplicateBinState.IN_BIN.value
+                item.recycle_path = recycle_path
                 item.recycled_at = now
                 item.updated_at = now
                 record = session.get(DuplicateReclaimRecord, item.content_id)
