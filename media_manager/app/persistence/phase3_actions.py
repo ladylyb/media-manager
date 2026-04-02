@@ -74,9 +74,7 @@ def _duplicate_current_location_path(item: DuplicateReclaimItem) -> str | None:
     if item.bin_state == DuplicateBinState.IN_BIN.value and item.bin_path:
         return item.bin_path
     if item.item_status == DuplicateReclaimItemStatus.RECYCLED.value:
-        return item.recycle_path or item.archive_path
-    if item.item_status == DuplicateReclaimItemStatus.ARCHIVED.value and item.archive_path:
-        return item.archive_path
+        return item.recycle_path
     return None
 
 
@@ -508,8 +506,6 @@ class Phase3ActionService:
 
             stmt = select(DuplicateReclaimItem).where(
                 DuplicateReclaimItem.item_status == DuplicateReclaimItemStatus.ARCHIVED.value,
-                DuplicateReclaimItem.expires_at.is_not(None),
-                DuplicateReclaimItem.expires_at <= _utcnow(),
             )
             if file_instance_ids:
                 stmt = stmt.where(DuplicateReclaimItem.file_instance_id.in_(file_instance_ids))

@@ -902,9 +902,6 @@ class ApplyService:
                 record = session.get(DuplicateReclaimRecord, item.content_id)
                 if record is not None:
                     record.reclaim_status = DuplicateReclaimStatus.ARCHIVED.value
-                    record.archive_path = item.archive_path
-                    record.reclaimed_at = now
-                    record.expires_at = item.expires_at
                     record.updated_at = now
                 logger.debug(
                     "duplicate_reclaim_debug: persisted archive outcome",
@@ -951,9 +948,6 @@ class ApplyService:
                 record = session.get(DuplicateReclaimRecord, item.content_id)
                 if record is not None:
                     record.reclaim_status = DuplicateReclaimStatus.SCHEDULED_FOR_DELETE.value
-                    record.archive_path = item.recycle_path
-                    record.reclaimed_at = now
-                    record.expires_at = item.purge_after_at
                     record.updated_at = now
                 logger.debug(
                     "duplicate_reclaim_debug: persisted recycle outcome",

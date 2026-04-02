@@ -312,9 +312,6 @@ def test_get_duplicate_groups_exposes_duplicate_reclaim_actionable_false_when_fi
                 reclaim_status=DuplicateReclaimStatus.REVIEWED_SAFE_TO_RECLAIM.value,
                 reviewed_at=base + timedelta(seconds=3),
                 reviewed_by="tester",
-                archive_path=None,
-                reclaimed_at=None,
-                expires_at=None,
                 restored_at=None,
                 created_at=base + timedelta(seconds=3),
                 updated_at=base + timedelta(seconds=3),
@@ -534,3 +531,50 @@ def test_duplicate_reclaim_operator_pages_use_bin_native_authority(session_facto
     retention_item = next(item for item in retention_page.items if item.file_instance_id == str(recycled_file))
     assert retention_item.source_path == "/bin/current-recycled.jpg"
     assert retention_item.retention_expires_at == (base - timedelta(days=1)).isoformat()
+
+
+def test_duplicate_reclaim_archive_page_does_not_fallback_to_legacy_archive_path_for_archived_rows(session_factory) -> None:
+    service = OperatorConsoleReadService(session_factory)
+    base = datetime(2026, 3, 3, 13, 0, tzinfo=UTC)
+    content_id = UUID("eeeeeeee-3333-3333-3333-333333333333")
+    file_instance_id = UUID("eeeeeeee-3333-3333-3333-333333333334")
+
+    with session_factory.begin() as session:
+        _add_content(session, content_id, "hash-archive-fallback", base)
+        session.flush()
+        _add_instance(
+            session,
+            file_instance_id=file_instance_id,
+            content_id=content_id,
+            absolute_path="/library/archived.jpg",
+            first_seen_at=base,
+        )
+        session.add(
+            DuplicateReclaimItem(
+                file_instance_id=file_instance_id,
+                content_id=content_id,
+                original_path="/library/archived.jpg",
+                archive_path="/bin/legacy-only-path.jpg",
+                planned_bin_path=None,
+                bin_path=None,
+                item_status="ARCHIVED",
+                reclaimed_at=base,
+                bin_entered_at=None,
+                expires_at=base + timedelta(days=5),
+                restore_expires_at=base + timedelta(days=2),
+                bin_state=None,
+                recycle_path=None,
+                recycled_at=None,
+                purge_after_at=None,
+                purged_at=None,
+                restored_at=None,
+                created_at=base,
+                updated_at=base,
+            )
+        )
+
+    archive_page = service.get_duplicate_reclaim_archive_page(page=1, limit=10)
+
+    archive_item = next(item for item in archive_page.items if item.file_instance_id == str(file_instance_id))
+    assert archive_item.archive_path == ""
+    assert archive_item.expires_at == (base + timedelta(days=2)).isoformat()
