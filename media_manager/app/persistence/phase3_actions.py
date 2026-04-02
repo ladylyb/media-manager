@@ -14,6 +14,7 @@ from media_manager.app.core.state_machine import RunState, validate_transition
 from media_manager.app.persistence.apply import ApplyService
 from media_manager.app.persistence.base import transactional_session
 from media_manager.app.persistence.models import (
+    DuplicateBinState,
     DuplicateReclaimItem,
     DuplicateReclaimItemStatus,
     DuplicateReclaimRecord,
@@ -238,9 +239,14 @@ class Phase3ActionService:
                             content_id=file_instance.content_id,
                             original_path=file_instance.absolute_path,
                             archive_path=archive_path,
+                            planned_bin_path=archive_path,
+                            bin_path=None,
                             item_status=DuplicateReclaimItemStatus.PENDING.value,
                             reclaimed_at=None,
+                            bin_entered_at=None,
                             expires_at=expires_at,
+                            restore_expires_at=expires_at,
+                            bin_state=DuplicateBinState.PENDING_MOVE.value,
                             restored_at=None,
                             created_at=now,
                             updated_at=now,
@@ -252,8 +258,13 @@ class Phase3ActionService:
                     # to use this field as the source of truth during the migration window.
                     existing.original_path = file_instance.absolute_path
                     existing.archive_path = archive_path
+                    existing.planned_bin_path = archive_path
+                    existing.bin_path = None
                     existing.item_status = DuplicateReclaimItemStatus.PENDING.value
                     existing.expires_at = expires_at
+                    existing.bin_entered_at = None
+                    existing.restore_expires_at = expires_at
+                    existing.bin_state = DuplicateBinState.PENDING_MOVE.value
                     existing.recycle_path = None
                     existing.recycled_at = None
                     existing.purge_after_at = None

@@ -35,6 +35,7 @@ from media_manager.app.persistence.models import (
     FailureEvent,
     FailurePhase,
     CanonicalAssignment,
+    DuplicateBinState,
     DuplicateReclaimItem,
     DuplicateReclaimItemStatus,
     FileInstance,
@@ -890,8 +891,13 @@ class ApplyService:
         if action.action_type == "RECLAIM_ARCHIVE":
             item = session.get(DuplicateReclaimItem, action.file_id)
             if item is not None:
+                archive_path = outcome.target_path or item.archive_path
                 item.item_status = DuplicateReclaimItemStatus.ARCHIVED.value
+                item.bin_path = archive_path
                 item.reclaimed_at = now
+                item.bin_entered_at = now
+                item.restore_expires_at = item.expires_at
+                item.bin_state = DuplicateBinState.IN_BIN.value
                 item.updated_at = now
                 record = session.get(DuplicateReclaimRecord, item.content_id)
                 if record is not None:

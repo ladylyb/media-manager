@@ -196,6 +196,13 @@ class DuplicateReclaimItemStatus(StrEnum):
     RECYCLED = "RECYCLED"
 
 
+class DuplicateBinState(StrEnum):
+    PENDING_MOVE = "PENDING_MOVE"
+    IN_BIN = "IN_BIN"
+    RESTORED = "RESTORED"
+    PURGED = "PURGED"
+
+
 class IntegrityQuarantineStatus(StrEnum):
     PENDING = "PENDING"
     QUARANTINED = "QUARANTINED"
