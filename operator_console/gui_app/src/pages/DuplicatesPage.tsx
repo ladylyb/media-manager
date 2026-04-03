@@ -316,8 +316,16 @@ function getPlaybackStatusLabel(issue: IntegrityIssue): string {
   return issue.status === "BROKEN" ? binStateLabels.wontPlay : binStateLabels.needsChecking;
 }
 
+function getPreferredKeepCopyLabel(): string {
+  return "Preferred keep copy";
+}
+
+function getPreferredKeepCopyStaysText(): string {
+  return "The preferred keep copy stays in place.";
+}
+
 function getPlaybackRoleLabel(file: DuplicateFile): string {
-  return file.is_canonical ? "Preferred keep copy" : "Extra copy";
+  return file.is_canonical ? getPreferredKeepCopyLabel() : "Extra copy";
 }
 
 function getPlaybackImpactPresentation(affectedFiles: DuplicateFile[]) {
@@ -380,7 +388,7 @@ function renderRecommendationDetails(recommendation: DuplicateRecommendation | n
 function getGalleryActionSummary(groupCount: number, appliedCount: number) {
   const groupLabel = `${groupCount} group${groupCount === 1 ? "" : "s"}`;
   const fileLabel = `${appliedCount} duplicate file${appliedCount === 1 ? "" : "s"}`;
-  return `${fileLabel} moved from ${groupLabel} into the Recycle Bin. The keep copy stayed in place.`;
+  return `${fileLabel} moved from ${groupLabel} into the Recycle Bin. ${getPreferredKeepCopyStaysText()}`;
 }
 
 function getGalleryNoOpSummary(
@@ -1074,7 +1082,7 @@ export default function DuplicatesPage() {
             ) : null}
             <div className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
               <div className="space-y-2">
-                <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Keep copy</p>
+                <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{getPreferredKeepCopyLabel()}</p>
                 <DuplicateMediaPreview
                   src={keepCopy.preview_url ?? (keepCopy.is_image ? keepCopy.media_url ?? keepCopy.thumbnail_url : null)}
                   alt={basename(keepCopy.path)}
@@ -1164,7 +1172,7 @@ export default function DuplicatesPage() {
           </div>
           <div className="grid gap-3 md:grid-cols-2">
             <div className="space-y-2">
-              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Keep copy</p>
+              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{getPreferredKeepCopyLabel()}</p>
               {keepCopy ? (
                 <DuplicateMediaPreview
                   src={keepCopy.preview_url ?? (keepCopy.is_image ? keepCopy.media_url ?? keepCopy.thumbnail_url : null)}
@@ -1176,7 +1184,7 @@ export default function DuplicatesPage() {
                 />
               ) : (
                 <div className="rounded-[24px] border border-border/70 bg-background/70 p-4 text-sm text-muted-foreground">
-                  Keep copy preview is not available for this item.
+                  Preferred keep copy preview is not available for this item.
                 </div>
               )}
             </div>
@@ -1273,7 +1281,7 @@ export default function DuplicatesPage() {
 
         <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
           <div className="space-y-2">
-            <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Keep copy</p>
+            <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{getPreferredKeepCopyLabel()}</p>
             <DuplicateMediaPreview
               src={keepCopy.preview_url ?? (keepCopy.is_image ? keepCopy.media_url ?? keepCopy.thumbnail_url : null)}
               alt={basename(keepCopy.path)}
@@ -1306,7 +1314,7 @@ export default function DuplicatesPage() {
 
         <div className="mt-4 flex flex-col gap-3 border-t border-border/70 pt-4 lg:flex-row lg:items-center lg:justify-between">
           <p className="text-sm text-muted-foreground">
-            Move only this group&apos;s extra copies into the Recycle Bin. The keep copy stays in place.
+            Move only this group&apos;s extra copies into the Recycle Bin. {getPreferredKeepCopyStaysText()}
           </p>
           <div className="flex flex-wrap gap-2">
             <Button
@@ -1375,7 +1383,7 @@ export default function DuplicatesPage() {
 
         <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
           <div className="space-y-2">
-            <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Keep copy</p>
+            <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{getPreferredKeepCopyLabel()}</p>
             {keepCopy ? (
               <DuplicateMediaPreview
                 src={keepCopy.preview_url ?? (keepCopy.is_image ? keepCopy.media_url ?? keepCopy.thumbnail_url : null)}
@@ -1387,7 +1395,7 @@ export default function DuplicatesPage() {
               />
             ) : (
               <div className="rounded-[24px] border border-border/70 bg-background/70 p-4 text-sm text-muted-foreground">
-                Keep copy preview is not available for this item.
+                Preferred keep copy preview is not available for this item.
               </div>
             )}
           </div>
@@ -1709,7 +1717,7 @@ export default function DuplicatesPage() {
                           {selected && recycleBinLifecycleGroupIds.has(selected.group_id) ? (
                             <div className="flex flex-col gap-1 rounded-[18px] border border-border/70 bg-background/70 px-3 py-2.5">
                               <p className="text-sm font-medium text-foreground">In Recycle Bin</p>
-                              <p className="text-sm text-muted-foreground">Extra copies are already in the Recycle Bin. The keep copy stays in place.</p>
+                              <p className="text-sm text-muted-foreground">Extra copies are already in the Recycle Bin. {getPreferredKeepCopyStaysText()}</p>
                             </div>
                           ) : null}
                           {(selected.integrity_issue_count ?? 0) > 0 ? (
@@ -1736,7 +1744,7 @@ export default function DuplicatesPage() {
 
                         <div className="grid gap-2.5 xl:grid-cols-[minmax(0,1.65fr)_minmax(0,1.05fr)]">
                           <DuplicateFocusCard
-                            badge="Keep copy"
+                            badge={getPreferredKeepCopyLabel()}
                             description="Use this copy as the point of comparison for the current review."
                             emphasis="success"
                             file={selectedCanonical}
@@ -1854,7 +1862,7 @@ export default function DuplicatesPage() {
                             </div>
                             <div className="space-y-2">
                               <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-                                Keep copy path
+                                Preferred keep copy path
                               </p>
                               <p className="break-all font-mono text-xs text-foreground">{selected.canonical_path}</p>
                             </div>
@@ -1871,7 +1879,7 @@ export default function DuplicatesPage() {
                                 >
                                   <div className="flex flex-wrap items-center gap-2">
                                     <StatusBadge
-                                      label={file.is_canonical ? "Keep copy" : "Extra copy"}
+                                      label={file.is_canonical ? getPreferredKeepCopyLabel() : "Extra copy"}
                                       severity={file.is_canonical ? "success" : "neutral"}
                                     />
                                     <StatusBadge label={file.file_instance_id || "No file ID"} severity="neutral" />
@@ -1887,7 +1895,7 @@ export default function DuplicatesPage() {
                   ) : (
                     <EmptyState
                       title="Select a group to compare"
-                      description="Choose a duplicate group from the current filter to compare the keep copy against an extra copy."
+                      description="Choose a duplicate group from the current filter to compare the preferred keep copy against an extra copy."
                     />
                   )}
                 </CardContent>
@@ -1965,7 +1973,7 @@ export default function DuplicatesPage() {
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div>
                       <p className="text-sm font-semibold text-foreground">Ready for Bin</p>
-                      <p className="text-sm text-muted-foreground">This workflow view is filtered from the backend recommendation. The keep copy always stays in place.</p>
+                      <p className="text-sm text-muted-foreground">This workflow view is filtered from the backend recommendation. {getPreferredKeepCopyStaysText()}</p>
                     </div>
                     {readyForBinViewMode !== "focus" ? (
                       <div className="flex flex-wrap gap-2">

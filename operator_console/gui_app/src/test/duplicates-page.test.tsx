@@ -797,7 +797,7 @@ describe("DuplicatesPage", () => {
 
     expect(await screen.findByTestId("ready-for-bin-focused-panel")).toBeInTheDocument();
     expect(screen.getByTestId("ready-for-bin-focused-title")).toHaveTextContent("alpha-main.jpg");
-    expect(screen.getAllByText("Keep copy").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Preferred keep copy").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Extra copies").length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: "Select current group" })).not.toBeInTheDocument();
 
@@ -839,7 +839,7 @@ describe("DuplicatesPage", () => {
         retention_days: 21,
       });
       expect(
-        screen.getByText("2 duplicate files moved from 2 groups into the Recycle Bin. The keep copy stayed in place."),
+        screen.getByText("2 duplicate files moved from 2 groups into the Recycle Bin. The preferred keep copy stays in place."),
       ).toBeInTheDocument();
     });
   });
@@ -967,7 +967,7 @@ describe("DuplicatesPage", () => {
     const processView = renderPage("/duplicates?tab=ready-for-bin");
 
     expect(
-      await screen.findByText("This workflow view is filtered from the backend recommendation. The keep copy always stays in place."),
+      await screen.findByText("This workflow view is filtered from the backend recommendation. The preferred keep copy stays in place."),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Mark safe to remove" })).not.toBeInTheDocument();
     expect(screen.getAllByText("alpha-main.jpg").length).toBeGreaterThan(0);
@@ -986,7 +986,7 @@ describe("DuplicatesPage", () => {
         retention_days: 21,
       });
       expect(
-        screen.getByText("1 duplicate file moved from 1 group into the Recycle Bin. The keep copy stayed in place."),
+        screen.getByText("1 duplicate file moved from 1 group into the Recycle Bin. The preferred keep copy stays in place."),
       ).toBeInTheDocument();
     });
 
@@ -1065,7 +1065,7 @@ describe("DuplicatesPage", () => {
         retention_days: 21,
       });
       expect(mocks.getDuplicateBinItems).toHaveBeenCalledWith({ page: 1, limit: 50 });
-      expect(screen.getByText("1 duplicate file moved from 1 group into the Recycle Bin. The keep copy stayed in place.")).toBeInTheDocument();
+      expect(screen.getByText("1 duplicate file moved from 1 group into the Recycle Bin. The preferred keep copy stays in place.")).toBeInTheDocument();
     });
   });
 
@@ -1274,7 +1274,7 @@ describe("DuplicatesPage", () => {
     expect(await screen.findByRole("heading", { name: "Review duplicates" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Needs review" }));
     expect(await screen.findByText("In Recycle Bin")).toBeInTheDocument();
-    expect(await screen.findByText("Extra copies are already in the Recycle Bin. The keep copy stays in place.")).toBeInTheDocument();
+    expect(await screen.findByText("Extra copies are already in the Recycle Bin. The preferred keep copy stays in place.")).toBeInTheDocument();
     expect(screen.getAllByText("Needs review").length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole("button", { name: "Show group navigation" }));
