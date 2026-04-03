@@ -1377,8 +1377,27 @@ describe("DuplicatesPage", () => {
         integrity_issue_count: 2,
         integrity_broken_count: 1,
         integrity_suspect_count: 1,
+        duplicate_recommendation: buildRecommendation({
+          state: "DO_NOT_MOVE",
+          classification: "BLOCK",
+          primary_reason_code: "KEEP_COPY_UNHEALTHY",
+          reason_codes: ["KEEP_COPY_UNHEALTHY"],
+          operator_explanation: "The keep copy has playback issues. Do not move extras yet.",
+        }),
       },
-      buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
+      {
+        ...buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
+        integrity_issue_count: 1,
+        integrity_broken_count: 1,
+        integrity_suspect_count: 0,
+        duplicate_recommendation: buildRecommendation({
+          state: "SAFE_TO_MOVE_EXTRAS",
+          classification: "INFO",
+          primary_reason_code: "EXTRA_COPIES_UNHEALTHY_ONLY",
+          reason_codes: ["EXTRA_COPIES_UNHEALTHY_ONLY"],
+          operator_explanation: "Keep copy is healthy. Some extras have playback issues, but extras can still move.",
+        }),
+      },
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
     mocks.getIntegrityIssues.mockResolvedValue({
@@ -1402,6 +1421,14 @@ describe("DuplicatesPage", () => {
           },
           {
             check_id: "check-3",
+            file_instance_id: "group-beta-duplicate-0",
+            absolute_path: "/library/beta-copy.jpg",
+            status: "BROKEN",
+            confidence: 1,
+            signal_types: ["decode"],
+          },
+          {
+            check_id: "check-4",
             file_instance_id: "unrelated-file",
             absolute_path: "/library/unrelated.jpg",
             status: "BROKEN",
@@ -1417,10 +1444,31 @@ describe("DuplicatesPage", () => {
     expect(await screen.findByRole("heading", { name: "Playback issues" })).toBeInTheDocument();
     expect(screen.getByText("Playback issues in duplicate groups")).toBeInTheDocument();
     expect(screen.getAllByText("alpha-main.jpg").length).toBeGreaterThan(0);
-    expect(screen.getByText("Playback issue")).toBeInTheDocument();
+    expect(screen.getAllByText("beta-main.jpg").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Playback issue").length).toBeGreaterThan(0);
     expect(screen.getByText("Needs checking")).toBeInTheDocument();
+    expect(screen.getAllByText("Preferred keep copy").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Extra copy").length).toBeGreaterThan(0);
+    expect(screen.getByText("Affects preferred keep copy")).toBeInTheDocument();
+    expect(screen.getByText("Affects extra copy only")).toBeInTheDocument();
+    expect(screen.getByText("Do not move")).toBeInTheDocument();
+    expect(screen.getByText("Safe to move extra copies")).toBeInTheDocument();
+    expect(screen.getByText("The keep copy has playback issues. Do not move extras yet.")).toBeInTheDocument();
+    expect(screen.getByText("Keep copy is healthy. Some extras have playback issues, but extras can still move.")).toBeInTheDocument();
+    expect(screen.queryByText("KEEP_COPY_UNHEALTHY")).not.toBeInTheDocument();
+    expect(screen.queryByText("EXTRA_COPIES_UNHEALTHY_ONLY")).not.toBeInTheDocument();
     expect(screen.queryByText("unrelated.jpg")).not.toBeInTheDocument();
     expect(screen.queryByText("Quick")).not.toBeInTheDocument();
+
+    const alphaCard = screen.getByTestId("playback-group-card-group-alpha");
+    const betaCard = screen.getByTestId("playback-group-card-group-beta");
+
+    expect(within(alphaCard).getByText("Playback issue")).toBeInTheDocument();
+    expect(within(alphaCard).getByText("Affects preferred keep copy")).toBeInTheDocument();
+    expect(within(alphaCard).getByText("Do not move")).toBeInTheDocument();
+    expect(within(betaCard).getByText("Playback issue")).toBeInTheDocument();
+    expect(within(betaCard).getByText("Affects extra copy only")).toBeInTheDocument();
+    expect(within(betaCard).getByText("Safe to move extra copies")).toBeInTheDocument();
   });
 
   it("renders video poster previews in the comparison cards and review queue", async () => {

@@ -316,6 +316,23 @@ function getPlaybackStatusLabel(issue: IntegrityIssue): string {
   return issue.status === "BROKEN" ? binStateLabels.wontPlay : binStateLabels.needsChecking;
 }
 
+function getPlaybackRoleLabel(file: DuplicateFile): string {
+  return file.is_canonical ? "Preferred keep copy" : "Extra copy";
+}
+
+function getPlaybackImpactPresentation(affectedFiles: DuplicateFile[]) {
+  if (affectedFiles.some((file) => file.is_canonical)) {
+    return {
+      label: "Affects preferred keep copy",
+      explanation: "One of these playback issues affects the copy this group would normally keep.",
+    };
+  }
+  return {
+    label: "Affects extra copy only",
+    explanation: "These playback issues are limited to extra copies in this duplicate group.",
+  };
+}
+
 function getMutationSummary(payload: unknown): MutationSummary {
   if (!payload || typeof payload !== "object") return {};
   const summary = (payload as { summary?: MutationSummary }).summary;
@@ -2317,8 +2334,15 @@ export default function DuplicatesPage() {
                 <div className="space-y-4">
                   {duplicatePlaybackGroups.map(({ group, issues, brokenCount, suspectCount, affectedFiles }) => {
                     const hasBlockingCue = issues.some(isIssueBlocking);
+                    const playbackImpact = getPlaybackImpactPresentation(affectedFiles);
+                    const recommendation = getDuplicateRecommendation(group);
+                    const recommendationPresentation = recommendation ? getRecommendationPresentation(recommendation) : null;
                     return (
-                      <Card key={group.group_id} className="rounded-[24px] border-border/70 bg-card/95 shadow-sm">
+                      <Card
+                        key={group.group_id}
+                        data-testid={`playback-group-card-${group.group_id}`}
+                        className="rounded-[24px] border-border/70 bg-card/95 shadow-sm"
+                      >
                         <CardContent className="space-y-4 p-4">
                           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                             <div className="min-w-0 space-y-2">
@@ -2341,6 +2365,24 @@ export default function DuplicatesPage() {
                                   ? "A copy in this group may not play. You can keep reviewing here, but this does not change the current removal rules."
                                   : "A copy in this group needs checking. Deeper diagnosis still belongs in Integrity Review."}
                               </p>
+                              <div data-testid={`playback-impact-${group.group_id}`} className="space-y-1">
+                                <p className="text-sm font-medium text-foreground">{playbackImpact.label}</p>
+                                <p className="text-xs text-muted-foreground">{playbackImpact.explanation}</p>
+                              </div>
+                              {recommendation && recommendationPresentation ? (
+                                <div
+                                  data-testid={`playback-recommendation-${group.group_id}`}
+                                  className="space-y-1 rounded-2xl border border-border/70 bg-background/70 px-3 py-2"
+                                >
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <StatusBadge
+                                      label={recommendationPresentation.label}
+                                      severity={recommendationPresentation.severity}
+                                    />
+                                  </div>
+                                  <p className="text-xs text-muted-foreground">{recommendation.operator_explanation}</p>
+                                </div>
+                              ) : null}
                             </div>
                             <div className="flex gap-2">
                               <Button
@@ -2382,6 +2424,7 @@ export default function DuplicatesPage() {
                                             severity={issue.status === "BROKEN" ? "destructive" : "caution"}
                                           />
                                         ))}
+                                        <StatusBadge label={getPlaybackRoleLabel(file)} severity="neutral" />
                                       </div>
                                     </div>
                                   );
