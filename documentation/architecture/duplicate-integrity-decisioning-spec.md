@@ -282,6 +282,8 @@ Use `SAFE_TO_MOVE_EXTRAS` only when:
 
 This recommendation may still carry warning reason codes such as extra copies being unhealthy. The warnings explain context, but they do not change the recommendation label.
 
+In Phase 1, `primary_reason_code` remains mandatory for every recommendation outcome.
+
 ### Unknown vs unhealthy vs missing identity
 
 These must be treated separately.
@@ -382,6 +384,9 @@ Important product decision:
 
 - broken or suspect extra copies alone do not block movement if the keep copy is healthy and the group has been positively reviewed
 - the recommendation should still attach warning reason codes explaining that some extras have playback issues, but the recommendation label remains `SAFE_TO_MOVE_EXTRAS`
+- positive `SAFE_TO_MOVE_EXTRAS` outcomes use:
+  - `SAFE_TO_MOVE_REVIEWED_DUPLICATES` for the clean-safe case
+  - `EXTRA_COPIES_UNHEALTHY_ONLY` for the safe-with-warning case
 
 ### Severity model
 
@@ -422,6 +427,7 @@ Recommended compact reason-code set:
 | `KEEP_COPY_UNHEALTHY` | operator-facing | keep copy is broken |
 | `KEEP_COPY_SUSPECT` | operator-facing | keep copy is suspect |
 | `KEEP_COPY_UNKNOWN` | operator-facing | keep copy exists but integrity truth is missing/incomplete |
+| `SAFE_TO_MOVE_REVIEWED_DUPLICATES` | operator-facing | keep copy is healthy, review is favorable, and no warning-grade extra condition is present |
 | `EXTRA_COPIES_UNHEALTHY_ONLY` | operator-facing | only extra copies are unhealthy; keep copy is healthy |
 | `MIXED_EXTRA_HEALTH` | operator-facing | extras have mixed healthy and unhealthy conditions |
 | `EXTRA_HEALTH_UNKNOWN` | operator-facing | extras lack complete integrity evidence |
@@ -432,15 +438,18 @@ Recommended compact reason-code set:
 
 Reason-code usage rules:
 
+- `primary_reason_code` remains mandatory in Phase 1
 - primary UI surfaces should show friendly explanation text derived from these codes
 - raw code strings may appear in details panels or diagnostics, but should not be the only operator explanation
 - technical-only codes should be limited and should not dominate primary workflow screens
+- new reason codes must be added to this accepted spec before or together with implementation; implementation-only taxonomy drift is not allowed
 
 Condition -> reason -> explanation examples:
 
 | Rule condition | Reason code(s) | Operator explanation |
 | --- | --- | --- |
 | keep copy is broken | `KEEP_COPY_UNHEALTHY` | Keep copy has playback issues. Do not move extras yet. |
+| keep copy healthy, extras healthy | `SAFE_TO_MOVE_REVIEWED_DUPLICATES` | Keep copy is healthy and the group is approved for movement. |
 | keep copy healthy, extras broken | `EXTRA_COPIES_UNHEALTHY_ONLY` | Keep copy is healthy. Some extras have playback issues, but extras can still move. |
 | canonical mapping missing | `CANONICAL_MAPPING_MISSING` | The keep copy is not clearly identified yet. Resolve canonical selection first. |
 | review no longer matches current group | `REVIEW_STALE` | This group changed since it was reviewed. Review it again before moving. |
