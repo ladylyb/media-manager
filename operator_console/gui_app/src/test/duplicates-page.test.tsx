@@ -5,6 +5,61 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import DuplicatesPage from "@/pages/DuplicatesPage";
 
+function buildRecommendation(
+  overrides: Partial<{
+    state: string;
+    classification: string;
+    primary_reason_code: string;
+    reason_codes: string[];
+    operator_explanation: string;
+    review_is_stale: boolean;
+    integrity_is_stale: boolean;
+    lifecycle_context: {
+      already_in_bin: boolean;
+      restore_expired: boolean;
+    };
+    keep_summary: {
+      identity_status: string;
+      integrity_status: string;
+    };
+    extra_summary: {
+      health_class: string;
+      active_count: number;
+      healthy_count: number;
+      suspect_count: number;
+      broken_count: number;
+      unknown_count: number;
+    };
+  }> = {},
+) {
+  return {
+    state: "REVIEW_REQUIRED",
+    classification: "WARN",
+    primary_reason_code: "REVIEW_REQUIRED_BY_OPERATOR_STATE",
+    reason_codes: ["REVIEW_REQUIRED_BY_OPERATOR_STATE"],
+    operator_explanation: "This group is not yet operator-approved for movement.",
+    review_is_stale: false,
+    integrity_is_stale: false,
+    lifecycle_context: {
+      already_in_bin: false,
+      restore_expired: false,
+    },
+    keep_summary: {
+      identity_status: "KNOWN",
+      integrity_status: "OK",
+    },
+    extra_summary: {
+      health_class: "EXTRAS_ALL_HEALTHY",
+      active_count: 1,
+      healthy_count: 1,
+      suspect_count: 0,
+      broken_count: 0,
+      unknown_count: 0,
+    },
+    ...overrides,
+  };
+}
+
 const mocks = vi.hoisted(() => ({
   moveDuplicatesToBin: vi.fn(),
   getDuplicateBinPolicy: vi.fn(),
@@ -37,6 +92,16 @@ function buildGroup(id: string, canonicalName: string, duplicateNames: string[])
     integrity_suspect_count: 0,
     reclaimable_file_count: duplicateNames.length,
     estimated_reclaim_bytes: 4 * 1024 * 1024,
+    duplicate_recommendation: buildRecommendation({
+      extra_summary: {
+        health_class: duplicateNames.length ? "EXTRAS_ALL_HEALTHY" : "NO_ACTIVE_EXTRAS",
+        active_count: duplicateNames.length,
+        healthy_count: duplicateNames.length,
+        suspect_count: 0,
+        broken_count: 0,
+        unknown_count: 0,
+      },
+    }),
     duplicates: [
       {
         file_instance_id: `${id}-canonical`,
@@ -69,6 +134,16 @@ function buildVideoGroup(id: string, canonicalName: string, duplicateNames: stri
     canonical_path: `/library/${canonicalName}`,
     reclaimable_file_count: duplicateNames.length,
     estimated_reclaim_bytes: 4 * 1024 * 1024,
+    duplicate_recommendation: buildRecommendation({
+      extra_summary: {
+        health_class: duplicateNames.length ? "EXTRAS_ALL_HEALTHY" : "NO_ACTIVE_EXTRAS",
+        active_count: duplicateNames.length,
+        healthy_count: duplicateNames.length,
+        suspect_count: 0,
+        broken_count: 0,
+        unknown_count: 0,
+      },
+    }),
     duplicates: [
       {
         file_instance_id: `${id}-canonical`,
@@ -91,6 +166,28 @@ function buildVideoGroup(id: string, canonicalName: string, duplicateNames: stri
         is_canonical: false,
       })),
     ],
+  };
+}
+
+function markGroupSafeToMove<T extends Record<string, unknown>>(group: T, explanation?: string): T {
+  return {
+    ...group,
+    review_status: "looks_right",
+    duplicate_recommendation: buildRecommendation({
+      state: "SAFE_TO_MOVE_EXTRAS",
+      classification: "INFO",
+      primary_reason_code: "SAFE_TO_MOVE_REVIEWED_DUPLICATES",
+      reason_codes: ["SAFE_TO_MOVE_REVIEWED_DUPLICATES"],
+      operator_explanation: explanation ?? "Keep copy is healthy and the group is approved for movement.",
+      extra_summary: {
+        health_class: "EXTRAS_ALL_HEALTHY",
+        active_count: Number(group.reclaimable_file_count ?? 0),
+        healthy_count: Number(group.reclaimable_file_count ?? 0),
+        suspect_count: 0,
+        broken_count: 0,
+        unknown_count: 0,
+      },
+    }),
   };
 }
 
@@ -204,6 +301,43 @@ describe("DuplicatesPage", () => {
     expect(screen.getByRole("button", { name: "Mark as looks right" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Move to Recycle Bin" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Mark safe to remove" })).not.toBeInTheDocument();
+  });
+
+  it("shows the system recommendation separately from the human review state on Review duplicates", async () => {
+    groupsData = [
+      {
+        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
+        review_status: "looks_right",
+        duplicate_recommendation: buildRecommendation({
+          state: "SAFE_TO_MOVE_EXTRAS",
+          classification: "INFO",
+          primary_reason_code: "EXTRA_COPIES_UNHEALTHY_ONLY",
+          reason_codes: ["EXTRA_COPIES_UNHEALTHY_ONLY"],
+          operator_explanation: "Keep copy is healthy. Some extras have playback issues, but extras can still move.",
+          extra_summary: {
+            health_class: "EXTRAS_ALL_UNHEALTHY",
+            active_count: 1,
+            healthy_count: 0,
+            suspect_count: 0,
+            broken_count: 1,
+            unknown_count: 0,
+          },
+        }),
+      },
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Looks right" }));
+
+    expect(await screen.findByTestId("review-recommendation-card")).toBeInTheDocument();
+    expect(screen.getByTestId("review-recommendation-card")).toHaveTextContent("System recommendation");
+    expect(screen.getByTestId("review-recommendation-card")).toHaveTextContent("Safe to move extra copies");
+    expect(screen.getByTestId("review-recommendation-card")).toHaveTextContent(
+      "Keep copy is healthy. Some extras have playback issues, but extras can still move.",
+    );
+    expect(screen.getByTestId("review-human-review-card")).toHaveTextContent("Human review");
+    expect(screen.getByTestId("review-human-review-card")).toHaveTextContent("Looks right");
   });
 
   it("toggles the side navigation open and closed without breaking the comparison area", async () => {
@@ -328,10 +462,7 @@ describe("DuplicatesPage", () => {
 
   it("maps the legacy removal deep link to Ready for Bin and keeps restore actions separate", async () => {
     groupsData = [
-      {
-        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
-        review_status: "looks_right",
-      },
+      markGroupSafeToMove(buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"])),
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
 
@@ -345,17 +476,70 @@ describe("DuplicatesPage", () => {
     expect(screen.queryByRole("button", { name: "Restore from Recycle Bin" })).not.toBeInTheDocument();
     expect(
       screen.getByText(
-        "Move eligible extra copies into the Recycle Bin here. Restore happens only on the Recycle Bin tab.",
+        "These groups are currently recommended as safe to move into the Recycle Bin. Restore happens only on the Recycle Bin tab.",
       ),
     ).toBeInTheDocument();
   });
 
+  it("uses SAFE_TO_MOVE_EXTRAS as the only Ready for Bin bucket filter", async () => {
+    groupsData = [
+      markGroupSafeToMove(buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"])),
+      {
+        ...buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
+        duplicate_recommendation: buildRecommendation({
+          state: "REVIEW_REQUIRED",
+          classification: "WARN",
+          primary_reason_code: "KEEP_COPY_UNKNOWN",
+          reason_codes: ["KEEP_COPY_UNKNOWN"],
+          operator_explanation: "Keep copy health is not confirmed yet. Refresh integrity evidence first.",
+        }),
+      },
+      {
+        ...buildGroup("group-gamma", "gamma-main.jpg", ["gamma-copy.jpg"]),
+        duplicate_recommendation: buildRecommendation({
+          state: "DO_NOT_MOVE",
+          classification: "BLOCK",
+          primary_reason_code: "KEEP_COPY_UNHEALTHY",
+          reason_codes: ["KEEP_COPY_UNHEALTHY"],
+          operator_explanation: "The keep copy has playback issues. Do not move extras yet.",
+        }),
+      },
+      {
+        ...buildGroup("group-delta", "delta-main.jpg", ["delta-copy.jpg"]),
+        duplicate_recommendation: buildRecommendation({
+          state: "ALREADY_IN_BIN",
+          classification: "INFO",
+          primary_reason_code: "GROUP_ALREADY_IN_BIN",
+          reason_codes: ["GROUP_ALREADY_IN_BIN"],
+          operator_explanation: "This group is already in the bin. Manage it there instead of moving it again.",
+        }),
+      },
+      {
+        ...buildGroup("group-epsilon", "epsilon-main.jpg", ["epsilon-copy.jpg"]),
+        duplicate_recommendation: buildRecommendation({
+          state: "EXPIRED_IN_BIN",
+          classification: "INFO",
+          primary_reason_code: "BIN_RESTORE_EXPIRED",
+          reason_codes: ["BIN_RESTORE_EXPIRED"],
+          operator_explanation: "This group is already in the bin and the restore window has expired.",
+        }),
+      },
+    ];
+    mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
+
+    renderPage("/duplicates?tab=ready-for-bin");
+    fireEvent.click(await screen.findByTestId("ready-for-bin-view-gallery"));
+
+    expect(await screen.findByTestId("ready-for-bin-gallery-card-group-alpha")).toBeInTheDocument();
+    expect(screen.queryByTestId("ready-for-bin-gallery-card-group-beta")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("ready-for-bin-gallery-card-group-gamma")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("ready-for-bin-gallery-card-group-delta")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("ready-for-bin-gallery-card-group-epsilon")).not.toBeInTheDocument();
+  });
+
   it("defaults Ready for Bin to Focus and Recycle Bin to Gallery, with quiet alternate toggles", async () => {
     groupsData = [
-      {
-        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
-        review_status: "looks_right",
-      },
+      markGroupSafeToMove(buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"])),
       {
         ...buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
         review_status: "needs_review",
@@ -536,14 +720,8 @@ describe("DuplicatesPage", () => {
 
   it("supports focused Previous and Next navigation across ready groups on Ready for Bin", async () => {
     groupsData = [
-      {
-        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
-        review_status: "looks_right",
-      },
-      {
-        ...buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
-        review_status: "looks_right",
-      },
+      markGroupSafeToMove(buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"])),
+      markGroupSafeToMove(buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"])),
       buildGroup("group-gamma", "gamma-main.jpg", ["gamma-copy.jpg"]),
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
@@ -566,14 +744,8 @@ describe("DuplicatesPage", () => {
 
   it("supports group-level multi-select in Gallery and moves only the selected groups", async () => {
     groupsData = [
-      {
-        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
-        review_status: "looks_right",
-      },
-      {
-        ...buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
-        review_status: "looks_right",
-      },
+      markGroupSafeToMove(buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"])),
+      markGroupSafeToMove(buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"])),
       buildGroup("group-gamma", "gamma-main.jpg", ["gamma-copy.jpg"]),
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
@@ -610,12 +782,16 @@ describe("DuplicatesPage", () => {
       {
         ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
         review_status: "looks_right",
+        duplicate_recommendation: buildRecommendation({
+          state: "ALREADY_IN_BIN",
+          classification: "INFO",
+          primary_reason_code: "GROUP_ALREADY_IN_BIN",
+          reason_codes: ["GROUP_ALREADY_IN_BIN"],
+          operator_explanation: "This group is already in the bin. Manage it there instead of moving it again.",
+        }),
         reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
       },
-      {
-        ...buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
-        review_status: "looks_right",
-      },
+      markGroupSafeToMove(buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"])),
     ];
     reclaimItemsData = [
       {
@@ -643,13 +819,19 @@ describe("DuplicatesPage", () => {
       {
         ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
         review_status: "looks_right",
+        duplicate_recommendation: buildRecommendation({
+          state: "DO_NOT_MOVE",
+          classification: "BLOCK",
+          primary_reason_code: "CANONICAL_MAPPING_MISSING",
+          reason_codes: ["CANONICAL_MAPPING_MISSING"],
+          operator_explanation: "The keep copy is not clearly identified. Resolve canonical mapping first.",
+        }),
         reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
         duplicate_reclaim_actionable: false,
         duplicate_reclaim_unavailable_reason: "missing_canonical_file_content_mapping",
       },
       {
-        ...buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
-        review_status: "looks_right",
+        ...markGroupSafeToMove(buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"])),
         reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
         duplicate_reclaim_actionable: true,
       },
@@ -668,10 +850,7 @@ describe("DuplicatesPage", () => {
 
   it("uses Looks right groups as the only move-eligible groups and shows move and restore feedback", async () => {
     groupsData = [
-      {
-        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
-        review_status: "looks_right",
-      },
+      markGroupSafeToMove(buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"])),
       buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
@@ -721,7 +900,7 @@ describe("DuplicatesPage", () => {
     const processView = renderPage("/duplicates?tab=ready-for-bin");
 
     expect(
-      await screen.findByText("Only groups marked “Looks right” can be moved to the Recycle Bin. The keep copy always stays in place."),
+      await screen.findByText("This workflow view is filtered from the backend recommendation. The keep copy always stays in place."),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Mark safe to remove" })).not.toBeInTheDocument();
     expect(screen.getAllByText("alpha-main.jpg").length).toBeGreaterThan(0);
@@ -764,10 +943,7 @@ describe("DuplicatesPage", () => {
 
   it("refreshes recycle-bin data on page 1 after a successful bulk move", async () => {
     groupsData = [
-      {
-        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
-        review_status: "looks_right",
-      },
+      markGroupSafeToMove(buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"])),
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
     let moved = false;
@@ -828,10 +1004,7 @@ describe("DuplicatesPage", () => {
 
   it("shows explicit sync failure feedback and blocks the move action when the bridge update fails", async () => {
     groupsData = [
-      {
-        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
-        review_status: "looks_right",
-      },
+      markGroupSafeToMove(buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"])),
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
     mocks.setDuplicateReclaim.mockRejectedValue(new Error("bridge failed"));
@@ -857,8 +1030,7 @@ describe("DuplicatesPage", () => {
   it("shows explicit planned-but-skipped feedback when the move plans work but apply skips the file action", async () => {
     groupsData = [
       {
-        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
-        review_status: "looks_right",
+        ...markGroupSafeToMove(buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"])),
         reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
       },
     ];
@@ -894,8 +1066,7 @@ describe("DuplicatesPage", () => {
   it("shows explicit zero-planned feedback when the backend rejects the selected group before planning", async () => {
     groupsData = [
       {
-        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
-        review_status: "looks_right",
+        ...markGroupSafeToMove(buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"])),
         reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
       },
     ];
@@ -946,8 +1117,7 @@ describe("DuplicatesPage", () => {
   it("moves a reviewed group back out of Ready for Bin when its review state changes", async () => {
     groupsData = [
       {
-        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
-        review_status: "looks_right",
+        ...markGroupSafeToMove(buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"])),
         reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
       },
     ];
@@ -969,14 +1139,12 @@ describe("DuplicatesPage", () => {
   it("routes restored groups back into Review duplicates with a dedicated Restored filter", async () => {
     groupsData = [
       {
-        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
-        review_status: "looks_right",
+        ...markGroupSafeToMove(buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"])),
         reviewed_at: "2026-03-21T10:00:00+00:00",
         reclaim_status: "RESTORED",
       },
       {
-        ...buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
-        review_status: "looks_right",
+        ...markGroupSafeToMove(buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"])),
         reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
       },
     ];
@@ -1054,8 +1222,7 @@ describe("DuplicatesPage", () => {
   it("drops a restored group out of the Restored filter after it is reviewed again and returns it to Ready for Bin", async () => {
     groupsData = [
       {
-        ...buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"]),
-        review_status: "looks_right",
+        ...markGroupSafeToMove(buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"])),
         reviewed_at: "2026-03-21T10:00:00+00:00",
         reclaim_status: "RESTORED",
       },
@@ -1116,6 +1283,13 @@ describe("DuplicatesPage", () => {
             review_status: "looks_right",
             reviewed_at: "2026-03-23T10:00:00+00:00",
             reclaim_status: "REVIEWED_SAFE_TO_RECLAIM",
+            duplicate_recommendation: buildRecommendation({
+              state: "SAFE_TO_MOVE_EXTRAS",
+              classification: "INFO",
+              primary_reason_code: "SAFE_TO_MOVE_REVIEWED_DUPLICATES",
+              reason_codes: ["SAFE_TO_MOVE_REVIEWED_DUPLICATES"],
+              operator_explanation: "Keep copy is healthy and the group is approved for movement.",
+            }),
           }
         : group,
     );

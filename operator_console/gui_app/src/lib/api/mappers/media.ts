@@ -5,6 +5,7 @@ import type {
   CanonicalFileDetail,
   DuplicateFile,
   DuplicateGroup,
+  DuplicateRecommendation,
   DuplicateReclaimItem,
   HashAuditResult,
   IntegrityDashboard,
@@ -53,6 +54,10 @@ export function mapDuplicateGroups(payload: Record<string, unknown>): DuplicateG
   return groups.map((group) => {
     const row = group as Record<string, unknown>;
     const files = Array.isArray(row.files) ? row.files : [];
+    const recommendation =
+      row.duplicate_recommendation && typeof row.duplicate_recommendation === "object"
+        ? (row.duplicate_recommendation as Record<string, unknown>)
+        : null;
     const canonical = (row.canonical_file ?? {}) as Record<string, unknown>;
     const canonicalPath = String(canonical.absolute_path ?? "");
     const mappedFiles: DuplicateFile[] = files.map((file) => {
@@ -93,6 +98,53 @@ export function mapDuplicateGroups(payload: Record<string, unknown>): DuplicateG
       integrity_issue_count: Number(row.integrity_issue_count ?? 0),
       integrity_broken_count: Number(row.integrity_broken_count ?? 0),
       integrity_suspect_count: Number(row.integrity_suspect_count ?? 0),
+      duplicate_recommendation: recommendation
+        ? {
+            state: String(recommendation.state ?? "REVIEW_REQUIRED") as DuplicateRecommendation["state"],
+            classification: String(recommendation.classification ?? "WARN") as DuplicateRecommendation["classification"],
+            primary_reason_code: String(recommendation.primary_reason_code ?? "REVIEW_REQUIRED_BY_OPERATOR_STATE") as DuplicateRecommendation["primary_reason_code"],
+            reason_codes: Array.isArray(recommendation.reason_codes) ? recommendation.reason_codes.map(String) : [],
+            operator_explanation: String(recommendation.operator_explanation ?? ""),
+            review_is_stale: Boolean(recommendation.review_is_stale),
+            integrity_is_stale: Boolean(recommendation.integrity_is_stale),
+            lifecycle_context: {
+              already_in_bin: Boolean(
+                (recommendation.lifecycle_context as Record<string, unknown> | undefined)?.already_in_bin,
+              ),
+              restore_expired: Boolean(
+                (recommendation.lifecycle_context as Record<string, unknown> | undefined)?.restore_expired,
+              ),
+            },
+            keep_summary: {
+              identity_status: String(
+                (recommendation.keep_summary as Record<string, unknown> | undefined)?.identity_status ?? "KNOWN",
+              ) as DuplicateRecommendation["keep_summary"]["identity_status"],
+              integrity_status: String(
+                (recommendation.keep_summary as Record<string, unknown> | undefined)?.integrity_status ?? "UNKNOWN",
+              ) as DuplicateRecommendation["keep_summary"]["integrity_status"],
+            },
+            extra_summary: {
+              health_class: String(
+                (recommendation.extra_summary as Record<string, unknown> | undefined)?.health_class ?? "EXTRAS_UNKNOWN",
+              ) as DuplicateRecommendation["extra_summary"]["health_class"],
+              active_count: Number(
+                (recommendation.extra_summary as Record<string, unknown> | undefined)?.active_count ?? 0,
+              ),
+              healthy_count: Number(
+                (recommendation.extra_summary as Record<string, unknown> | undefined)?.healthy_count ?? 0,
+              ),
+              suspect_count: Number(
+                (recommendation.extra_summary as Record<string, unknown> | undefined)?.suspect_count ?? 0,
+              ),
+              broken_count: Number(
+                (recommendation.extra_summary as Record<string, unknown> | undefined)?.broken_count ?? 0,
+              ),
+              unknown_count: Number(
+                (recommendation.extra_summary as Record<string, unknown> | undefined)?.unknown_count ?? 0,
+              ),
+            },
+          }
+        : null,
     };
   });
 }

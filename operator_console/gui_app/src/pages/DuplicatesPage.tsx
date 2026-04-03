@@ -32,7 +32,14 @@ import {
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
 import { cn } from "@/lib/utils";
-import type { DuplicateFile, DuplicateGroup, DuplicateReclaimItem, IntegrityIssue, PaginatedResponse } from "@/types";
+import type {
+  DuplicateFile,
+  DuplicateGroup,
+  DuplicateRecommendation,
+  DuplicateReclaimItem,
+  IntegrityIssue,
+  PaginatedResponse,
+} from "@/types";
 
 type ReviewMark = "looks_right" | "needs_review" | "not_sure";
 type ReviewFilter = "all" | "unreviewed" | "restored" | ReviewMark;
@@ -79,10 +86,6 @@ interface DuplicateBinPolicy {
   implementation: string;
 }
 
-interface ReadyGroupOptions {
-  blockedGroupIds?: string[];
-}
-
 const reviewOptions: Array<{ value: ReviewFilter; label: string }> = [
   { value: "all", label: "All" },
   { value: "unreviewed", label: "Still to review" },
@@ -107,6 +110,31 @@ const binStateLabels = {
   playbackIssue: "Playback issue",
   wontPlay: "Won't play",
 } as const;
+
+const recommendationStateLabels: Record<DuplicateRecommendation["state"], string> = {
+  SAFE_TO_MOVE_EXTRAS: "Safe to move extra copies",
+  REVIEW_REQUIRED: "Review required",
+  DO_NOT_MOVE: "Do not move",
+  ALREADY_IN_BIN: "Already in Recycle Bin",
+  EXPIRED_IN_BIN: "Restore window ended",
+};
+
+const recommendationReasonLabels: Record<string, string> = {
+  GROUP_ALREADY_IN_BIN: "Already in the Recycle Bin",
+  BIN_RESTORE_EXPIRED: "Restore window expired",
+  CANONICAL_MAPPING_MISSING: "Keep copy mapping missing",
+  KEEP_COPY_UNHEALTHY: "Keep copy unhealthy",
+  KEEP_COPY_SUSPECT: "Keep copy suspect",
+  KEEP_COPY_UNKNOWN: "Keep copy health unknown",
+  EXTRA_COPIES_UNHEALTHY_ONLY: "Extra copies have playback issues",
+  SAFE_TO_MOVE_REVIEWED_DUPLICATES: "Reviewed and ready",
+  MIXED_EXTRA_HEALTH: "Mixed extra-copy health",
+  EXTRA_HEALTH_UNKNOWN: "Extra-copy health unknown",
+  REVIEW_REQUIRED_BY_OPERATOR_STATE: "Operator review not approved",
+  REVIEW_STALE: "Review is stale",
+  INTEGRITY_EVIDENCE_STALE: "Integrity evidence stale",
+  NO_ACTIVE_EXTRAS: "No active extra copies",
+};
 
 function getErrorMessage(err: unknown): string | null {
   if (!err) return null;
@@ -155,9 +183,43 @@ function getReviewPresentation(mark?: ReviewMark, isStale = false) {
   }
 }
 
+function getRecommendationPresentation(recommendation: DuplicateRecommendation | null | undefined) {
+  if (!recommendation) {
+    return {
+      label: "Recommendation unavailable",
+      severity: "neutral" as const,
+    };
+  }
+  switch (recommendation.state) {
+    case "SAFE_TO_MOVE_EXTRAS":
+      return { label: recommendationStateLabels[recommendation.state], severity: "success" as const };
+    case "REVIEW_REQUIRED":
+      return { label: recommendationStateLabels[recommendation.state], severity: "caution" as const };
+    case "DO_NOT_MOVE":
+      return { label: recommendationStateLabels[recommendation.state], severity: "destructive" as const };
+    case "ALREADY_IN_BIN":
+      return { label: recommendationStateLabels[recommendation.state], severity: "info" as const };
+    case "EXPIRED_IN_BIN":
+      return { label: recommendationStateLabels[recommendation.state], severity: "caution" as const };
+  }
+}
+
 function currentReviewMark(group: DuplicateGroup): ReviewMark | undefined {
   if (group.is_stale) return undefined;
   return group.review_status ?? undefined;
+}
+
+function getDuplicateRecommendation(group: DuplicateGroup): DuplicateRecommendation | null {
+  return group.duplicate_recommendation ?? null;
+}
+
+function isReadyForBinRecommendation(group: DuplicateGroup): boolean {
+  return getDuplicateRecommendation(group)?.state === "SAFE_TO_MOVE_EXTRAS";
+}
+
+function getRecommendationReasonLabels(recommendation: DuplicateRecommendation | null | undefined): string[] {
+  if (!recommendation) return [];
+  return recommendation.reason_codes.map((code) => recommendationReasonLabels[code] ?? code);
 }
 
 function reviewMarksByGroup(groups: DuplicateGroup[]): Record<string, ReviewMark> {
@@ -243,34 +305,9 @@ function isPendingRemovalStatus(status: DuplicateGroup["reclaim_status"] | undef
   return status === "ARCHIVED" || status === "RESTORED" || status === "SCHEDULED_FOR_DELETE";
 }
 
-function getArchivedBinItemCountByGroup(duplicateBinItems: DuplicateBinItem[]) {
-  return duplicateBinItems.reduce<Record<string, number>>((acc, item) => {
-    if (item.item_status !== "ARCHIVED") return acc;
-    acc[item.content_id] = (acc[item.content_id] ?? 0) + 1;
-    return acc;
-  }, {});
-}
-
-function deriveActionableReadyGroups(
-  groups: DuplicateGroup[],
-  duplicateBinItems: DuplicateBinItem[],
-  options: ReadyGroupOptions = {},
-) {
-  const blockedIds = new Set(options.blockedGroupIds ?? []);
-  const archivedCounts = getArchivedBinItemCountByGroup(duplicateBinItems);
-
-  return groups.filter((group) => {
-    const reclaimableCount = group.reclaimable_file_count ?? 0;
-    const archivedCount = archivedCounts[group.group_id] ?? 0;
-    return (
-      currentReviewMark(group) === "looks_right" &&
-      group.duplicate_reclaim_actionable !== false &&
-      reclaimableCount > 0 &&
-      archivedCount < reclaimableCount &&
-      !isPendingRemovalStatus(group.reclaim_status) &&
-      !blockedIds.has(group.group_id)
-    );
-  });
+function deriveActionableReadyGroups(groups: DuplicateGroup[]) {
+  // Ready for Bin is a UI workflow bucket over server-derived recommendation state only.
+  return groups.filter((group) => isReadyForBinRecommendation(group));
 }
 
 function getKeepCopy(group: DuplicateGroup): DuplicateFile | null {
@@ -279,6 +316,21 @@ function getKeepCopy(group: DuplicateGroup): DuplicateFile | null {
 
 function getExtraCopies(group: DuplicateGroup): DuplicateFile[] {
   return group.duplicates.filter((file) => !file.is_canonical);
+}
+
+function renderRecommendationDetails(recommendation: DuplicateRecommendation | null | undefined) {
+  if (!recommendation) return null;
+  const reasonLabels = getRecommendationReasonLabels(recommendation);
+  return (
+    <div className="space-y-2">
+      <p className="text-sm text-muted-foreground">{recommendation.operator_explanation}</p>
+      <div className="flex flex-wrap items-center gap-2">
+        {reasonLabels.map((label) => (
+          <StatusBadge key={label} label={label} severity="neutral" />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function getGalleryActionSummary(groupCount: number, appliedCount: number) {
@@ -563,9 +615,7 @@ export default function DuplicatesPage() {
 
   const selectedDuplicate =
     selectedDuplicates.find((file) => file.file_instance_id === selectedDuplicateId) ?? selectedDuplicates[0] ?? null;
-  const readyGroups = deriveActionableReadyGroups(sortedGroups, duplicateBinItems, {
-    blockedGroupIds: reclaimBridgeBlockedIds,
-  });
+  const readyGroups = deriveActionableReadyGroups(sortedGroups);
   const readyExtraCopyCount = readyGroups.reduce((sum, group) => sum + (group.reclaimable_file_count ?? 0), 0);
   const readyEstimatedBytes = readyGroups.reduce((sum, group) => sum + (group.estimated_reclaim_bytes ?? 0), 0);
   const readyGroupIds = new Set(readyGroups.map((group) => group.group_id));
@@ -921,6 +971,7 @@ export default function DuplicatesPage() {
   function renderGalleryReadyCard(group: DuplicateGroup) {
     const keepCopy = getKeepCopy(group);
     const extraCopies = getExtraCopies(group);
+    const recommendation = getDuplicateRecommendation(group);
     if (!keepCopy) return null;
     const isSelected = selectedReadyGroupIds.includes(group.group_id);
     const isFocused = focusedReadyGroupId === group.group_id;
@@ -942,6 +993,12 @@ export default function DuplicatesPage() {
               <p className="text-sm text-muted-foreground">
                 {extraCopies.length === 1 ? "1 extra copy" : `${extraCopies.length} extra copies`} • {formatBytes(group.estimated_reclaim_bytes ?? 0)}
               </p>
+              <div className="pt-1">
+                <StatusBadge
+                  label={getRecommendationPresentation(recommendation).label}
+                  severity={getRecommendationPresentation(recommendation).severity}
+                />
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <Checkbox
@@ -966,6 +1023,11 @@ export default function DuplicatesPage() {
               }
             }}
           >
+            {recommendation ? (
+              <div className="rounded-[18px] border border-border/70 bg-background/70 px-3 py-2.5">
+                <p className="text-sm text-muted-foreground">{recommendation.operator_explanation}</p>
+              </div>
+            ) : null}
             <div className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
               <div className="space-y-2">
                 <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Keep copy</p>
@@ -1112,6 +1174,7 @@ export default function DuplicatesPage() {
     const keepCopy = getKeepCopy(group);
     if (!keepCopy) return null;
     const extraCopies = getExtraCopies(group);
+    const recommendation = getDuplicateRecommendation(group);
     return (
       <div
         data-testid="ready-for-bin-focused-panel"
@@ -1126,6 +1189,12 @@ export default function DuplicatesPage() {
             <p className="text-sm text-muted-foreground">
               {focusedReadyIndex + 1} of {readyGroups.length} ready groups • {extraCopies.length === 1 ? "1 extra copy" : `${extraCopies.length} extra copies`} • {formatBytes(group.estimated_reclaim_bytes ?? 0)}
             </p>
+            <div className="pt-1">
+              <StatusBadge
+                label={getRecommendationPresentation(recommendation).label}
+                severity={getRecommendationPresentation(recommendation).severity}
+              />
+            </div>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button
@@ -1150,6 +1219,20 @@ export default function DuplicatesPage() {
             </Button>
           </div>
         </div>
+
+        {recommendation ? (
+          <div className="mt-4 rounded-[18px] border border-primary/20 bg-primary/5 px-4 py-3">
+            <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Recommendation</p>
+            <div className="mt-2 space-y-2">
+              <p className="text-sm text-foreground">{recommendation.operator_explanation}</p>
+              <div className="flex flex-wrap gap-2">
+                {getRecommendationReasonLabels(recommendation).map((label) => (
+                  <StatusBadge key={label} label={label} severity="neutral" />
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
           <div className="space-y-2">
@@ -1417,7 +1500,7 @@ export default function DuplicatesPage() {
                     <div>
                       <h2 className="text-lg font-semibold tracking-tight text-foreground">Review duplicates</h2>
                       <p className="mt-1 text-sm text-muted-foreground">
-                        Compare one group at a time, decide whether the extra copies look safe to remove, and move on.
+                        Compare one group at a time, follow the system recommendation, and keep your own review decision separate.
                       </p>
                     </div>
                     <p className="text-sm text-muted-foreground">{reviewProgressLabel} in sequence</p>
@@ -1429,7 +1512,7 @@ export default function DuplicatesPage() {
                 <div className="space-y-2">
                   <h2 className="text-xl font-semibold tracking-tight text-foreground">Ready for Bin</h2>
                   <p className="text-sm text-muted-foreground">
-                    Move eligible extra copies into the Recycle Bin here. Restore happens only on the Recycle Bin tab.
+                    These groups are currently recommended as safe to move into the Recycle Bin. Restore happens only on the Recycle Bin tab.
                   </p>
                 </div>
               </TabsContent>
@@ -1538,6 +1621,40 @@ export default function DuplicatesPage() {
                                 {basename(selected.canonical_path)}
                               </p>
                               <p className="text-sm text-muted-foreground">{reviewMetaLine.replace("matching copies", "extra copies").replace("matching copy", "extra copy")}</p>
+                            </div>
+                          </div>
+                          <div
+                            data-testid="review-recommendation-card"
+                            className="rounded-[18px] border border-primary/20 bg-primary/5 px-3 py-3"
+                          >
+                            <div className="space-y-2">
+                              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">System recommendation</p>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <StatusBadge
+                                  label={getRecommendationPresentation(getDuplicateRecommendation(selected)).label}
+                                  severity={getRecommendationPresentation(getDuplicateRecommendation(selected)).severity}
+                                />
+                              </div>
+                              {renderRecommendationDetails(getDuplicateRecommendation(selected))}
+                            </div>
+                          </div>
+                          <div
+                            data-testid="review-human-review-card"
+                            className="rounded-[18px] border border-border/70 bg-background/70 px-3 py-3"
+                          >
+                            <div className="space-y-2">
+                              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Human review</p>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <StatusBadge
+                                  label={getReviewPresentation(currentReviewMark(selected), Boolean(selected.is_stale)).label}
+                                  severity={getReviewPresentation(currentReviewMark(selected), Boolean(selected.is_stale)).severity}
+                                />
+                              </div>
+                              <p className="text-sm text-muted-foreground">
+                                {selected.reviewed_at
+                                  ? `Last reviewed ${new Date(selected.reviewed_at).toLocaleString()}.`
+                                  : "No saved review yet. Choose the mark that best fits this group."}
+                              </p>
                             </div>
                           </div>
                           <DuplicateReviewActionBar
@@ -1816,7 +1933,7 @@ export default function DuplicatesPage() {
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div>
                       <p className="text-sm font-semibold text-foreground">Ready for Bin</p>
-                      <p className="text-sm text-muted-foreground">Only groups marked “Looks right” can be moved to the Recycle Bin. The keep copy always stays in place.</p>
+                      <p className="text-sm text-muted-foreground">This workflow view is filtered from the backend recommendation. The keep copy always stays in place.</p>
                     </div>
                     {readyForBinViewMode !== "focus" ? (
                       <div className="flex flex-wrap gap-2">
@@ -1904,6 +2021,7 @@ export default function DuplicatesPage() {
                     <div data-testid="ready-for-bin-list" className="space-y-3">
                       {readyGroups.map((group) => {
                         const isSelected = selectedReadyGroupIds.includes(group.group_id);
+                        const recommendation = getDuplicateRecommendation(group);
                         return (
                           <div
                             key={group.group_id}
@@ -1933,13 +2051,19 @@ export default function DuplicatesPage() {
                                 <div className="flex flex-wrap items-center gap-2">
                                   <StatusBadge label={binStateLabels.ready} severity="success" />
                                   <StatusBadge
+                                    label={getRecommendationPresentation(recommendation).label}
+                                    severity={getRecommendationPresentation(recommendation).severity}
+                                  />
+                                  <StatusBadge
                                     label={`${group.reclaimable_file_count ?? 0} extra cop${(group.reclaimable_file_count ?? 0) === 1 ? "y" : "ies"}`}
                                     severity="neutral"
                                   />
                                   <StatusBadge label={formatBytes(group.estimated_reclaim_bytes ?? 0)} severity="info" />
                                 </div>
                                 <p className="truncate text-sm font-semibold text-foreground">{basename(group.canonical_path)}</p>
-                                <p className="text-xs text-muted-foreground">Review state: Looks right</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {recommendation?.operator_explanation ?? "Move only the extra copies from this group into the Recycle Bin."}
+                                </p>
                               </div>
                             </div>
                             <Button
