@@ -322,9 +322,9 @@ function renderRecommendationDetails(recommendation: DuplicateRecommendation | n
   if (!recommendation) return null;
   const reasonLabels = getRecommendationReasonLabels(recommendation);
   return (
-    <div className="space-y-2">
+    <div data-testid="review-recommendation-details" className="space-y-2">
       <p className="text-sm text-muted-foreground">{recommendation.operator_explanation}</p>
-      <div className="flex flex-wrap items-center gap-2">
+      <div data-testid="review-recommendation-reasons" className="flex flex-wrap items-center gap-2">
         {reasonLabels.map((label) => (
           <StatusBadge key={label} label={label} severity="neutral" />
         ))}

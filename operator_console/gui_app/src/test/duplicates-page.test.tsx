@@ -336,8 +336,13 @@ describe("DuplicatesPage", () => {
     expect(screen.getByTestId("review-recommendation-card")).toHaveTextContent(
       "Keep copy is healthy. Some extras have playback issues, but extras can still move.",
     );
+    expect(screen.getByTestId("review-recommendation-details")).toHaveTextContent(
+      "Keep copy is healthy. Some extras have playback issues, but extras can still move.",
+    );
+    expect(screen.getByTestId("review-recommendation-reasons")).toHaveTextContent("Extra copies have playback issues");
     expect(screen.getByTestId("review-human-review-card")).toHaveTextContent("Human review");
     expect(screen.getByTestId("review-human-review-card")).toHaveTextContent("Looks right");
+    expect(screen.getByTestId("review-human-review-card")).not.toHaveTextContent("Extra copies have playback issues");
   });
 
   it("toggles the side navigation open and closed without breaking the comparison area", async () => {
@@ -485,6 +490,18 @@ describe("DuplicatesPage", () => {
     groupsData = [
       markGroupSafeToMove(buildGroup("group-alpha", "alpha-main.jpg", ["alpha-copy.jpg"])),
       {
+        ...buildGroup("group-safe-warning", "safe-warning-main.jpg", ["safe-warning-copy.jpg"]),
+        duplicate_recommendation: buildRecommendation({
+          state: "SAFE_TO_MOVE_EXTRAS",
+          classification: "INFO",
+          primary_reason_code: "EXTRA_COPIES_UNHEALTHY_ONLY",
+          reason_codes: ["EXTRA_COPIES_UNHEALTHY_ONLY"],
+          operator_explanation: "Keep copy is healthy. Some extras have playback issues, but extras can still move.",
+          review_is_stale: true,
+          integrity_is_stale: true,
+        }),
+      },
+      {
         ...buildGroup("group-beta", "beta-main.jpg", ["beta-copy.jpg"]),
         duplicate_recommendation: buildRecommendation({
           state: "REVIEW_REQUIRED",
@@ -524,6 +541,18 @@ describe("DuplicatesPage", () => {
           operator_explanation: "This group is already in the bin and the restore window has expired.",
         }),
       },
+      {
+        ...buildGroup("group-favorable-looking", "favorable-main.jpg", ["favorable-copy.jpg"]),
+        duplicate_recommendation: buildRecommendation({
+          state: "REVIEW_REQUIRED",
+          classification: "WARN",
+          primary_reason_code: "SAFE_TO_MOVE_REVIEWED_DUPLICATES",
+          reason_codes: ["SAFE_TO_MOVE_REVIEWED_DUPLICATES"],
+          operator_explanation: "Keep copy is healthy and the group is approved for movement.",
+          review_is_stale: false,
+          integrity_is_stale: false,
+        }),
+      },
     ];
     mocks.getDuplicates.mockImplementation(async () => ({ data: groupsData }));
 
@@ -531,10 +560,12 @@ describe("DuplicatesPage", () => {
     fireEvent.click(await screen.findByTestId("ready-for-bin-view-gallery"));
 
     expect(await screen.findByTestId("ready-for-bin-gallery-card-group-alpha")).toBeInTheDocument();
+    expect(screen.getByTestId("ready-for-bin-gallery-card-group-safe-warning")).toBeInTheDocument();
     expect(screen.queryByTestId("ready-for-bin-gallery-card-group-beta")).not.toBeInTheDocument();
     expect(screen.queryByTestId("ready-for-bin-gallery-card-group-gamma")).not.toBeInTheDocument();
     expect(screen.queryByTestId("ready-for-bin-gallery-card-group-delta")).not.toBeInTheDocument();
     expect(screen.queryByTestId("ready-for-bin-gallery-card-group-epsilon")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("ready-for-bin-gallery-card-group-favorable-looking")).not.toBeInTheDocument();
   });
 
   it("defaults Ready for Bin to Focus and Recycle Bin to Gallery, with quiet alternate toggles", async () => {
