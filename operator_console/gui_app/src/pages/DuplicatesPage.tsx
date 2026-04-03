@@ -86,6 +86,14 @@ interface DuplicateBinPolicy {
   implementation: string;
 }
 
+interface RecycleBinPresentation {
+  primary_label: string;
+  primary_severity: "neutral" | "info" | "caution";
+  explanation: string;
+  timing_label: string | null;
+  timing_severity: "info" | "caution";
+}
+
 const reviewOptions: Array<{ value: ReviewFilter; label: string }> = [
   { value: "all", label: "All" },
   { value: "unreviewed", label: "Still to review" },
@@ -165,6 +173,25 @@ function parseTimestamp(value: string | null | undefined): number | null {
   if (!value) return null;
   const parsed = new Date(value).getTime();
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getRecycleBinPresentation(item: RecycleBinDisplayItem): RecycleBinPresentation {
+  if (item.restore_allowed) {
+    return {
+      primary_label: binStateLabels.inBin,
+      primary_severity: "neutral",
+      explanation: "Restore is still available for this extra copy while the restore window remains open.",
+      timing_label: item.expires_at ? formatDaysRemaining(item.expires_at) ?? binStateLabels.daysRemaining : null,
+      timing_severity: "info",
+    };
+  }
+  return {
+    primary_label: binStateLabels.restoreWindowEnded,
+    primary_severity: "caution",
+    explanation: "This entry is no longer restorable and remains visible here until a later purge removes it.",
+    timing_label: item.expires_at ? binStateLabels.expired : null,
+    timing_severity: "caution",
+  };
 }
 
 function getReviewPresentation(mark?: ReviewMark, isStale = false) {
@@ -1086,6 +1113,7 @@ export default function DuplicatesPage() {
       group?.duplicates.find((file) => file.file_instance_id === item.file_instance_id) ??
       group?.duplicates.find((file) => !file.is_canonical) ??
       null;
+    const presentation = getRecycleBinPresentation(item);
 
     return (
       <Card key={item.file_instance_id} className="rounded-[24px] border-border/70 bg-card/95 shadow-sm">
@@ -1094,26 +1122,18 @@ export default function DuplicatesPage() {
             <div className="min-w-0 space-y-1">
               <div className="flex flex-wrap items-center gap-2">
                 <StatusBadge
-                  label={item.restore_allowed ? binStateLabels.inBin : binStateLabels.expired}
-                  severity={item.restore_allowed ? "neutral" : "caution"}
+                  label={presentation.primary_label}
+                  severity={presentation.primary_severity}
                 />
-                {item.expires_at ? (
+                {presentation.timing_label ? (
                   <StatusBadge
-                    label={
-                      item.restore_allowed
-                        ? formatDaysRemaining(item.expires_at) ?? binStateLabels.daysRemaining
-                        : binStateLabels.restoreWindowEnded
-                    }
-                    severity={item.restore_allowed ? "info" : "caution"}
+                    label={presentation.timing_label}
+                    severity={presentation.timing_severity}
                   />
                 ) : null}
               </div>
               <p className="truncate text-base font-semibold text-foreground">{basename(item.original_path)}</p>
-              <p className="text-sm text-muted-foreground">
-                {item.restore_allowed
-                  ? "Restore from the Recycle Bin here while the restore window is still open."
-                  : "Restore window ended. This file stays visible here until a later purge removes it."}
-              </p>
+              <p className="text-sm text-muted-foreground">{presentation.explanation}</p>
             </div>
             <Button
               type="button"
@@ -1293,6 +1313,7 @@ export default function DuplicatesPage() {
       group?.duplicates.find((file) => file.file_instance_id === item.file_instance_id) ??
       group?.duplicates.find((file) => !file.is_canonical) ??
       null;
+    const presentation = getRecycleBinPresentation(item);
 
     return (
       <div data-testid="recycle-bin-focused-panel" className="rounded-[22px] border border-border/70 bg-background/80 p-4">
@@ -1304,10 +1325,12 @@ export default function DuplicatesPage() {
             </p>
             <p className="text-sm text-muted-foreground">
               {focusedArchivedIndex + 1} of {recycleBinItems.length} items in Recycle Bin
-              {item.expires_at
-                ? ` • ${item.restore_allowed ? formatDaysRemaining(item.expires_at) ?? binStateLabels.daysRemaining : binStateLabels.restoreWindowEnded}`
-                : ""}
+              {presentation.timing_label ? ` • ${presentation.timing_label}` : ""}
             </p>
+            <div className="pt-1">
+              <StatusBadge label={presentation.primary_label} severity={presentation.primary_severity} />
+            </div>
+            <p className="text-sm text-muted-foreground">{presentation.explanation}</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button
@@ -1368,10 +1391,6 @@ export default function DuplicatesPage() {
               </div>
             )}
             <div className="space-y-1">
-              <StatusBadge
-                label={item.restore_allowed ? binStateLabels.inBin : binStateLabels.expired}
-                severity={item.restore_allowed ? "neutral" : "caution"}
-              />
               <p className="truncate text-xs font-medium text-foreground">{basename(item.original_path)}</p>
               <p className="truncate text-xs text-muted-foreground">{item.archive_path}</p>
             </div>
@@ -1379,11 +1398,7 @@ export default function DuplicatesPage() {
         </div>
 
         <div className="mt-4 flex flex-col gap-3 border-t border-border/70 pt-4 lg:flex-row lg:items-center lg:justify-between">
-          <p className="text-sm text-muted-foreground">
-            {item.restore_allowed
-              ? "Restore this extra copy from the Recycle Bin back to its original location."
-              : "Restore window ended. This extra copy remains visible here until it is purged."}
-          </p>
+          <p className="text-sm text-muted-foreground">{presentation.explanation}</p>
           <Button
             type="button"
             size="sm"
@@ -2214,35 +2229,35 @@ export default function DuplicatesPage() {
                     </div>
                   ) : recycleBinViewMode === "list" ? (
                     <div data-testid="recycle-bin-list" className="space-y-3">
-                      {recycleBinItems.map((item) => (
-                        <div
-                          key={item.file_instance_id}
-                          className="flex flex-col gap-3 rounded-[22px] border border-border/70 bg-background/70 p-4 lg:flex-row lg:items-center lg:justify-between"
-                        >
-                          <div className="min-w-0 space-y-2">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <StatusBadge
-                                label={item.restore_allowed ? binStateLabels.inBin : binStateLabels.expired}
-                                severity={item.restore_allowed ? "neutral" : "caution"}
-                              />
-                              <StatusBadge
-                                label={item.restore_allowed ? formatDaysRemaining(item.expires_at) ?? binStateLabels.daysRemaining : binStateLabels.restoreWindowEnded}
-                                severity={item.restore_allowed ? "info" : "caution"}
-                              />
-                            </div>
-                            <p className="truncate text-sm font-semibold text-foreground">{basename(item.original_path)}</p>
-                            <p className="truncate text-xs text-muted-foreground">{item.archive_path}</p>
-                          </div>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={() => void handleRestore(item)}
-                            disabled={restoreFromBinMutation.isPending || !item.restore_allowed}
+                      {recycleBinItems.map((item) => {
+                        const presentation = getRecycleBinPresentation(item);
+                        return (
+                          <div
+                            key={item.file_instance_id}
+                            className="flex flex-col gap-3 rounded-[22px] border border-border/70 bg-background/70 p-4 lg:flex-row lg:items-center lg:justify-between"
                           >
-                            Restore from Recycle Bin
-                          </Button>
-                        </div>
-                      ))}
+                            <div className="min-w-0 space-y-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <StatusBadge label={presentation.primary_label} severity={presentation.primary_severity} />
+                                {presentation.timing_label ? (
+                                  <StatusBadge label={presentation.timing_label} severity={presentation.timing_severity} />
+                                ) : null}
+                              </div>
+                              <p className="truncate text-sm font-semibold text-foreground">{basename(item.original_path)}</p>
+                              <p className="text-sm text-muted-foreground">{presentation.explanation}</p>
+                              <p className="truncate text-xs text-muted-foreground">{item.archive_path}</p>
+                            </div>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => void handleRestore(item)}
+                              disabled={restoreFromBinMutation.isPending || !item.restore_allowed}
+                            >
+                              Restore from Recycle Bin
+                            </Button>
+                          </div>
+                        );
+                      })}
                     </div>
                   ) : (
                     focusedArchivedItem ? renderFocusedArchivedItem(focusedArchivedItem) : null

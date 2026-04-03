@@ -650,7 +650,8 @@ describe("DuplicatesPage", () => {
 
     expect(await screen.findByTestId("recycle-bin-gallery")).toBeInTheDocument();
     expect(screen.getAllByText("Restore window ended").length).toBeGreaterThan(0);
-    expect(screen.getByText("Expired")).toBeInTheDocument();
+    expect(screen.getByText("Restore is still available for this extra copy while the restore window remains open.")).toBeInTheDocument();
+    expect(screen.getByText("This entry is no longer restorable and remains visible here until a later purge removes it.")).toBeInTheDocument();
 
     const restoreButtons = screen.getAllByRole("button", { name: "Restore from Recycle Bin" });
     expect(restoreButtons).toHaveLength(2);
@@ -701,9 +702,14 @@ describe("DuplicatesPage", () => {
     expect(screen.getByText("Showing page 1 of 2 for Recycle Bin items.")).toBeInTheDocument();
     expect(screen.getByTestId("recycle-bin-gallery")).toBeInTheDocument();
     expect(screen.getAllByText("75").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Restore window ended").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("In Recycle Bin").length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByTestId("recycle-bin-view-focus"));
     expect(await screen.findByTestId("recycle-bin-focused-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("recycle-bin-focused-panel")).toHaveTextContent(
+      "Restore is still available for this extra copy while the restore window remains open.",
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Next page" }));
 
@@ -747,6 +753,36 @@ describe("DuplicatesPage", () => {
     expect(screen.getAllByText("903").length).toBeGreaterThan(0);
     expect(screen.getAllByText("50").length).toBeGreaterThan(0);
     expect(screen.getByText("Showing page 1 of 19 for Recycle Bin items.")).toBeInTheDocument();
+  });
+
+  it("shows lifecycle-first guidance in the Recycle Bin list without importing review recommendation wording", async () => {
+    reclaimItemsData = [
+      {
+        file_instance_id: "archived-restorable",
+        content_id: "group-alpha",
+        original_path: "/library/alpha-copy.jpg",
+        archive_path: "/archive/alpha-copy.jpg",
+        item_status: "ARCHIVED",
+        expires_at: "2099-04-10T10:00:00+00:00",
+      },
+      {
+        file_instance_id: "archived-expired",
+        content_id: "group-beta",
+        original_path: "/library/beta-copy.jpg",
+        archive_path: "/archive/beta-copy.jpg",
+        item_status: "ARCHIVED",
+        expires_at: "2020-04-10T10:00:00+00:00",
+      },
+    ];
+
+    renderPage("/duplicates?tab=recycle-bin");
+
+    fireEvent.click(await screen.findByTestId("recycle-bin-view-list"));
+
+    expect(await screen.findByTestId("recycle-bin-list")).toBeInTheDocument();
+    expect(screen.getByText("Restore is still available for this extra copy while the restore window remains open.")).toBeInTheDocument();
+    expect(screen.getByText("This entry is no longer restorable and remains visible here until a later purge removes it.")).toBeInTheDocument();
+    expect(screen.queryByText("Safe to move extra copies")).not.toBeInTheDocument();
   });
 
   it("supports focused Previous and Next navigation across ready groups on Ready for Bin", async () => {
