@@ -46,6 +46,57 @@ export interface DuplicateGroup {
   integrity_issue_count?: number;
   integrity_broken_count?: number;
   integrity_suspect_count?: number;
+  duplicate_recommendation?: DuplicateRecommendation | null;
+}
+
+export interface DuplicateRecommendation {
+  state:
+    | "SAFE_TO_MOVE_EXTRAS"
+    | "REVIEW_REQUIRED"
+    | "DO_NOT_MOVE"
+    | "ALREADY_IN_BIN"
+    | "EXPIRED_IN_BIN";
+  classification: "INFO" | "WARN" | "BLOCK";
+  primary_reason_code:
+    | "GROUP_ALREADY_IN_BIN"
+    | "BIN_RESTORE_EXPIRED"
+    | "CANONICAL_MAPPING_MISSING"
+    | "KEEP_COPY_UNHEALTHY"
+    | "KEEP_COPY_SUSPECT"
+    | "KEEP_COPY_UNKNOWN"
+    | "EXTRA_COPIES_UNHEALTHY_ONLY"
+    | "SAFE_TO_MOVE_REVIEWED_DUPLICATES"
+    | "MIXED_EXTRA_HEALTH"
+    | "EXTRA_HEALTH_UNKNOWN"
+    | "REVIEW_REQUIRED_BY_OPERATOR_STATE"
+    | "REVIEW_STALE"
+    | "INTEGRITY_EVIDENCE_STALE"
+    | "NO_ACTIVE_EXTRAS";
+  reason_codes: string[];
+  operator_explanation: string;
+  review_is_stale: boolean;
+  integrity_is_stale: boolean;
+  lifecycle_context: {
+    already_in_bin: boolean;
+    restore_expired: boolean;
+  };
+  keep_summary: {
+    identity_status: "KNOWN" | "MISSING";
+    integrity_status: "OK" | "SUSPECT" | "BROKEN" | "UNKNOWN" | "IDENTITY_MISSING";
+  };
+  extra_summary: {
+    health_class:
+      | "NO_ACTIVE_EXTRAS"
+      | "EXTRAS_UNKNOWN"
+      | "EXTRAS_MIXED_HEALTH"
+      | "EXTRAS_ALL_HEALTHY"
+      | "EXTRAS_ALL_UNHEALTHY";
+    active_count: number;
+    healthy_count: number;
+    suspect_count: number;
+    broken_count: number;
+    unknown_count: number;
+  };
 }
 
 export interface DuplicateFile {

@@ -28,6 +28,11 @@ from media_manager.app.persistence.discovery_query import (
     DiscoveryQueryService,
 )
 from media_manager.app.persistence.duplicate_reviews import compute_duplicate_group_signature
+from media_manager.app.persistence.duplicate_integrity_recommendations import (
+    DuplicateRecommendation,
+    DuplicateRecommendationFacts,
+    derive_duplicate_recommendation,
+)
 from media_manager.app.persistence.media_file_queries import (
     get_history_by_path,
     get_reappearances_after_deleted,
@@ -229,6 +234,7 @@ class DuplicateGroupItem:
     integrity_issue_count: int = 0
     integrity_broken_count: int = 0
     integrity_suspect_count: int = 0
+    duplicate_recommendation: DuplicateRecommendation | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Return a JSON-serializable mapping."""
@@ -256,6 +262,9 @@ class DuplicateGroupItem:
             "integrity_issue_count": self.integrity_issue_count,
             "integrity_broken_count": self.integrity_broken_count,
             "integrity_suspect_count": self.integrity_suspect_count,
+            "duplicate_recommendation": (
+                self.duplicate_recommendation.to_dict() if self.duplicate_recommendation is not None else None
+            ),
         }
 
 
@@ -441,6 +450,91 @@ def _duplicate_item_archive_page_path(row: DuplicateReclaimItem) -> str:
     if row.item_status == "PENDING" and row.planned_bin_path:
         return row.planned_bin_path
     return _duplicate_item_current_location(row) or ""
+
+
+def _duplicate_group_recommendation(
+    *,
+    canonical_file: DuplicateFileItem | None,
+    files: tuple[DuplicateFileItem, ...],
+    review_status: str | None,
+    is_stale: bool,
+    reclaim_status: str | None,
+    items: tuple[DuplicateReclaimItem, ...],
+    integrity_by_instance: dict[UUID, tuple[str, str | None]],
+    current_paths_by_instance: dict[UUID, str],
+    now: datetime,
+) -> DuplicateRecommendation:
+    active_extra_ids = {
+        UUID(file.file_instance_id)
+        for file in files
+        if file.role == "DUPLICATE"
+    }
+    keep_identity_known = canonical_file is not None
+    keep_integrity_status: str | None = None
+    if canonical_file is not None:
+        keep_tuple = integrity_by_instance.get(UUID(canonical_file.file_instance_id))
+        if keep_tuple is not None:
+            keep_integrity_status = keep_tuple[0]
+
+    extra_healthy_count = 0
+    extra_suspect_count = 0
+    extra_broken_count = 0
+    extra_unknown_count = 0
+    integrity_is_stale = False
+
+    for file in files:
+        file_id = UUID(file.file_instance_id)
+        integrity_row = integrity_by_instance.get(file_id)
+        expected_path = current_paths_by_instance.get(file_id)
+        if integrity_row is None:
+            integrity_is_stale = True
+            if file.role == "DUPLICATE":
+                extra_unknown_count += 1
+            continue
+        integrity_status, last_scanned_absolute_path = integrity_row
+        if expected_path and last_scanned_absolute_path and last_scanned_absolute_path != expected_path:
+            integrity_is_stale = True
+        if file.role != "DUPLICATE":
+            continue
+        if integrity_status == "OK":
+            extra_healthy_count += 1
+        elif integrity_status == "SUSPECT":
+            extra_suspect_count += 1
+        elif integrity_status == "BROKEN":
+            extra_broken_count += 1
+        else:
+            extra_unknown_count += 1
+
+    already_in_bin = False
+    restore_expired = False
+    if reclaim_status in {"ARCHIVED", "SCHEDULED_FOR_DELETE"}:
+        for item in items:
+            if item.purged_at is not None or item.item_status == "RESTORED":
+                continue
+            if item.bin_state != "IN_BIN":
+                continue
+            already_in_bin = True
+            restore_expires_at = _duplicate_item_restore_expires_at(item)
+            if restore_expires_at is not None and restore_expires_at <= now:
+                restore_expired = True
+                break
+
+    return derive_duplicate_recommendation(
+        DuplicateRecommendationFacts(
+            keep_identity_known=keep_identity_known,
+            keep_integrity_status=keep_integrity_status,
+            extra_active_count=len(active_extra_ids),
+            extra_healthy_count=extra_healthy_count,
+            extra_suspect_count=extra_suspect_count,
+            extra_broken_count=extra_broken_count,
+            extra_unknown_count=extra_unknown_count,
+            review_status=review_status,
+            review_is_stale=is_stale,
+            integrity_is_stale=integrity_is_stale,
+            already_in_bin=already_in_bin,
+            restore_expired=restore_expired,
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -934,7 +1028,11 @@ class OperatorConsoleReadService:
                 )
                 ).all()
             integrity_rows = session.execute(
-                select(IntegrityCheck.file_instance_id, IntegrityCheck.status).where(
+                select(
+                    IntegrityCheck.file_instance_id,
+                    IntegrityCheck.status,
+                    IntegrityCheck.last_scanned_absolute_path,
+                ).where(
                     IntegrityCheck.file_instance_id.in_([file_instance_id for _, file_instance_id, _ in instance_rows])
                 )
             ).all()
@@ -954,7 +1052,13 @@ class OperatorConsoleReadService:
         instance_ids_by_group: dict[UUID, list[UUID]] = {}
         reclaim_bytes_by_group: dict[UUID, int] = {}
         integrity_counts_by_group: dict[UUID, dict[str, int]] = {}
-        integrity_status_by_instance = {file_instance_id: status for file_instance_id, status in integrity_rows}
+        integrity_by_instance = {
+            file_instance_id: (status, last_scanned_absolute_path)
+            for file_instance_id, status, last_scanned_absolute_path in integrity_rows
+        }
+        current_paths_by_instance = {
+            file_instance_id: absolute_path for _content_id, file_instance_id, absolute_path in instance_rows
+        }
         for content_id, file_instance_id, absolute_path in instance_rows:
             instance_id_str = str(file_instance_id)
             media_type = infer_media_type_from_extension(Path(absolute_path)) or "OTHER"
@@ -985,7 +1089,8 @@ class OperatorConsoleReadService:
             existing_group.append(file_item)
             by_group_by_instance.setdefault(content_id, {})[instance_id_str] = file_item
             instance_ids_by_group.setdefault(content_id, []).append(file_instance_id)
-            status = integrity_status_by_instance.get(file_instance_id)
+            integrity_tuple = integrity_by_instance.get(file_instance_id)
+            status = integrity_tuple[0] if integrity_tuple is not None else None
             if status in {"BROKEN", "SUSPECT"}:
                 counts = integrity_counts_by_group.setdefault(content_id, {"BROKEN": 0, "SUSPECT": 0})
                 counts[status] = counts.get(status, 0) + 1
@@ -995,6 +1100,17 @@ class OperatorConsoleReadService:
                 )
 
         output: list[DuplicateGroupItem] = []
+        duplicate_items_by_content: dict[UUID, tuple[DuplicateReclaimItem, ...]] = {}
+        for item in duplicate_reclaim_items:
+            duplicate_items_by_content.setdefault(item.content_id, tuple())
+        if duplicate_reclaim_items:
+            grouped_items: dict[UUID, list[DuplicateReclaimItem]] = {}
+            for item in duplicate_reclaim_items:
+                grouped_items.setdefault(item.content_id, []).append(item)
+            duplicate_items_by_content = {
+                content_id: tuple(items) for content_id, items in grouped_items.items()
+            }
+        now = datetime.now(UTC)
         for content_id in sorted(grouped.keys(), key=str):
             files = tuple(grouped[content_id])
             canonical_file: DuplicateFileItem | None = None
@@ -1043,6 +1159,17 @@ class OperatorConsoleReadService:
                 duplicate_reclaim_actionable = False
                 duplicate_reclaim_unavailable_reason = "reclaim_status_not_actionable"
             integrity_counts = integrity_counts_by_group.get(content_id, {})
+            duplicate_recommendation = _duplicate_group_recommendation(
+                canonical_file=canonical_file,
+                files=files,
+                review_status=review_status,
+                is_stale=is_stale,
+                reclaim_status=reclaim_status,
+                items=duplicate_items_by_content.get(content_id, ()),
+                integrity_by_instance=integrity_by_instance,
+                current_paths_by_instance=current_paths_by_instance,
+                now=now,
+            )
             output.append(
                 DuplicateGroupItem(
                     group_id=str(content_id),
@@ -1062,6 +1189,7 @@ class OperatorConsoleReadService:
                     integrity_issue_count=int(integrity_counts.get("BROKEN", 0) + integrity_counts.get("SUSPECT", 0)),
                     integrity_broken_count=int(integrity_counts.get("BROKEN", 0)),
                     integrity_suspect_count=int(integrity_counts.get("SUSPECT", 0)),
+                    duplicate_recommendation=duplicate_recommendation,
                 )
             )
         return output

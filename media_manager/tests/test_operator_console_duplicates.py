@@ -9,12 +9,15 @@ import pytest
 from media_manager.app.persistence.models import (
     CanonicalAssignment,
     DuplicateBinState,
+    DuplicateGroupReview,
     DuplicateReclaimItem,
     DuplicateReclaimRecord,
     DuplicateReclaimStatus,
     FileContent,
     FileInstance,
     FileInstanceStatus,
+    IntegrityCheck,
+    IntegrityCheckRun,
 )
 from media_manager.app.persistence.operator_console import OperatorConsoleReadService
 
@@ -41,6 +44,51 @@ def _add_instance(
             first_seen_at=first_seen_at,
             last_seen_at=first_seen_at,
             status=status,
+        )
+    )
+
+
+def _add_integrity_check(
+    session,
+    *,
+    check_id: UUID,
+    file_instance_id: UUID,
+    status: str,
+    at: datetime,
+    absolute_path: str,
+) -> None:
+    run_id = UUID(str(check_id))
+    session.add(
+        IntegrityCheckRun(
+            id=run_id,
+            operation_run_id=None,
+            scan_mode="FAST",
+            status="COMPLETED",
+            paths=[absolute_path],
+            scanned_count=1,
+            issues_found=0 if status == "OK" else 1,
+            started_at=at,
+            completed_at=at,
+            error_message=None,
+            created_at=at,
+            updated_at=at,
+        )
+    )
+    session.add(
+        IntegrityCheck(
+            id=check_id,
+            latest_run_id=run_id,
+            file_instance_id=file_instance_id,
+            status=status,
+            confidence=0.95,
+            readability_ok=status == "OK",
+            probe_status="ok",
+            decode_status="ok" if status == "OK" else "failed",
+            last_completed_scan_mode="FAST",
+            last_scanned_absolute_path=absolute_path,
+            last_checked_at=at,
+            created_at=at,
+            updated_at=at,
         )
     )
 
@@ -324,6 +372,117 @@ def test_get_duplicate_groups_exposes_duplicate_reclaim_actionable_false_when_fi
     assert groups[0].canonical_file is not None
     assert groups[0].duplicate_reclaim_actionable is False
     assert groups[0].duplicate_reclaim_unavailable_reason == "missing_canonical_file_content_mapping"
+
+
+def test_get_duplicate_groups_include_duplicate_recommendation_contract(session_factory) -> None:
+    service = OperatorConsoleReadService(session_factory)
+    base = datetime(2026, 3, 2, 11, 0, tzinfo=UTC)
+    content_id = UUID("56565656-5555-5555-5555-555555555555")
+    canonical_instance = UUID("56565656-5555-5555-5555-555555555556")
+    duplicate_a = UUID("56565656-5555-5555-5555-555555555557")
+    duplicate_b = UUID("56565656-5555-5555-5555-555555555558")
+
+    with session_factory.begin() as session:
+        _add_content(session, content_id, "hash-recommendation", base)
+        session.flush()
+        _add_instance(
+            session,
+            file_instance_id=canonical_instance,
+            content_id=content_id,
+            absolute_path="/dupes/recommendation/canonical.jpg",
+            first_seen_at=base,
+        )
+        _add_instance(
+            session,
+            file_instance_id=duplicate_a,
+            content_id=content_id,
+            absolute_path="/dupes/recommendation/copy-a.jpg",
+            first_seen_at=base + timedelta(seconds=1),
+        )
+        _add_instance(
+            session,
+            file_instance_id=duplicate_b,
+            content_id=content_id,
+            absolute_path="/dupes/recommendation/copy-b.jpg",
+            first_seen_at=base + timedelta(seconds=2),
+        )
+        session.flush()
+        session.get(FileContent, content_id).canonical_file_instance_id = canonical_instance
+        session.add(
+            CanonicalAssignment(
+                assignment_id=UUID("56565656-dddd-dddd-dddd-555555555557"),
+                content_id=content_id,
+                canonical_instance_id=canonical_instance,
+                policy_name="FIRST_SEEN",
+                policy_version="v1",
+                assigned_at=base + timedelta(seconds=3),
+            )
+        )
+        session.add(
+            DuplicateGroupReview(
+                content_id=content_id,
+                review_status="looks_right",
+                reviewed_at=base,
+                reviewed_by="tester",
+                reviewed_canonical_instance_id=canonical_instance,
+                group_signature="stale-signature-on-purpose",
+                created_at=base,
+                updated_at=base,
+            )
+        )
+        _add_integrity_check(
+            session,
+            check_id=UUID("56565656-aaaa-aaaa-aaaa-555555555557"),
+            file_instance_id=canonical_instance,
+            status="OK",
+            at=base,
+            absolute_path="/dupes/recommendation/canonical.jpg",
+        )
+        _add_integrity_check(
+            session,
+            check_id=UUID("56565656-bbbb-bbbb-bbbb-555555555557"),
+            file_instance_id=duplicate_a,
+            status="BROKEN",
+            at=base,
+            absolute_path="/dupes/recommendation/copy-a.jpg",
+        )
+        _add_integrity_check(
+            session,
+            check_id=UUID("56565656-cccc-cccc-cccc-555555555557"),
+            file_instance_id=duplicate_b,
+            status="SUSPECT",
+            at=base,
+            absolute_path="/dupes/recommendation/copy-b.jpg",
+        )
+
+    groups = service.get_duplicate_groups()
+
+    assert len(groups) == 1
+    recommendation = groups[0].duplicate_recommendation
+    assert recommendation is not None
+    assert recommendation.state == "REVIEW_REQUIRED"
+    assert recommendation.classification == "WARN"
+    assert recommendation.primary_reason_code == "REVIEW_STALE"
+    assert recommendation.reason_codes == ("REVIEW_STALE",)
+    assert recommendation.review_is_stale is True
+    assert recommendation.integrity_is_stale is False
+    assert recommendation.lifecycle_context.already_in_bin is False
+    assert recommendation.lifecycle_context.restore_expired is False
+    assert recommendation.keep_summary.identity_status == "KNOWN"
+    assert recommendation.keep_summary.integrity_status == "OK"
+    assert recommendation.extra_summary.health_class == "EXTRAS_ALL_UNHEALTHY"
+    assert recommendation.extra_summary.active_count == 2
+    assert recommendation.extra_summary.healthy_count == 0
+    assert recommendation.extra_summary.suspect_count == 1
+    assert recommendation.extra_summary.broken_count == 1
+
+    payload = groups[0].to_dict()
+    assert isinstance(payload["duplicate_recommendation"], dict)
+    assert payload["duplicate_recommendation"]["state"] == "REVIEW_REQUIRED"
+    assert payload["duplicate_recommendation"]["classification"] == "WARN"
+    assert payload["duplicate_recommendation"]["primary_reason_code"] == "REVIEW_STALE"
+    assert payload["duplicate_recommendation"]["review_is_stale"] is True
+    assert payload["duplicate_recommendation"]["integrity_is_stale"] is False
 
 
 def test_resolve_thumbnail_source_returns_image_for_active_file(session_factory, tmp_path: Path) -> None:

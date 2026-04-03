@@ -32,7 +32,14 @@ import {
 import { queryKeys } from "@/lib/api/queryKeys";
 import { queryOptions } from "@/lib/api/queryOptions";
 import { cn } from "@/lib/utils";
-import type { DuplicateFile, DuplicateGroup, DuplicateReclaimItem, IntegrityIssue, PaginatedResponse } from "@/types";
+import type {
+  DuplicateFile,
+  DuplicateGroup,
+  DuplicateRecommendation,
+  DuplicateReclaimItem,
+  IntegrityIssue,
+  PaginatedResponse,
+} from "@/types";
 
 type ReviewMark = "looks_right" | "needs_review" | "not_sure";
 type ReviewFilter = "all" | "unreviewed" | "restored" | ReviewMark;
@@ -79,8 +86,12 @@ interface DuplicateBinPolicy {
   implementation: string;
 }
 
-interface ReadyGroupOptions {
-  blockedGroupIds?: string[];
+interface RecycleBinPresentation {
+  primary_label: string;
+  primary_severity: "neutral" | "info" | "caution";
+  explanation: string;
+  timing_label: string | null;
+  timing_severity: "info" | "caution";
 }
 
 const reviewOptions: Array<{ value: ReviewFilter; label: string }> = [
@@ -107,6 +118,31 @@ const binStateLabels = {
   playbackIssue: "Playback issue",
   wontPlay: "Won't play",
 } as const;
+
+const recommendationStateLabels: Record<DuplicateRecommendation["state"], string> = {
+  SAFE_TO_MOVE_EXTRAS: "Safe to move extra copies",
+  REVIEW_REQUIRED: "Review required",
+  DO_NOT_MOVE: "Do not move",
+  ALREADY_IN_BIN: "Already in Recycle Bin",
+  EXPIRED_IN_BIN: "Restore window ended",
+};
+
+const recommendationReasonLabels: Record<string, string> = {
+  GROUP_ALREADY_IN_BIN: "Already in the Recycle Bin",
+  BIN_RESTORE_EXPIRED: "Restore window expired",
+  CANONICAL_MAPPING_MISSING: "Keep copy mapping missing",
+  KEEP_COPY_UNHEALTHY: "Keep copy unhealthy",
+  KEEP_COPY_SUSPECT: "Keep copy suspect",
+  KEEP_COPY_UNKNOWN: "Keep copy health unknown",
+  EXTRA_COPIES_UNHEALTHY_ONLY: "Extra copies have playback issues",
+  SAFE_TO_MOVE_REVIEWED_DUPLICATES: "Reviewed and ready",
+  MIXED_EXTRA_HEALTH: "Mixed extra-copy health",
+  EXTRA_HEALTH_UNKNOWN: "Extra-copy health unknown",
+  REVIEW_REQUIRED_BY_OPERATOR_STATE: "Operator review not approved",
+  REVIEW_STALE: "Review is stale",
+  INTEGRITY_EVIDENCE_STALE: "Integrity evidence stale",
+  NO_ACTIVE_EXTRAS: "No active extra copies",
+};
 
 function getErrorMessage(err: unknown): string | null {
   if (!err) return null;
@@ -139,6 +175,25 @@ function parseTimestamp(value: string | null | undefined): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function getRecycleBinPresentation(item: RecycleBinDisplayItem): RecycleBinPresentation {
+  if (item.restore_allowed) {
+    return {
+      primary_label: binStateLabels.inBin,
+      primary_severity: "neutral",
+      explanation: "Restore is still available for this extra copy while the restore window remains open.",
+      timing_label: item.expires_at ? formatDaysRemaining(item.expires_at) ?? binStateLabels.daysRemaining : null,
+      timing_severity: "info",
+    };
+  }
+  return {
+    primary_label: binStateLabels.restoreWindowEnded,
+    primary_severity: "caution",
+    explanation: "This entry is no longer restorable and remains visible here until a later purge removes it.",
+    timing_label: item.expires_at ? binStateLabels.expired : null,
+    timing_severity: "caution",
+  };
+}
+
 function getReviewPresentation(mark?: ReviewMark, isStale = false) {
   if (isStale) {
     return { label: "Stale review", severity: "caution" as const };
@@ -155,9 +210,43 @@ function getReviewPresentation(mark?: ReviewMark, isStale = false) {
   }
 }
 
+function getRecommendationPresentation(recommendation: DuplicateRecommendation | null | undefined) {
+  if (!recommendation) {
+    return {
+      label: "Recommendation unavailable",
+      severity: "neutral" as const,
+    };
+  }
+  switch (recommendation.state) {
+    case "SAFE_TO_MOVE_EXTRAS":
+      return { label: recommendationStateLabels[recommendation.state], severity: "success" as const };
+    case "REVIEW_REQUIRED":
+      return { label: recommendationStateLabels[recommendation.state], severity: "caution" as const };
+    case "DO_NOT_MOVE":
+      return { label: recommendationStateLabels[recommendation.state], severity: "destructive" as const };
+    case "ALREADY_IN_BIN":
+      return { label: recommendationStateLabels[recommendation.state], severity: "info" as const };
+    case "EXPIRED_IN_BIN":
+      return { label: recommendationStateLabels[recommendation.state], severity: "caution" as const };
+  }
+}
+
 function currentReviewMark(group: DuplicateGroup): ReviewMark | undefined {
   if (group.is_stale) return undefined;
   return group.review_status ?? undefined;
+}
+
+function getDuplicateRecommendation(group: DuplicateGroup): DuplicateRecommendation | null {
+  return group.duplicate_recommendation ?? null;
+}
+
+function isReadyForBinRecommendation(group: DuplicateGroup): boolean {
+  return getDuplicateRecommendation(group)?.state === "SAFE_TO_MOVE_EXTRAS";
+}
+
+function getRecommendationReasonLabels(recommendation: DuplicateRecommendation | null | undefined): string[] {
+  if (!recommendation) return [];
+  return recommendation.reason_codes.map((code) => recommendationReasonLabels[code] ?? code);
 }
 
 function reviewMarksByGroup(groups: DuplicateGroup[]): Record<string, ReviewMark> {
@@ -227,6 +316,31 @@ function getPlaybackStatusLabel(issue: IntegrityIssue): string {
   return issue.status === "BROKEN" ? binStateLabels.wontPlay : binStateLabels.needsChecking;
 }
 
+function getPreferredKeepCopyLabel(): string {
+  return "Preferred keep copy";
+}
+
+function getPreferredKeepCopyStaysText(): string {
+  return "The preferred keep copy stays in place.";
+}
+
+function getPlaybackRoleLabel(file: DuplicateFile): string {
+  return file.is_canonical ? getPreferredKeepCopyLabel() : "Extra copy";
+}
+
+function getPlaybackImpactPresentation(affectedFiles: DuplicateFile[]) {
+  if (affectedFiles.some((file) => file.is_canonical)) {
+    return {
+      label: "Affects preferred keep copy",
+      explanation: "One of these playback issues affects the copy this group would normally keep.",
+    };
+  }
+  return {
+    label: "Affects extra copy only",
+    explanation: "These playback issues are limited to extra copies in this duplicate group.",
+  };
+}
+
 function getMutationSummary(payload: unknown): MutationSummary {
   if (!payload || typeof payload !== "object") return {};
   const summary = (payload as { summary?: MutationSummary }).summary;
@@ -243,34 +357,9 @@ function isPendingRemovalStatus(status: DuplicateGroup["reclaim_status"] | undef
   return status === "ARCHIVED" || status === "RESTORED" || status === "SCHEDULED_FOR_DELETE";
 }
 
-function getArchivedBinItemCountByGroup(duplicateBinItems: DuplicateBinItem[]) {
-  return duplicateBinItems.reduce<Record<string, number>>((acc, item) => {
-    if (item.item_status !== "ARCHIVED") return acc;
-    acc[item.content_id] = (acc[item.content_id] ?? 0) + 1;
-    return acc;
-  }, {});
-}
-
-function deriveActionableReadyGroups(
-  groups: DuplicateGroup[],
-  duplicateBinItems: DuplicateBinItem[],
-  options: ReadyGroupOptions = {},
-) {
-  const blockedIds = new Set(options.blockedGroupIds ?? []);
-  const archivedCounts = getArchivedBinItemCountByGroup(duplicateBinItems);
-
-  return groups.filter((group) => {
-    const reclaimableCount = group.reclaimable_file_count ?? 0;
-    const archivedCount = archivedCounts[group.group_id] ?? 0;
-    return (
-      currentReviewMark(group) === "looks_right" &&
-      group.duplicate_reclaim_actionable !== false &&
-      reclaimableCount > 0 &&
-      archivedCount < reclaimableCount &&
-      !isPendingRemovalStatus(group.reclaim_status) &&
-      !blockedIds.has(group.group_id)
-    );
-  });
+function deriveActionableReadyGroups(groups: DuplicateGroup[]) {
+  // Ready for Bin is a UI workflow bucket over server-derived recommendation state only.
+  return groups.filter((group) => isReadyForBinRecommendation(group));
 }
 
 function getKeepCopy(group: DuplicateGroup): DuplicateFile | null {
@@ -281,10 +370,25 @@ function getExtraCopies(group: DuplicateGroup): DuplicateFile[] {
   return group.duplicates.filter((file) => !file.is_canonical);
 }
 
+function renderRecommendationDetails(recommendation: DuplicateRecommendation | null | undefined) {
+  if (!recommendation) return null;
+  const reasonLabels = getRecommendationReasonLabels(recommendation);
+  return (
+    <div data-testid="review-recommendation-details" className="space-y-2">
+      <p className="text-sm text-muted-foreground">{recommendation.operator_explanation}</p>
+      <div data-testid="review-recommendation-reasons" className="flex flex-wrap items-center gap-2">
+        {reasonLabels.map((label) => (
+          <StatusBadge key={label} label={label} severity="neutral" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function getGalleryActionSummary(groupCount: number, appliedCount: number) {
   const groupLabel = `${groupCount} group${groupCount === 1 ? "" : "s"}`;
   const fileLabel = `${appliedCount} duplicate file${appliedCount === 1 ? "" : "s"}`;
-  return `${fileLabel} moved from ${groupLabel} into the Recycle Bin. The keep copy stayed in place.`;
+  return `${fileLabel} moved from ${groupLabel} into the Recycle Bin. ${getPreferredKeepCopyStaysText()}`;
 }
 
 function getGalleryNoOpSummary(
@@ -563,9 +667,7 @@ export default function DuplicatesPage() {
 
   const selectedDuplicate =
     selectedDuplicates.find((file) => file.file_instance_id === selectedDuplicateId) ?? selectedDuplicates[0] ?? null;
-  const readyGroups = deriveActionableReadyGroups(sortedGroups, duplicateBinItems, {
-    blockedGroupIds: reclaimBridgeBlockedIds,
-  });
+  const readyGroups = deriveActionableReadyGroups(sortedGroups);
   const readyExtraCopyCount = readyGroups.reduce((sum, group) => sum + (group.reclaimable_file_count ?? 0), 0);
   const readyEstimatedBytes = readyGroups.reduce((sum, group) => sum + (group.estimated_reclaim_bytes ?? 0), 0);
   const readyGroupIds = new Set(readyGroups.map((group) => group.group_id));
@@ -921,6 +1023,7 @@ export default function DuplicatesPage() {
   function renderGalleryReadyCard(group: DuplicateGroup) {
     const keepCopy = getKeepCopy(group);
     const extraCopies = getExtraCopies(group);
+    const recommendation = getDuplicateRecommendation(group);
     if (!keepCopy) return null;
     const isSelected = selectedReadyGroupIds.includes(group.group_id);
     const isFocused = focusedReadyGroupId === group.group_id;
@@ -942,6 +1045,12 @@ export default function DuplicatesPage() {
               <p className="text-sm text-muted-foreground">
                 {extraCopies.length === 1 ? "1 extra copy" : `${extraCopies.length} extra copies`} • {formatBytes(group.estimated_reclaim_bytes ?? 0)}
               </p>
+              <div className="pt-1">
+                <StatusBadge
+                  label={getRecommendationPresentation(recommendation).label}
+                  severity={getRecommendationPresentation(recommendation).severity}
+                />
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <Checkbox
@@ -966,9 +1075,14 @@ export default function DuplicatesPage() {
               }
             }}
           >
+            {recommendation ? (
+              <div className="rounded-[18px] border border-border/70 bg-background/70 px-3 py-2.5">
+                <p className="text-sm text-muted-foreground">{recommendation.operator_explanation}</p>
+              </div>
+            ) : null}
             <div className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
               <div className="space-y-2">
-                <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Keep copy</p>
+                <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{getPreferredKeepCopyLabel()}</p>
                 <DuplicateMediaPreview
                   src={keepCopy.preview_url ?? (keepCopy.is_image ? keepCopy.media_url ?? keepCopy.thumbnail_url : null)}
                   alt={basename(keepCopy.path)}
@@ -1024,6 +1138,7 @@ export default function DuplicatesPage() {
       group?.duplicates.find((file) => file.file_instance_id === item.file_instance_id) ??
       group?.duplicates.find((file) => !file.is_canonical) ??
       null;
+    const presentation = getRecycleBinPresentation(item);
 
     return (
       <Card key={item.file_instance_id} className="rounded-[24px] border-border/70 bg-card/95 shadow-sm">
@@ -1032,26 +1147,18 @@ export default function DuplicatesPage() {
             <div className="min-w-0 space-y-1">
               <div className="flex flex-wrap items-center gap-2">
                 <StatusBadge
-                  label={item.restore_allowed ? binStateLabels.inBin : binStateLabels.expired}
-                  severity={item.restore_allowed ? "neutral" : "caution"}
+                  label={presentation.primary_label}
+                  severity={presentation.primary_severity}
                 />
-                {item.expires_at ? (
+                {presentation.timing_label ? (
                   <StatusBadge
-                    label={
-                      item.restore_allowed
-                        ? formatDaysRemaining(item.expires_at) ?? binStateLabels.daysRemaining
-                        : binStateLabels.restoreWindowEnded
-                    }
-                    severity={item.restore_allowed ? "info" : "caution"}
+                    label={presentation.timing_label}
+                    severity={presentation.timing_severity}
                   />
                 ) : null}
               </div>
               <p className="truncate text-base font-semibold text-foreground">{basename(item.original_path)}</p>
-              <p className="text-sm text-muted-foreground">
-                {item.restore_allowed
-                  ? "Restore from the Recycle Bin here while the restore window is still open."
-                  : "Restore window ended. This file stays visible here until a later purge removes it."}
-              </p>
+              <p className="text-sm text-muted-foreground">{presentation.explanation}</p>
             </div>
             <Button
               type="button"
@@ -1065,7 +1172,7 @@ export default function DuplicatesPage() {
           </div>
           <div className="grid gap-3 md:grid-cols-2">
             <div className="space-y-2">
-              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Keep copy</p>
+              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{getPreferredKeepCopyLabel()}</p>
               {keepCopy ? (
                 <DuplicateMediaPreview
                   src={keepCopy.preview_url ?? (keepCopy.is_image ? keepCopy.media_url ?? keepCopy.thumbnail_url : null)}
@@ -1077,7 +1184,7 @@ export default function DuplicatesPage() {
                 />
               ) : (
                 <div className="rounded-[24px] border border-border/70 bg-background/70 p-4 text-sm text-muted-foreground">
-                  Keep copy preview is not available for this item.
+                  Preferred keep copy preview is not available for this item.
                 </div>
               )}
             </div>
@@ -1112,6 +1219,7 @@ export default function DuplicatesPage() {
     const keepCopy = getKeepCopy(group);
     if (!keepCopy) return null;
     const extraCopies = getExtraCopies(group);
+    const recommendation = getDuplicateRecommendation(group);
     return (
       <div
         data-testid="ready-for-bin-focused-panel"
@@ -1126,6 +1234,12 @@ export default function DuplicatesPage() {
             <p className="text-sm text-muted-foreground">
               {focusedReadyIndex + 1} of {readyGroups.length} ready groups • {extraCopies.length === 1 ? "1 extra copy" : `${extraCopies.length} extra copies`} • {formatBytes(group.estimated_reclaim_bytes ?? 0)}
             </p>
+            <div className="pt-1">
+              <StatusBadge
+                label={getRecommendationPresentation(recommendation).label}
+                severity={getRecommendationPresentation(recommendation).severity}
+              />
+            </div>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button
@@ -1151,9 +1265,23 @@ export default function DuplicatesPage() {
           </div>
         </div>
 
+        {recommendation ? (
+          <div className="mt-4 rounded-[18px] border border-primary/20 bg-primary/5 px-4 py-3">
+            <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Recommendation</p>
+            <div className="mt-2 space-y-2">
+              <p className="text-sm text-foreground">{recommendation.operator_explanation}</p>
+              <div className="flex flex-wrap gap-2">
+                {getRecommendationReasonLabels(recommendation).map((label) => (
+                  <StatusBadge key={label} label={label} severity="neutral" />
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
           <div className="space-y-2">
-            <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Keep copy</p>
+            <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{getPreferredKeepCopyLabel()}</p>
             <DuplicateMediaPreview
               src={keepCopy.preview_url ?? (keepCopy.is_image ? keepCopy.media_url ?? keepCopy.thumbnail_url : null)}
               alt={basename(keepCopy.path)}
@@ -1186,7 +1314,7 @@ export default function DuplicatesPage() {
 
         <div className="mt-4 flex flex-col gap-3 border-t border-border/70 pt-4 lg:flex-row lg:items-center lg:justify-between">
           <p className="text-sm text-muted-foreground">
-            Move only this group&apos;s extra copies into the Recycle Bin. The keep copy stays in place.
+            Move only this group&apos;s extra copies into the Recycle Bin. {getPreferredKeepCopyStaysText()}
           </p>
           <div className="flex flex-wrap gap-2">
             <Button
@@ -1210,6 +1338,7 @@ export default function DuplicatesPage() {
       group?.duplicates.find((file) => file.file_instance_id === item.file_instance_id) ??
       group?.duplicates.find((file) => !file.is_canonical) ??
       null;
+    const presentation = getRecycleBinPresentation(item);
 
     return (
       <div data-testid="recycle-bin-focused-panel" className="rounded-[22px] border border-border/70 bg-background/80 p-4">
@@ -1221,10 +1350,12 @@ export default function DuplicatesPage() {
             </p>
             <p className="text-sm text-muted-foreground">
               {focusedArchivedIndex + 1} of {recycleBinItems.length} items in Recycle Bin
-              {item.expires_at
-                ? ` • ${item.restore_allowed ? formatDaysRemaining(item.expires_at) ?? binStateLabels.daysRemaining : binStateLabels.restoreWindowEnded}`
-                : ""}
+              {presentation.timing_label ? ` • ${presentation.timing_label}` : ""}
             </p>
+            <div className="pt-1">
+              <StatusBadge label={presentation.primary_label} severity={presentation.primary_severity} />
+            </div>
+            <p className="text-sm text-muted-foreground">{presentation.explanation}</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button
@@ -1252,7 +1383,7 @@ export default function DuplicatesPage() {
 
         <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
           <div className="space-y-2">
-            <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Keep copy</p>
+            <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{getPreferredKeepCopyLabel()}</p>
             {keepCopy ? (
               <DuplicateMediaPreview
                 src={keepCopy.preview_url ?? (keepCopy.is_image ? keepCopy.media_url ?? keepCopy.thumbnail_url : null)}
@@ -1264,7 +1395,7 @@ export default function DuplicatesPage() {
               />
             ) : (
               <div className="rounded-[24px] border border-border/70 bg-background/70 p-4 text-sm text-muted-foreground">
-                Keep copy preview is not available for this item.
+                Preferred keep copy preview is not available for this item.
               </div>
             )}
           </div>
@@ -1285,10 +1416,6 @@ export default function DuplicatesPage() {
               </div>
             )}
             <div className="space-y-1">
-              <StatusBadge
-                label={item.restore_allowed ? binStateLabels.inBin : binStateLabels.expired}
-                severity={item.restore_allowed ? "neutral" : "caution"}
-              />
               <p className="truncate text-xs font-medium text-foreground">{basename(item.original_path)}</p>
               <p className="truncate text-xs text-muted-foreground">{item.archive_path}</p>
             </div>
@@ -1296,11 +1423,7 @@ export default function DuplicatesPage() {
         </div>
 
         <div className="mt-4 flex flex-col gap-3 border-t border-border/70 pt-4 lg:flex-row lg:items-center lg:justify-between">
-          <p className="text-sm text-muted-foreground">
-            {item.restore_allowed
-              ? "Restore this extra copy from the Recycle Bin back to its original location."
-              : "Restore window ended. This extra copy remains visible here until it is purged."}
-          </p>
+          <p className="text-sm text-muted-foreground">{presentation.explanation}</p>
           <Button
             type="button"
             size="sm"
@@ -1417,7 +1540,7 @@ export default function DuplicatesPage() {
                     <div>
                       <h2 className="text-lg font-semibold tracking-tight text-foreground">Review duplicates</h2>
                       <p className="mt-1 text-sm text-muted-foreground">
-                        Compare one group at a time, decide whether the extra copies look safe to remove, and move on.
+                        Compare one group at a time, follow the system recommendation, and keep your own review decision separate.
                       </p>
                     </div>
                     <p className="text-sm text-muted-foreground">{reviewProgressLabel} in sequence</p>
@@ -1429,7 +1552,7 @@ export default function DuplicatesPage() {
                 <div className="space-y-2">
                   <h2 className="text-xl font-semibold tracking-tight text-foreground">Ready for Bin</h2>
                   <p className="text-sm text-muted-foreground">
-                    Move eligible extra copies into the Recycle Bin here. Restore happens only on the Recycle Bin tab.
+                    These groups are currently recommended as safe to move into the Recycle Bin. Restore happens only on the Recycle Bin tab.
                   </p>
                 </div>
               </TabsContent>
@@ -1540,6 +1663,40 @@ export default function DuplicatesPage() {
                               <p className="text-sm text-muted-foreground">{reviewMetaLine.replace("matching copies", "extra copies").replace("matching copy", "extra copy")}</p>
                             </div>
                           </div>
+                          <div
+                            data-testid="review-recommendation-card"
+                            className="rounded-[18px] border border-primary/20 bg-primary/5 px-3 py-3"
+                          >
+                            <div className="space-y-2">
+                              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">System recommendation</p>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <StatusBadge
+                                  label={getRecommendationPresentation(getDuplicateRecommendation(selected)).label}
+                                  severity={getRecommendationPresentation(getDuplicateRecommendation(selected)).severity}
+                                />
+                              </div>
+                              {renderRecommendationDetails(getDuplicateRecommendation(selected))}
+                            </div>
+                          </div>
+                          <div
+                            data-testid="review-human-review-card"
+                            className="rounded-[18px] border border-border/70 bg-background/70 px-3 py-3"
+                          >
+                            <div className="space-y-2">
+                              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Human review</p>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <StatusBadge
+                                  label={getReviewPresentation(currentReviewMark(selected), Boolean(selected.is_stale)).label}
+                                  severity={getReviewPresentation(currentReviewMark(selected), Boolean(selected.is_stale)).severity}
+                                />
+                              </div>
+                              <p className="text-sm text-muted-foreground">
+                                {selected.reviewed_at
+                                  ? `Last reviewed ${new Date(selected.reviewed_at).toLocaleString()}.`
+                                  : "No saved review yet. Choose the mark that best fits this group."}
+                              </p>
+                            </div>
+                          </div>
                           <DuplicateReviewActionBar
                             activeMark={currentReviewMark(selected)}
                             hasPrev={selectedIndex > 0}
@@ -1560,7 +1717,7 @@ export default function DuplicatesPage() {
                           {selected && recycleBinLifecycleGroupIds.has(selected.group_id) ? (
                             <div className="flex flex-col gap-1 rounded-[18px] border border-border/70 bg-background/70 px-3 py-2.5">
                               <p className="text-sm font-medium text-foreground">In Recycle Bin</p>
-                              <p className="text-sm text-muted-foreground">Extra copies are already in the Recycle Bin. The keep copy stays in place.</p>
+                              <p className="text-sm text-muted-foreground">Extra copies are already in the Recycle Bin. {getPreferredKeepCopyStaysText()}</p>
                             </div>
                           ) : null}
                           {(selected.integrity_issue_count ?? 0) > 0 ? (
@@ -1587,7 +1744,7 @@ export default function DuplicatesPage() {
 
                         <div className="grid gap-2.5 xl:grid-cols-[minmax(0,1.65fr)_minmax(0,1.05fr)]">
                           <DuplicateFocusCard
-                            badge="Keep copy"
+                            badge={getPreferredKeepCopyLabel()}
                             description="Use this copy as the point of comparison for the current review."
                             emphasis="success"
                             file={selectedCanonical}
@@ -1705,7 +1862,7 @@ export default function DuplicatesPage() {
                             </div>
                             <div className="space-y-2">
                               <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-                                Keep copy path
+                                Preferred keep copy path
                               </p>
                               <p className="break-all font-mono text-xs text-foreground">{selected.canonical_path}</p>
                             </div>
@@ -1722,7 +1879,7 @@ export default function DuplicatesPage() {
                                 >
                                   <div className="flex flex-wrap items-center gap-2">
                                     <StatusBadge
-                                      label={file.is_canonical ? "Keep copy" : "Extra copy"}
+                                      label={file.is_canonical ? getPreferredKeepCopyLabel() : "Extra copy"}
                                       severity={file.is_canonical ? "success" : "neutral"}
                                     />
                                     <StatusBadge label={file.file_instance_id || "No file ID"} severity="neutral" />
@@ -1738,7 +1895,7 @@ export default function DuplicatesPage() {
                   ) : (
                     <EmptyState
                       title="Select a group to compare"
-                      description="Choose a duplicate group from the current filter to compare the keep copy against an extra copy."
+                      description="Choose a duplicate group from the current filter to compare the preferred keep copy against an extra copy."
                     />
                   )}
                 </CardContent>
@@ -1816,7 +1973,7 @@ export default function DuplicatesPage() {
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div>
                       <p className="text-sm font-semibold text-foreground">Ready for Bin</p>
-                      <p className="text-sm text-muted-foreground">Only groups marked “Looks right” can be moved to the Recycle Bin. The keep copy always stays in place.</p>
+                      <p className="text-sm text-muted-foreground">This workflow view is filtered from the backend recommendation. {getPreferredKeepCopyStaysText()}</p>
                     </div>
                     {readyForBinViewMode !== "focus" ? (
                       <div className="flex flex-wrap gap-2">
@@ -1904,6 +2061,7 @@ export default function DuplicatesPage() {
                     <div data-testid="ready-for-bin-list" className="space-y-3">
                       {readyGroups.map((group) => {
                         const isSelected = selectedReadyGroupIds.includes(group.group_id);
+                        const recommendation = getDuplicateRecommendation(group);
                         return (
                           <div
                             key={group.group_id}
@@ -1933,13 +2091,19 @@ export default function DuplicatesPage() {
                                 <div className="flex flex-wrap items-center gap-2">
                                   <StatusBadge label={binStateLabels.ready} severity="success" />
                                   <StatusBadge
+                                    label={getRecommendationPresentation(recommendation).label}
+                                    severity={getRecommendationPresentation(recommendation).severity}
+                                  />
+                                  <StatusBadge
                                     label={`${group.reclaimable_file_count ?? 0} extra cop${(group.reclaimable_file_count ?? 0) === 1 ? "y" : "ies"}`}
                                     severity="neutral"
                                   />
                                   <StatusBadge label={formatBytes(group.estimated_reclaim_bytes ?? 0)} severity="info" />
                                 </div>
                                 <p className="truncate text-sm font-semibold text-foreground">{basename(group.canonical_path)}</p>
-                                <p className="text-xs text-muted-foreground">Review state: Looks right</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {recommendation?.operator_explanation ?? "Move only the extra copies from this group into the Recycle Bin."}
+                                </p>
                               </div>
                             </div>
                             <Button
@@ -2090,35 +2254,35 @@ export default function DuplicatesPage() {
                     </div>
                   ) : recycleBinViewMode === "list" ? (
                     <div data-testid="recycle-bin-list" className="space-y-3">
-                      {recycleBinItems.map((item) => (
-                        <div
-                          key={item.file_instance_id}
-                          className="flex flex-col gap-3 rounded-[22px] border border-border/70 bg-background/70 p-4 lg:flex-row lg:items-center lg:justify-between"
-                        >
-                          <div className="min-w-0 space-y-2">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <StatusBadge
-                                label={item.restore_allowed ? binStateLabels.inBin : binStateLabels.expired}
-                                severity={item.restore_allowed ? "neutral" : "caution"}
-                              />
-                              <StatusBadge
-                                label={item.restore_allowed ? formatDaysRemaining(item.expires_at) ?? binStateLabels.daysRemaining : binStateLabels.restoreWindowEnded}
-                                severity={item.restore_allowed ? "info" : "caution"}
-                              />
-                            </div>
-                            <p className="truncate text-sm font-semibold text-foreground">{basename(item.original_path)}</p>
-                            <p className="truncate text-xs text-muted-foreground">{item.archive_path}</p>
-                          </div>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={() => void handleRestore(item)}
-                            disabled={restoreFromBinMutation.isPending || !item.restore_allowed}
+                      {recycleBinItems.map((item) => {
+                        const presentation = getRecycleBinPresentation(item);
+                        return (
+                          <div
+                            key={item.file_instance_id}
+                            className="flex flex-col gap-3 rounded-[22px] border border-border/70 bg-background/70 p-4 lg:flex-row lg:items-center lg:justify-between"
                           >
-                            Restore from Recycle Bin
-                          </Button>
-                        </div>
-                      ))}
+                            <div className="min-w-0 space-y-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <StatusBadge label={presentation.primary_label} severity={presentation.primary_severity} />
+                                {presentation.timing_label ? (
+                                  <StatusBadge label={presentation.timing_label} severity={presentation.timing_severity} />
+                                ) : null}
+                              </div>
+                              <p className="truncate text-sm font-semibold text-foreground">{basename(item.original_path)}</p>
+                              <p className="text-sm text-muted-foreground">{presentation.explanation}</p>
+                              <p className="truncate text-xs text-muted-foreground">{item.archive_path}</p>
+                            </div>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => void handleRestore(item)}
+                              disabled={restoreFromBinMutation.isPending || !item.restore_allowed}
+                            >
+                              Restore from Recycle Bin
+                            </Button>
+                          </div>
+                        );
+                      })}
                     </div>
                   ) : (
                     focusedArchivedItem ? renderFocusedArchivedItem(focusedArchivedItem) : null
@@ -2178,8 +2342,15 @@ export default function DuplicatesPage() {
                 <div className="space-y-4">
                   {duplicatePlaybackGroups.map(({ group, issues, brokenCount, suspectCount, affectedFiles }) => {
                     const hasBlockingCue = issues.some(isIssueBlocking);
+                    const playbackImpact = getPlaybackImpactPresentation(affectedFiles);
+                    const recommendation = getDuplicateRecommendation(group);
+                    const recommendationPresentation = recommendation ? getRecommendationPresentation(recommendation) : null;
                     return (
-                      <Card key={group.group_id} className="rounded-[24px] border-border/70 bg-card/95 shadow-sm">
+                      <Card
+                        key={group.group_id}
+                        data-testid={`playback-group-card-${group.group_id}`}
+                        className="rounded-[24px] border-border/70 bg-card/95 shadow-sm"
+                      >
                         <CardContent className="space-y-4 p-4">
                           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                             <div className="min-w-0 space-y-2">
@@ -2202,6 +2373,24 @@ export default function DuplicatesPage() {
                                   ? "A copy in this group may not play. You can keep reviewing here, but this does not change the current removal rules."
                                   : "A copy in this group needs checking. Deeper diagnosis still belongs in Integrity Review."}
                               </p>
+                              <div data-testid={`playback-impact-${group.group_id}`} className="space-y-1">
+                                <p className="text-sm font-medium text-foreground">{playbackImpact.label}</p>
+                                <p className="text-xs text-muted-foreground">{playbackImpact.explanation}</p>
+                              </div>
+                              {recommendation && recommendationPresentation ? (
+                                <div
+                                  data-testid={`playback-recommendation-${group.group_id}`}
+                                  className="space-y-1 rounded-2xl border border-border/70 bg-background/70 px-3 py-2"
+                                >
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <StatusBadge
+                                      label={recommendationPresentation.label}
+                                      severity={recommendationPresentation.severity}
+                                    />
+                                  </div>
+                                  <p className="text-xs text-muted-foreground">{recommendation.operator_explanation}</p>
+                                </div>
+                              ) : null}
                             </div>
                             <div className="flex gap-2">
                               <Button
@@ -2243,6 +2432,7 @@ export default function DuplicatesPage() {
                                             severity={issue.status === "BROKEN" ? "destructive" : "caution"}
                                           />
                                         ))}
+                                        <StatusBadge label={getPlaybackRoleLabel(file)} severity="neutral" />
                                       </div>
                                     </div>
                                   );
